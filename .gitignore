@@ -1,8 +1,12 @@
 node_modules/
 .godmode/
-dist/
 target/
 .venv/
 __pycache__/
 *.db
 *.log
+# Standalone prebuilt outputs ARE committed:
+!vendors/adam/target/release/adam-mcp.exe
+!vendors/adam/target/release/adam-mcp
+!vendors/genesis/dist/
+!vendors/eve/dist/

@@ -1,0 +1,1 @@
+{"version":3,"file":"detector.d.ts","sourceRoot":"","sources":["../../src/workflow/detector.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,kBAAkB,CAAC;AAChD,OAAO,EAAuB,KAAK,YAAY,EAAE,MAAM,cAAc,CAAC;AAEtE;;;GAGG;AACH,MAAM,WAAW,aAAa;IAC5B,QAAQ,CAAC,IAAI,EAAE,YAAY,CAAC;IAC5B,QAAQ,CAAC,UAAU,EAAE,MAAM,CAAC;CAC7B;AAED,wBAAgB,cAAc,CAAC,OAAO,EAAE,OAAO,GAAG,aAAa,CA4B9D"}

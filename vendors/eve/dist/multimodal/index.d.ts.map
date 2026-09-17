@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../src/multimodal/index.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,OAAO,EAAE,iBAAiB,EAAE,cAAc,EAAE,MAAM,cAAc,CAAC;AACjE,OAAO,EAAE,4BAA4B,EAAE,4BAA4B,EAAE,MAAM,gBAAgB,CAAC;AAC5F,OAAO,EAAE,wBAAwB,EAAE,MAAM,aAAa,CAAC;AACvD,YAAY,EACV,OAAO,EACP,aAAa,EACb,cAAc,EACd,mBAAmB,EACnB,gBAAgB,GACjB,MAAM,YAAY,CAAC"}

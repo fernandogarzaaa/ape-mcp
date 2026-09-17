@@ -1,0 +1,1 @@
+{"version":3,"file":"cognition.js","sourceRoot":"","sources":["../../src/cognition/cognition.ts"],"names":[],"mappings":"AAiFA,yFAAyF;AACzF,MAAM,UAAU,yBAAyB,CAAC,MAAe;IACvD,IACE,OAAO,MAAM,KAAK,QAAQ;QAC1B,MAAM,KAAK,IAAI;QACf,oBAAoB,IAAI,MAAM;QAC9B,OAAQ,MAA0C,CAAC,kBAAkB,KAAK,UAAU,EACpF,CAAC;QACD,OAAO,MAAiC,CAAC;IAC3C,CAAC;IACD,OAAO,IAAI,CAAC;AACd,CAAC"}

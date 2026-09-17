@@ -1,0 +1,8 @@
+/**
+ * Product intelligence — infer product-level insight (personas, workflows,
+ * business goals, feature importance, high-friction pages, drop-off causes)
+ * from a population study's observed behaviour.
+ */
+export { inferProductIntelligence } from "./intelligence.js";
+export { renderProductIntelligenceMarkdown } from "./report.js";
+//# sourceMappingURL=index.js.map
