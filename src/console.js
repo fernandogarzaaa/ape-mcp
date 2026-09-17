@@ -3,6 +3,7 @@ import { readFileSync, existsSync, readFileSync as r } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dispatchCall, toolsList, discover } from "./server.js";
+import { taskList, taskGet } from "./tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "./auth.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -43,6 +44,14 @@ export function startConsole({ port = 0, open = false } = {}) {
       } catch {}
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ events: [], count: 0 }));
+    }
+    if (req.method === "GET" && url.pathname === "/api/tasks") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ tasks: taskList() }));
+    }
+    if (req.method === "GET" && url.pathname === "/api/tasks/get") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ task: taskGet(url.searchParams.get("task_id")) }));
     }
     if (req.method === "POST" && url.pathname === "/api/call") {
       if (!checkBearer(req).ok) return unauthorized(res, host);

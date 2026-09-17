@@ -44,3 +44,21 @@ test("fetch-adam maps this platform to vendored binary", async () => {
   assert.ok(asset);
   assert.ok(existsSync(m.destFor(asset)));
 });
+test("background task runs to done with result", async () => {
+  const s = await dispatchCall("godmode_task_start", { tool: "godmode_status", arguments: {} });
+  const id = s.structuredContent.result.task_id;
+  assert.ok(id);
+  let t = null;
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const g = await dispatchCall("godmode_task_get", { task_id: id });
+    t = g.structuredContent.result;
+    if (t.status === "done" || t.status === "failed") break;
+  }
+  assert.equal(t.status, "done");
+  assert.equal(t.result.structuredContent.result.version, "1.0.0");
+});
+test("task_start rejects unknown tools (no nesting)", async () => {
+  const r = await dispatchCall("godmode_task_start", { tool: "nope_x" });
+  assert.equal(r.structuredContent.result.error, "unknown_tool");
+});

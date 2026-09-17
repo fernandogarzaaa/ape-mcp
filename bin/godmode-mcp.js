@@ -3,6 +3,7 @@
 // Stateless protocol: state travels in handles (organism_id, node, task_id).
 import { createServer } from "node:http";
 import { dispatchCall, toolsList, discover } from "../src/server.js";
+import { taskGet } from "../src/tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "../src/auth.js";
 
 const args = process.argv.slice(2);
@@ -22,11 +23,16 @@ if (args.includes("--http")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify(toolsList()));
     }
-    if (req.method === "POST" && req.url === "/call") {
+    if (req.method === "POST" && (req.url === "/call" || req.url === "/tasks/get")) {
       if (!checkBearer(req).ok) return unauthorized(res, host);
       let body = "";
       for await (const c of req) body += c;
       try {
+        if (req.url === "/tasks/get") {
+          const { task_id } = JSON.parse(body || "{}");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ resultType: "complete", task: taskGet(task_id) }));
+        }
         const { name, arguments: a } = JSON.parse(body || "{}");
         if ((req.headers["mcp-method"] && req.headers["mcp-method"] !== "tools/call")) {
           res.writeHead(400); return res.end(JSON.stringify({ error: { code: -32020, message: "HeaderMismatch" } }));
@@ -55,6 +61,7 @@ if (args.includes("--http")) {
         let result;
         if (method === "server/discover") result = discover();
         else if (method === "tools/list") result = toolsList();
+        else if (method === "tasks/get") result = { resultType: "complete", task: taskGet(params?.task_id) };
         else if (method === "tools/call") result = await dispatchCall(params?.name, params?.arguments ?? {});
         else result = { error: "unknown_method", method };
         process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");

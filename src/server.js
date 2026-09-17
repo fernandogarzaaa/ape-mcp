@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dispatch } from "./dispatch.js";
 import { emitTrace, newTraceId, shaShort, dataDir, tracePath } from "./trace.js";
 import { loadMods } from "./mods.js";
+import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROTOCOL = "2026-07-28";
@@ -20,6 +21,8 @@ export const TOOL_DEFS = [
   { name: "godmode_world_simulate", description: "EVE-MIRO closed loop: WorldState->sim->EVE->ledger (provenance-labeled)", inputSchema: { type: "object", properties: { scenario: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "godmode_evolve", description: "ADAM propose->EVE measure->governed accept/reject (destructive: confirm)", inputSchema: { type: "object", properties: { proposal_id: { type: "string" }, action: { type: "string" }, organism_id: { type: "string" } } }, annotations: { readOnly: false, destructive: true, idempotent: false } },
   { name: "godmode_report", description: "Fetch latest EVE/Genesis/MIRO report pointers", inputSchema: { type: "object", properties: { ref: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "godmode_task_start", description: "Start any GodMode tool as a background task (Tasks extension); poll with godmode_task_get", inputSchema: { type: "object", properties: { tool: { type: "string" }, arguments: { type: "object" } }, required: ["tool"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "godmode_task_get", description: "Poll a background task (running/done/failed + result)", inputSchema: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] }, annotations: { readOnly: true, idempotent: true } },
 ];
 
 export async function dispatchCall(name, args = {}, ctx = {}) {
@@ -47,6 +50,20 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
       case "godmode_world_simulate": result = dispatch.world(a); break;
       case "godmode_evolve": result = { proposal: a.proposal_id, action: a.action, governance: "values/goals/capabilities/policies need EVE approve; preferences.* ungated", organism_id: a.organism_id }; break;
       case "godmode_report": result = { ref: a.ref ?? "latest", pointers: ["report://eve/{id}", "ledger://genesis", "world://t0"] }; break;
+      case "godmode_task_start": {
+        const inner = a.tool;
+        if (!TOOL_DEFS.find((t) => t.name === inner) || inner === "godmode_task_start") { result = { error: "unknown_tool", name: inner }; break; }
+        const id = taskCreate(inner, a.arguments ?? {});
+        setImmediate(async () => {
+          try {
+            const r = await dispatchCall(inner, a.arguments ?? {}, { ...ctx, viaTask: id });
+            taskFinish(id, r);
+          } catch (e) { taskFinish(id, null, String(e).slice(0, 300)); }
+        });
+        result = { task_id: id, status: "running", poll: "godmode_task_get" };
+        break;
+      }
+      case "godmode_task_get": result = taskGet(a.task_id); break;
       default: result = { error: "unknown_tool", name };
     }
   } catch (e) {
