@@ -55,6 +55,25 @@ with real payload verification). Findings below: **fixed this session** vs
 - **Local dev rebuild gap:** re-vendoring sources doesn't rebuild `dist/` until the
   updater runs; add a `npm run vendor` → auto-rebuild note (CI updater already does it).
 
+## GitHub Actions failures (2026-09-17) — diagnosed & fixed
+
+Three red clusters, one root cause plus one permission issue:
+
+1. **`adam-binaries.yml` "invalid workflow file" (0s, every push).** `with: { targets: ${{ matrix.target }} }`
+   used flow-style mapping containing a brace expression — the `}}` collides with the flow map's
+   `}` and breaks parsing (reproduced with actionlint 1.7.12). **Fix is already in PR #3**
+   (block-style `with:` + explicit `ext` per matrix row + `fail-fast: false` + binary smoke step).
+   Merging PR #3 clears it; verified `actionlint` exit 0 on that branch's file.
+2. **`auto-update` fails at "Open update PR": `GitHub Actions is not permitted to create or approve
+   pull requests`.** Repo setting off. Fix shipped here: workflow now uses
+   `secrets.GODMODE_SYNC_TOKEN || github.token` (PAT in godmode repo) and docs tell you the
+   one-click alternative (Settings → Actions → General → allow PR creation). The sync itself —
+   resolve → clone → re-vendor → rebuild → license gate → verify — all **succeeded** in that run.
+3. **Dependabot "github-actions in / - Update" failed**: cascade of (1) —
+   `/.github/workflows/adam-binaries.yml not parseable`. Clears when PR #3 merges.
+
+`ci.yml` + `auto-update.yml` validated clean with actionlint (exit 0).
+
 ## Verification gate after fixes
 
 `npm test` 12/12 · `scripts/live-audit.ps1` **17/17** (real HTTP calls, real ADAM

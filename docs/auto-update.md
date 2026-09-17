@@ -28,3 +28,16 @@ doctor/smoke/tests → **one batched PR, human merge required**.
 
 Settings → Branches: require PR before merging, require `ci` + verify status checks.
 Without this the bot PR flow can be bypassed.
+
+## 5. Let the bot create PRs
+
+The updater's final step opens a pull request. The default `GITHUB_TOKEN` is only
+allowed to do that if the repo setting is enabled:
+**godmode → Settings → Actions → General → Workflow permissions → ✅ "Allow GitHub
+Actions to create and approve pull requests"**.
+
+Alternative (no setting change): add the PAT as secret `GODMODE_SYNC_TOKEN` in the
+**godmode** repo — the workflow uses it (`secrets.GODMODE_SYNC_TOKEN || github.token`).
+
+Symptom if missing: `auto-update` run fails at "Open update PR" with
+`GitHub Actions is not permitted to create or approve pull requests`.

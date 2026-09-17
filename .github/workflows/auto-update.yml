@@ -111,6 +111,10 @@ jobs:
       - name: Open update PR
         uses: peter-evans/create-pull-request@v7
         with:
+          # Default GITHUB_TOKEN works once the repo setting
+          # "Allow GitHub Actions to create and approve pull requests" is ON.
+          # Set GODMODE_SYNC_TOKEN (PAT, write on godmode) to skip that setting.
+          token: ${{ secrets.GODMODE_SYNC_TOKEN || github.token }}
           branch: auto-update/${{ github.run_id }}
           delete-branch: true
           labels: auto-update
