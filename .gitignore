@@ -1,0 +1,8 @@
+node_modules/
+.godmode/
+dist/
+target/
+.venv/
+__pycache__/
+*.db
+*.log

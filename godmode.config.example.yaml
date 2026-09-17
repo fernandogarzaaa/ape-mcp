@@ -1,0 +1,11 @@
+# godmode.config.example.yaml — copy to godmode.config.yaml and edit. Local-only auth v1.
+console: { host: "127.0.0.1", port: 0, openBrowser: true }
+dataDir: .godmode
+mods: ["./mods/policy-gates"]
+policy: { destructiveConfirm: true }
+engines:
+  eve: { persona_default: curious-explorer, seed_default: 7 }
+  genesis: { suite_default: code }
+  skein: { agent_default: godmode }
+  adam: { organism_default: default }
+auth: { mode: local-env }  # v1: env/API keys only; OAuth resource-server later

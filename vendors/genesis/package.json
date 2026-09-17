@@ -1,0 +1,60 @@
+{
+  "name": "genesis-assurance",
+  "version": "0.3.0",
+  "description": "Universal evaluation and assurance platform for AI-native software: declarative evaluations (claim → dataset → subject → evaluator → metrics → evidence → verdict) plus adversarial verifier assurance with tamper-evident ledger.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "genesis": "./bin/genesis.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "bin",
+    "benchmarks",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "genesis": "tsx src/cli/run.ts"
+  },
+  "keywords": [
+    "assurance",
+    "verifier",
+    "rlvr",
+    "reward-hacking",
+    "audit",
+    "ledger",
+    "ci",
+    "ai-agents"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fernandogarzaaa/genesis.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^13.0.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.10",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "tsx": "^4.23.7",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

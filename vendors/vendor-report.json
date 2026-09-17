@@ -1,0 +1,126 @@
+{
+  "mode": "full+AGPL-noticed",
+  "jobs": [
+    {
+      "dest": "vendors/genesis",
+      "status": "ok",
+      "copied": [
+        "src",
+        "bin",
+        "adapters",
+        "benchmarks",
+        "templates",
+        "fixtures",
+        "examples",
+        "tests",
+        "docs",
+        "plugins",
+        "tools",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "tsconfig.build.json",
+        "biome.json",
+        "vitest.config.ts",
+        "README.md",
+        "LICENSE",
+        ".claude-plugin"
+      ]
+    },
+    {
+      "dest": "vendors/eve",
+      "status": "ok",
+      "copied": [
+        "src",
+        "bin",
+        "protocol",
+        "skills",
+        "docs",
+        "examples",
+        "tests",
+        "scripts",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "tsconfig.build.json",
+        "biome.jsonc",
+        "vitest.config.ts",
+        "eve.config.example.yaml",
+        "README.md",
+        "LICENSE",
+        "ROADMAP.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        ".claude",
+        ".codex",
+        ".claude-plugin"
+      ]
+    },
+    {
+      "dest": "vendors/adam",
+      "status": "ok",
+      "copied": [
+        "crates",
+        "bin",
+        "protocol",
+        "skills",
+        "scripts",
+        "Cargo.toml",
+        "Cargo.lock",
+        "Dockerfile",
+        "README.md",
+        "ARCHITECTURE.md",
+        "DESIGN.md",
+        "ROADMAP.md",
+        "LICENSE",
+        ".claude-plugin",
+        ".mcp.json"
+      ]
+    },
+    {
+      "dest": "vendors/skein",
+      "status": "ok",
+      "copied": [
+        "src",
+        "tests",
+        "docs",
+        "pyproject.toml",
+        "README.md",
+        "CHANGELOG.md",
+        ".github"
+      ]
+    },
+    {
+      "dest": "vendors/eve-miro",
+      "status": "ok",
+      "copied": [
+        "src",
+        "eve",
+        "schemas",
+        "datasets",
+        "apps",
+        "core",
+        "providers",
+        "streaming",
+        "storage",
+        "experiments",
+        "scripts",
+        "infrastructure",
+        "docs",
+        "tests",
+        "pyproject.toml",
+        "Makefile",
+        "docker-compose.yml",
+        "install.sh",
+        "install.ps1",
+        "README.md",
+        "NOTICE.md",
+        "LICENSE",
+        "CHANGELOG.md",
+        ".env.example",
+        ".github",
+        "mirofish[AGPL-3.0, see NOTICE.md]"
+      ]
+    }
+  ]
+}
