@@ -12,17 +12,15 @@
  * ├── statistics.json    — per-arm stats + paired comparisons
  * ├── findings.json
  * ├── evidence/          — evidence.jsonl (every record, digested)
- * ├── verdict.json       — verdict with claim boundaries
- * └── report.html        — offline single-file report rendered from the bundle
+ * └── verdict.json       — verdict with claim boundaries
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { renderHtmlReport } from "./report-html.js";
 import { canonicalize } from "../shared/canonical.js";
 import { redact } from "../shared/redact.js";
 import { computeEnvDigest } from "../evidence/runner.js";
-export const GENESIS_VERSION = "0.3.0";
+export const GENESIS_VERSION = "0.2.0";
 export function buildManifest(spec, result, options = {}) {
     return {
         genesis_version: GENESIS_VERSION,
@@ -73,12 +71,6 @@ export function writeEvidenceBundle(dir, spec, result, manifest) {
     const evidenceLines = result.arms.flatMap((a) => a.evidence).map((e) => JSON.stringify(e));
     writeFileSync(join(dir, "evidence", "evidence.jsonl"), `${redact(evidenceLines.join("\n"))}\n`, "utf8");
     write("verdict.json", result.verdict);
-    try {
-        writeFileSync(join(dir, "report.html"), renderHtmlReport(result), "utf8");
-    }
-    catch {
-        // HTML is a lens, never load-bearing: a render failure must not fail the run.
-    }
     if (spec.analysis && spec.analysis.length > 0) {
         // External cross-checks (e.g. interpretability notes): copied verbatim
         // into the bundle so the verdict cites exactly what was reviewed.

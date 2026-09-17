@@ -12,12 +12,11 @@
  * ├── statistics.json    — per-arm stats + paired comparisons
  * ├── findings.json
  * ├── evidence/          — evidence.jsonl (every record, digested)
- * ├── verdict.json       — verdict with claim boundaries
- * └── report.html        — offline single-file report rendered from the bundle
+ * └── verdict.json       — verdict with claim boundaries
  */
 import type { ExperimentResult } from "./runner.js";
 import type { EvalSpec } from "./spec.js";
-export declare const GENESIS_VERSION = "0.3.0";
+export declare const GENESIS_VERSION = "0.2.0";
 export interface Manifest {
     readonly genesis_version: string;
     readonly created_at: string;

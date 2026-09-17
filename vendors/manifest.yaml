@@ -5,7 +5,7 @@
 sources:
   genesis:
     repo: https://github.com/fernandogarzaaa/genesis
-    pin: f5eff1e025c54ba72aa807f45cfdefdbe48b1179
+    pin: d85012a21aa9a6b0ce2637cddb473165fc741efe
     local: C:\Users\garza\genesis_repo
     dest: vendors/genesis
     license: MIT

@@ -29,7 +29,6 @@ export { runExperiment } from "./eval/runner.js";
 export { decideVerdict } from "./eval/verdict.js";
 export { buildManifest, writeEvidenceBundle, readEvidenceBundle, GENESIS_VERSION } from "./eval/bundle.js";
 export { renderReport } from "./eval/report.js";
-export { renderHtmlReport, renderHtmlFromBundle, escapeHtml } from "./eval/report-html.js";
 export { compareBundles, renderComparison, checkRegression } from "./eval/compare.js";
 export { assureEvaluator, auditSpecEvaluatorAgainstSuite, decideTrust, renderAssurance, renderTrust, } from "./eval/assurance.js";
 export { resolveRegistry, listBenchmarks, loadBenchmark, resolveBenchmarkDataset, BenchmarkError, } from "./eval/benchmarks.js";

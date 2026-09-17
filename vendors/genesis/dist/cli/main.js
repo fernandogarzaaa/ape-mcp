@@ -16,7 +16,7 @@ import { ALL_DESCRIPTORS } from "../assurance/findings.js";
 import { VerifierAdapter } from "../assurance/verifier.js";
 import { SubprocessRunner } from "../evidence/runner.js";
 import { Ledger } from "../ledger/ledger.js";
-const VERSION = "0.3.0";
+const VERSION = "0.2.0";
 const USAGE = `genesis ${VERSION} — universal evaluation & assurance for AI-native software
 
   Evaluation ("does it work?"):
@@ -78,7 +78,7 @@ export async function main(argv) {
             case "run":
                 return await cmdEvaluate(argv.slice(1));
             case "report":
-                return await cmdReport(argv.slice(1));
+                return cmdReport(argv.slice(1));
             case "compare":
                 return await cmdCompare(argv.slice(1));
             case "regression":
@@ -304,20 +304,11 @@ async function cmdEvaluate(argv) {
         return AUDIT_EXIT.INTERNAL_ERROR;
     }
 }
-async function cmdReport(argv) {
-    const [dir, ...rest] = argv;
+function cmdReport(argv) {
+    const [dir] = argv;
     if (!dir) {
-        fail("usage: genesis report <results-dir> [--html <out.html>]");
+        fail("usage: genesis report <results-dir>");
         return AUDIT_EXIT.INTERNAL_ERROR;
-    }
-    const htmlIndex = rest.indexOf("--html");
-    if (htmlIndex >= 0) {
-        const out = rest[htmlIndex + 1];
-        if (!out) {
-            fail("usage: genesis report <results-dir> --html <out.html>");
-            return AUDIT_EXIT.INTERNAL_ERROR;
-        }
-        return cmdReportHtml(dir, out);
     }
     try {
         const verdict = JSON.parse(readFileSync(join(dir, "verdict.json"), "utf8"));
@@ -649,19 +640,6 @@ async function cmdRunBenchmark(argv) {
     }
     catch (error) {
         fail(error.message);
-        return AUDIT_EXIT.INTERNAL_ERROR;
-    }
-}
-async function cmdReportHtml(dir, out) {
-    try {
-        const { renderHtmlFromBundle } = await import("../eval/report-html.js");
-        const { writeFileSync } = await import("node:fs");
-        writeFileSync(out, renderHtmlFromBundle(dir), "utf8");
-        process.stdout.write(`HTML report: ${out}\n`);
-        return 0;
-    }
-    catch (error) {
-        fail(`cannot render HTML from ${dir}: ${error.message}`);
         return AUDIT_EXIT.INTERNAL_ERROR;
     }
 }
