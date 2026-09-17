@@ -96,29 +96,26 @@ export class ExactEvaluator {
         };
     }
 }
-/** Regex over stringified output; `invert` passes when the pattern is ABSENT (e.g. injected markers). */
+/** Regex over stringified output. */
 export class RegexEvaluator {
     name = "regex";
     kind = "deterministic";
     #pattern;
     #source;
-    #invert;
     constructor(spec) {
         if (!spec.pattern)
             throw new Error("evaluator regex: pattern is required");
         this.#source = spec.pattern;
         this.#pattern = new RegExp(spec.pattern);
-        this.#invert = spec.invert === true;
     }
     describe() {
-        return { type: "regex", pattern: this.#source, ...(this.#invert ? { invert: true } : {}) };
+        return { type: "regex", pattern: this.#source };
     }
     async evaluate(task, output) {
         void task;
         const text = typeof output === "string" ? output : JSON.stringify(output);
-        const matched = this.#pattern.test(text ?? "");
-        const passed = this.#invert ? !matched : matched;
-        return { evaluator: this.name, evaluator_kind: this.kind, score: passed ? 1 : 0, passed, details: { pattern: this.#source, ...(this.#invert ? { invert: true } : {}) } };
+        const passed = this.#pattern.test(text ?? "");
+        return { evaluator: this.name, evaluator_kind: this.kind, score: passed ? 1 : 0, passed, details: { pattern: this.#source } };
     }
 }
 /** Minimal JSON-schema check (type/properties/required/enum) — no dependency. */

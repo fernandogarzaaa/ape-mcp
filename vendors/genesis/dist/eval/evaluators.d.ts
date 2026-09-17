@@ -35,7 +35,7 @@ export declare class ExactEvaluator implements Evaluator {
     describe(): Record<string, unknown>;
     evaluate(task: EvalTask, output: unknown): Promise<Omit<Observation, "trial_id" | "task_id">>;
 }
-/** Regex over stringified output; `invert` passes when the pattern is ABSENT (e.g. injected markers). */
+/** Regex over stringified output. */
 export declare class RegexEvaluator implements Evaluator {
     #private;
     readonly name = "regex";
