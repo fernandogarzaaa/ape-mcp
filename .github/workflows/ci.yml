@@ -22,6 +22,9 @@ jobs:
       - run: node scripts/smoke.mjs
       - run: node --test tests/godmode.test.js
       - run: node scripts/fetch-adam.mjs --check || true
+      - uses: dtolnay/rust-toolchain@stable
+      - name: ADAM binary handshake (builds from vendors/adam if missing)
+        run: node scripts/verify-adam.mjs --build-if-missing
       - name: Skein import check (vendored)
         run: PYTHONPATH=vendors/skein/src python -c "import skein.cli; print('skein ok')"
       - name: Genesis dist present
