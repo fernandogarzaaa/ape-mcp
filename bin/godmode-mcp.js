@@ -3,11 +3,17 @@
 // Stateless protocol: state travels in handles (organism_id, node, task_id).
 import { createServer } from "node:http";
 import { dispatchCall, toolsList, discover } from "../src/server.js";
+import { protectedResourceDoc, checkBearer, unauthorized } from "../src/auth.js";
 
 const args = process.argv.slice(2);
 if (args.includes("--http")) {
   const port = Number(process.env.GODMODE_PORT || args[args.indexOf("--http") + 1] || 8787);
   const server = createServer(async (req, res) => {
+    const host = req.headers.host || `127.0.0.1:${port}`;
+    if (req.method === "GET" && req.url === "/.well-known/oauth-protected-resource") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(protectedResourceDoc(host)));
+    }
     if (req.method === "GET" && req.url === "/discover") {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify(discover()));
@@ -17,6 +23,7 @@ if (args.includes("--http")) {
       return res.end(JSON.stringify(toolsList()));
     }
     if (req.method === "POST" && req.url === "/call") {
+      if (!checkBearer(req).ok) return unauthorized(res, host);
       let body = "";
       for await (const c of req) body += c;
       try {

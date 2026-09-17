@@ -36,7 +36,31 @@ if (!cmd) {
 } else if (cmd === "run") {
   const tool = rest[0] ?? "godmode_status";
   let args = {};
-  try { args = rest[1] ? JSON.parse(rest[1]) : {}; } catch { args = {}; }
+  // Accept JSON ('{...}') or robust key=value pairs (PowerShell-safe: no inner double quotes needed).
+  // Accept JSON ('{...}', bash/cmd) or key=value tokens (PowerShell-safe).
+  // Each argv token is parsed individually so quoted multi-word values survive intact.
+  const toks = rest.slice(1);
+  if (toks.length === 1 && toks[0].trim().startsWith("{")) {
+    try { args = JSON.parse(toks[0]); } catch { args = {}; }
+  } else if (toks.length) {
+    let cur = null;
+    for (const t of toks) {
+      if (t === "--yes") continue;
+      const eq = t.indexOf("=");
+      if (eq > 0 && /^[A-Za-z_]\w*$/.test(t.slice(0, eq))) {
+        cur = t.slice(0, eq);
+        args[cur] = t.slice(eq + 1);
+      } else if (cur) {
+        args[cur] += " " + t;
+      }
+    }
+    for (const k of Object.keys(args)) {
+      const v = args[k];
+      if (/^-?\d+$/.test(v)) args[k] = Number(v);
+      else if (v === "true") args[k] = true;
+      else if (v === "false") args[k] = false;
+    }
+  }
   const out = await dispatchCall(tool, args, { headlessBypass: rest.includes("--yes") });
   console.log(JSON.stringify(out, null, 2));
 } else if (cmd === "doctor") {

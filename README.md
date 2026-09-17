@@ -23,6 +23,12 @@ godmode run godmode_orchestrate '{"op":"status"}'
 
 Browser console: Live Trace · Task Graph · Experience · Ledger · Mods · CLI pane (same dispatch as `tools/call`).
 
+## Auth
+
+v1 local-only: HTTP surface open on loopback. Opt-in bearer enforcement:
+`GODMODE_REQUIRE_AUTH=1 GODMODE_TOKENS=<csv>`. Discovery per RFC9728:
+`GET /.well-known/oauth-protected-resource`. Future IdP: `GODMODE_AUTH_SERVERS='["https://idp.example.com"]'`.
+
 ## Mods
 
 `godmode.config.yaml` + `mods/<name>/{mod.json,hooks.js}` (`preCall/postCall`, throw-safe). `mods/policy-gates` confirms destructive evolve/force-release (MRTR elicitation).

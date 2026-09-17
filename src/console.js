@@ -3,13 +3,19 @@ import { readFileSync, existsSync, readFileSync as r } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dispatchCall, toolsList, discover } from "./server.js";
+import { protectedResourceDoc, checkBearer, unauthorized } from "./auth.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 export function startConsole({ port = 0, open = false } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
+    const host = req.headers.host || "127.0.0.1";
     res.setHeader("Access-Control-Allow-Origin", "*");
+    if (req.method === "GET" && url.pathname === "/.well-known/oauth-protected-resource") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(protectedResourceDoc(host)));
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       const html = readFileSync(join(root, "console", "console.html"), "utf8");
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -39,6 +45,7 @@ export function startConsole({ port = 0, open = false } = {}) {
       return res.end(JSON.stringify({ events: [], count: 0 }));
     }
     if (req.method === "POST" && url.pathname === "/api/call") {
+      if (!checkBearer(req).ok) return unauthorized(res, host);
       let body = "";
       for await (const c of req) body += c;
       try {
