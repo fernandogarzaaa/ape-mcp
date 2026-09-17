@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert";
+import { existsSync } from "node:fs";
 import { dispatchCall, toolsList, discover } from "../src/server.js";
 import { protectedResourceDoc, checkBearer, authRequired } from "../src/auth.js";
 
@@ -36,4 +37,10 @@ test("well-known doc advertises local-open by default", () => {
 test("bearer open by default (local-only v1)", () => {
   assert.equal(authRequired(), false);
   assert.equal(checkBearer({ headers: {} }).ok, true);
+});
+test("fetch-adam maps this platform to vendored binary", async () => {
+  const m = await import("../scripts/fetch-adam.mjs");
+  const asset = m.assetFor(process.platform, process.arch);
+  assert.ok(asset);
+  assert.ok(existsSync(m.destFor(asset)));
 });

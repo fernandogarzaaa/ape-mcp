@@ -66,8 +66,10 @@ export const dispatch = {
     const e = genesisEntry();
     if (!e) return { ...fail("genesis", "dist not built; run npm run build in vendors/genesis"), suites: genesisSuites().suites };
     if (!verifier) return { verdict: "UNTESTED", suite, rates: null, findings: [], note: "pass verifier to run; suites listed", suites: genesisSuites().suites };
-    const r = run("node", [e, "audit", "--suite", suite, "--verifier", verifier]);
-    return { suite, ...r };
+    // Evidence-persistent by default: every audit lands in the hash-chained ledger.
+    const ledger = join(process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode"), "genesis-ledger.db");
+    const r = run("node", [e, "audit", "--suite", suite, "--verifier", verifier, "--ledger", ledger]);
+    return { suite, ledger, ...r };
   },
   validate_experience({ url = "mock:", persona = "curious-explorer", seed = 7 } = {}) {
     const e = eveEntry();

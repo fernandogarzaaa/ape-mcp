@@ -23,6 +23,11 @@ godmode run godmode_orchestrate '{"op":"status"}'
 
 Browser console: Live Trace · Task Graph · Experience · Ledger · Mods · CLI pane (same dispatch as `tools/call`).
 
+## Evidence
+
+Every `godmode_audit_claim` writes to the hash-chained ledger at `.godmode/genesis-ledger.db`
+(`Ledger: entry <hash>` in the result). No `--ledger` flag needed.
+
 ## Auth
 
 v1 local-only: HTTP surface open on loopback. Opt-in bearer enforcement:
