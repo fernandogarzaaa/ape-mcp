@@ -21,7 +21,13 @@ godmode run godmode_audit_claim '{"suite":"code"}'
 godmode run godmode_orchestrate '{"op":"status"}'
 ```
 
-Browser console: Live Trace · Task Graph · Experience · Ledger · Mods · CLI pane (same dispatch as `tools/call`).
+Browser console: Live Trace · Tasks · Task Graph · Experience · Ledger · Mods · CLI pane (same dispatch as `tools/call`).
+
+## Background tasks
+
+Long tools run async via the Tasks shape: `godmode_task_start {tool, arguments}` → `{task_id}`,
+poll `godmode_task_get` / `tasks/get` / console Tasks tab. Statuses: running → done|failed,
+persisted in `.godmode/tasks.json`.
 
 ## Evidence
 
