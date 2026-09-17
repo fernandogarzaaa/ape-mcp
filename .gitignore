@@ -5,6 +5,7 @@ target/
 __pycache__/
 *.db
 *.log
+.eve-output/
 # Standalone prebuilt outputs ARE committed:
 !vendors/adam/target/release/adam-mcp.exe
 !vendors/adam/target/release/adam-mcp
