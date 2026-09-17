@@ -72,13 +72,15 @@ test("godmode_beliefs + genome route to vendored ADAM (real binary or explicit u
   const b = await dispatchCall("godmode_beliefs", {});
   const g = await dispatchCall("godmode_genome", {});
   const br = b.structuredContent.result, gr = g.structuredContent.result;
+  const nonOk = ["unavailable", "spawn-error", "exited", "timeout", "rpc-error"];
   if (br._adam === "ok") assert.equal(br.tool, "adam_beliefs");
-  else assert.ok(br._adam === "unavailable" || br._adam === "spawn-error" || br._adam === "exited", "explicit not silent");
+  else assert.ok(nonOk.includes(br._adam), "explicit not silent: " + br._adam);
   if (gr._adam === "ok") assert.equal(gr.tool, "adam_genome");
+  else assert.ok(nonOk.includes(gr._adam), "explicit not silent: " + gr._adam);
 });
 test("godmode_remember persists through real adam-mcp when present", async () => {
   const r = await dispatchCall("godmode_remember", { kind: "episodic", content: "test-marker", organism_id: "testorg" });
   const res = r.structuredContent.result;
   if (res._adam === "ok") assert.equal(res.tool, "adam_memory_store");
-  else assert.ok(["unavailable", "spawn-error", "exited", "timeout"].includes(res._adam), "explicit not silent");
+  else assert.ok(["unavailable", "spawn-error", "exited", "timeout", "rpc-error"].includes(res._adam), "explicit not silent");
 });

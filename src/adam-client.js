@@ -47,7 +47,15 @@ function call(bin, tool, args, timeoutMs = 60000) {
         try {
           const msg = JSON.parse(line);
           if (msg.id === 1 && msg.result?.capabilities) { send("tools/call", { name: tool, arguments: args }, 2); continue; }
-          if (msg.id === 2) { done = true; clearTimeout(timer); child.kill(); resolve({ _adam: "ok", tool, result: msg.result?.content ?? msg.result?.result ?? msg }); }
+          if (msg.id === 2) {
+            done = true;
+            clearTimeout(timer);
+            child.kill();
+            resolve(msg.error
+              ? { _adam: "rpc-error", tool, error: msg.error }
+              : { _adam: "ok", tool, result: msg.result?.content ?? msg.result?.result ?? msg });
+            continue;
+          }
         } catch { /* skip non-JSON */ }
       }
     });

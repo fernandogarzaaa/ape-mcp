@@ -2,7 +2,7 @@
 # plugin client would. Usage: powershell -File scripts/live-audit.ps1
 # NOTE: never name a param `$args` (PowerShell automatic variable) — payloads go empty.
 $ErrorActionPreference = "Continue"
-$root = "E:\godmode"
+$root = Split-Path -Parent $PSScriptRoot
 $mcpPort = 18771
 $api = "http://127.0.0.1:$mcpPort"
 $results = @()
@@ -24,7 +24,11 @@ function McpCall($tool, $params) {
   return Invoke-RestMethod -Uri "$api/call" -Method Post -Body $body -ContentType "application/json" -Headers @{ "Mcp-Method" = "tools/call" }
 }
 
-$jm = Start-Job -ScriptBlock { Set-Location E:\godmode; node bin/godmode-mcp.js --http 18771 }
+$jm = Start-Job -ArgumentList $root, $mcpPort -ScriptBlock {
+  param($repoRoot, $port)
+  Set-Location $repoRoot
+  node bin/godmode-mcp.js --http $port
+}
 Check "server-ready" (WaitReady "$api/discover")
 
 try { $d = Invoke-RestMethod -Uri "$api/discover"; Check "discover" ($d.protocol -eq "2026-07-28") $d.protocol }
@@ -106,7 +110,11 @@ try {
   Check "stdio" ($resp -match "godmode_status") ""
 } catch { Check "stdio" $false $_ }
 
-$ju = Start-Job -ScriptBlock { Set-Location E:\godmode; node bin/godmode.js serve --no-open }
+$ju = Start-Job -ArgumentList $root -ScriptBlock {
+  param($repoRoot)
+  Set-Location $repoRoot
+  node bin/godmode.js serve --no-open
+}
 Start-Sleep -Seconds 3
 try {
   $out = Receive-Job -Job $ju 2>&1 | Out-String

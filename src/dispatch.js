@@ -85,7 +85,7 @@ export const dispatch = {
     const r = run("node", [e, "audit", "--suite", suite, "--verifier", verifier, "--ledger", ledger]);
     if (r.ok && r.output) {
       const m = r.output.match(/Ledger: entry (\w+)/);
-      if (m) ledgerSummary({ kind: "genesis.audit", suite, verdict: /VERDICT:\s+(\S+)/.exec(r.output)?.[1], ledger_entry: m[1], at: new Date().toISOString() });
+      if (m) ledgerSummary({ kind: "genesis.audit", suite, verdict: /VERDICT:\s+(\S+)/.exec(r.output)?.[1], ledger_entry: m[1] });
     }
     return { suite, ledger, ...r };
   },
