@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,6 +34,12 @@ export function eveEntry() {
   const cands = [V("eve/bin/eve.js"), V("eve/dist/cli/main.js")];
   return cands.find((p) => existsSync(p)) ?? null;
 }
+export function runNode(entry, args, opts = {}) {
+  return run("node", [entry, ...args], opts);
+}
+export function failEve() {
+  return fail("eve", "bin/eve.js + dist missing; build vendors/eve");
+}
 export function adamBin() {
   const cands = [
     V("adam/target/release/adam-mcp"), V("adam/target/release/adam-mcp.exe"),
@@ -46,6 +52,14 @@ export function skeinSrc() {
 }
 export function miroSrc() {
   return existsSync(V("eve-miro/src/eve_miro/cli/main.py")) ? V("eve-miro/src") : null;
+}
+
+function ledgerSummary(entry) {
+  try {
+    const dir = process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "ledger.jsonl"), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
+  } catch { /* ledger never breaks calls */ }
 }
 
 export const dispatch = {
@@ -69,6 +83,10 @@ export const dispatch = {
     // Evidence-persistent by default: every audit lands in the hash-chained ledger.
     const ledger = join(process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode"), "genesis-ledger.db");
     const r = run("node", [e, "audit", "--suite", suite, "--verifier", verifier, "--ledger", ledger]);
+    if (r.ok && r.output) {
+      const m = r.output.match(/Ledger: entry (\w+)/);
+      if (m) ledgerSummary({ kind: "genesis.audit", suite, verdict: /VERDICT:\s+(\S+)/.exec(r.output)?.[1], ledger_entry: m[1], at: new Date().toISOString() });
+    }
     return { suite, ledger, ...r };
   },
   validate_experience({ url = "mock:", persona = "curious-explorer", seed = 7 } = {}) {
@@ -88,7 +106,10 @@ export const dispatch = {
     const py = process.env.GODMODE_PYTHON || "python";
     const map = { status: ["status"], graph: ["graph"], claim: ["claim", node, "--agent-id", agent_id], release: ["release", node], log: ["log", "--node", node] };
     const args = map[op] ?? ["status"];
-    const r = run(py, ["-m", "skein.cli", ...args].filter(Boolean), { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: s } });
+    const r = run(py, ["-m", "skein.cli", ...args].filter(Boolean), {
+      cwd: process.cwd(),
+      env: { ...process.env, PYTHONPATH: s },
+    });
     return { op, node, ...r };
   },
   world({ scenario = "experiments/typhoon/typhoon_manila_closed_loop.yaml" } = {}) {

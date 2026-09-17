@@ -1,11 +1,16 @@
 node_modules/
 .godmode/
-target/
-.venv/
-__pycache__/
+.skein/
+.fastembed_cache/
+.tmp-*/
+adam_genome.json
+adam_memory.db
 *.db
 *.log
 .eve-output/
+target/
+.venv/
+__pycache__/
 # Standalone prebuilt outputs ARE committed:
 !vendors/adam/target/release/adam-mcp.exe
 !vendors/adam/target/release/adam-mcp

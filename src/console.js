@@ -45,6 +45,17 @@ export function startConsole({ port = 0, open = false } = {}) {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ events: [], count: 0 }));
     }
+    if (req.method === "GET" && url.pathname === "/api/ledger") {
+      let entries = [];
+      try {
+        const p = join(process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode"), "ledger.jsonl");
+        if (existsSync(p)) {
+          entries = r(p, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-100);
+        }
+      } catch {}
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ entries, count: entries.length }));
+    }
     if (req.method === "GET" && url.pathname === "/api/tasks") {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ tasks: taskList() }));

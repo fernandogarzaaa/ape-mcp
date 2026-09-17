@@ -6,14 +6,18 @@ import { dispatch } from "./dispatch.js";
 import { emitTrace, newTraceId, shaShort, dataDir, tracePath } from "./trace.js";
 import { loadMods } from "./mods.js";
 import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
+import { adamCall } from "./adam-client.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROTOCOL = "2026-07-28";
 
 export const TOOL_DEFS = [
   { name: "godmode_status", description: "GodMode status: versions, vendored engines, mods", inputSchema: { type: "object", properties: { organism_id: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
-  { name: "godmode_remember", description: "Store durable memory in ADAM organism", inputSchema: { type: "object", properties: { kind: { type: "string" }, content: { type: "string" }, organism_id: { type: "string" } }, required: ["content"] }, annotations: { readOnly: false, idempotent: false } },
-  { name: "godmode_recall", description: "Query ADAM memory + prior decisions", inputSchema: { type: "object", properties: { query: { type: "string" }, kind: { type: "string" }, top_k: { type: "number" }, organism_id: { type: "string" } }, required: ["query"] }, annotations: { readOnly: true, idempotent: true } },
+  { name: "godmode_remember", description: "Store durable memory in ADAM organism (real stdio call to vendored adam-mcp)", inputSchema: { type: "object", properties: { kind: { type: "string" }, content: { type: "string" }, origin: { type: "string" }, confidence: { type: "number" }, organism_id: { type: "string" } }, required: ["content"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "godmode_recall", description: "Query ADAM memory + prior decisions (real stdio call to vendored adam-mcp)", inputSchema: { type: "object", properties: { query: { type: "string" }, kind: { type: "string" }, top_k: { type: "number" }, organism_id: { type: "string" } }, required: ["query"] }, annotations: { readOnly: true, idempotent: true } },
+  { name: "godmode_beliefs", description: "List ADAM beliefs or form one from evidence (real stdio call)", inputSchema: { type: "object", properties: { statement: { type: "string" }, origin: { type: "string" }, organism_id: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "godmode_genome", description: "Current ADAM genome payload (values, goals, capabilities, policies)", inputSchema: { type: "object", properties: { organism_id: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "godmode_mcp_eval", description: "EVE mcp-eval: schema, conformance + fuzz oracles against an MCP server target", inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "godmode_validate_experience", description: "Run EVE human-loop simulation (personas, seeded, evidence-backed)", inputSchema: { type: "object", properties: { url: { type: "string" }, persona: { type: "string" }, goal: { type: "string" }, seed: { type: "number" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "godmode_audit_claim", description: "Genesis: evaluate claim + adversarially audit verifier (SOUND/EXPLOITABLE)", inputSchema: { type: "object", properties: { suite: { type: "string" }, verifier: { type: "string" }, spec: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "godmode_compare", description: "Genesis compare/regression between two runs", inputSchema: { type: "object", properties: { run_a: { type: "string" }, run_b: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
@@ -41,8 +45,15 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
   try {
     switch (name) {
       case "godmode_status": result = dispatch.status(a); break;
-      case "godmode_remember": result = dispatch.memory({ op: "store", ...a }); break;
-      case "godmode_recall": result = dispatch.memory({ op: "query", ...a }); break;
+      case "godmode_remember": result = await adamCall("adam_memory_store", { kind: a.kind || "episodic", content: a.content, origin: a.origin || "observation", confidence: a.confidence ?? 0.9 }, a.organism_id); break;
+      case "godmode_recall": result = await adamCall("adam_memory_query", { query: a.query, kind: a.kind, top_k: a.top_k ?? 5 }, a.organism_id); break;
+      case "godmode_beliefs": result = await adamCall("adam_beliefs", a.statement ? { statement: a.statement, origin: a.origin || "observation" } : {}, a.organism_id); break;
+      case "godmode_genome": result = await adamCall("adam_genome", {}, a.organism_id); break;
+      case "godmode_mcp_eval": {
+        const e = dispatch.eveEntry();
+        result = e ? dispatch.runNode(e, ["mcp-eval", a.target]) : dispatch.failEve();
+        break;
+      }
       case "godmode_validate_experience": result = dispatch.validate_experience(a); break;
       case "godmode_audit_claim": result = dispatch.audit_claim(a); break;
       case "godmode_compare": result = { runs: [a.run_a, a.run_b], note: "use vendors/genesis compare; see schemas/godmode-map.yaml" }; break;

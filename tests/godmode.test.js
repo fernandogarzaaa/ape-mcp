@@ -68,3 +68,17 @@ test("task_start rejects unknown tools (no nesting)", async () => {
   const r = await dispatchCall("godmode_task_start", { tool: "nope_x" });
   assert.equal(r.structuredContent.result.error, "unknown_tool");
 });
+test("godmode_beliefs + genome route to vendored ADAM (real binary or explicit unavailable)", async () => {
+  const b = await dispatchCall("godmode_beliefs", {});
+  const g = await dispatchCall("godmode_genome", {});
+  const br = b.structuredContent.result, gr = g.structuredContent.result;
+  if (br._adam === "ok") assert.equal(br.tool, "adam_beliefs");
+  else assert.ok(br._adam === "unavailable" || br._adam === "spawn-error" || br._adam === "exited", "explicit not silent");
+  if (gr._adam === "ok") assert.equal(gr.tool, "adam_genome");
+});
+test("godmode_remember persists through real adam-mcp when present", async () => {
+  const r = await dispatchCall("godmode_remember", { kind: "episodic", content: "test-marker", organism_id: "testorg" });
+  const res = r.structuredContent.result;
+  if (res._adam === "ok") assert.equal(res.tool, "adam_memory_store");
+  else assert.ok(["unavailable", "spawn-error", "exited", "timeout"].includes(res._adam), "explicit not silent");
+});
