@@ -275,9 +275,10 @@ test("agent: context compression digests old turns, keeps tail", async () => {
   const big = Array.from({ length: 30 }, (_, i) => ({ role: "tool", toolCallId: "t" + i, content: "result-" + i + "-" + "z".repeat(2000) }));
   const messages = [{ role: "user", content: "objective" }, ...big];
   const before = estimateTokens(messages);
-  const { messages: out, compressed } = compressHistory(messages, { maxHistoryTokens: 5000, keepRecentTurns: 2 });
+  const { messages: out, compressed, savedTokens } = compressHistory(messages, { maxHistoryTokens: 5000, keepRecentTurns: 2 });
   assert.ok(compressed > 0, "old turns digested");
   assert.ok(estimateTokens(out) < before, "history shrank");
+  assert.ok(savedTokens > 0, "savings accounted");
   assert.ok(out[out.length - 1].content.includes("result-29"), "tail intact");
 });
 

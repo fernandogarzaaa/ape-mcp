@@ -53,6 +53,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   let lastCallKey = null;
   let repeatCount = 0;
   let compressions = 0;
+  let tokensSavedEstimate = 0;
   const record = (step) => { steps.push(step); onStep?.(step); };
 
   if (modelCfg.provider === "mock") mockPlan(convKey, mockScript ?? [], mockCostPerCall);
@@ -70,6 +71,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
           messages.length = 0;
           messages.push(...c.messages);
           compressions++;
+          tokensSavedEstimate += c.savedTokens ?? 0;
         }
       }
 
@@ -232,6 +234,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     total_cost: budget.usd,
     duration_ms: Date.now() - startedAt,
     compressions,
+    tokens_saved_estimate: tokensSavedEstimate,
     destructive_used: destructiveUsed,
     receipt: {
       profile: profile.name,
@@ -243,6 +246,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       cost_usd: Number(budget.usd.toFixed(6)),
       duration_ms: Date.now() - startedAt,
       compressions,
+      tokens_saved_estimate: tokensSavedEstimate,
       destructive_used: destructiveUsed,
       outcome_hash: shaShort(typeof outcome === "string" ? outcome : JSON.stringify(outcome ?? "")),
       ledger: "runs.db",

@@ -17,7 +17,17 @@
   both honest-refusals.
 - **Tool-output framing**: results re-enter the model marked as untrusted data.
 - **Feedback loop**: worker auto-writes a compact outcome memory after every run, so
-  the next similar objective has something real to recall.
+  the next similar objective has something real to recall; consecutive profile
+  failures propose an ADAM `investigate_conflict` mutation once per streak.
+- **Grounding gate** (AXIOM evidence): `policy.verify_before_finish` (`warn`/`enforce`/
+  `off`); `finish` without verification evidence is rejected (enforce) or flagged
+  `unverified` in the ledger + outcome (warn). Makes the §8.2 unverified-claim rate
+  directly measurable.
+- **Recovery + immunity** (AXIOM self-healing lite): transient tool failures retry once
+  (`limits.max_retries`), consulting and recording failure fingerprints in ADAM.
+- **Context compression + receipts** (AXIOM P0): history capped at
+  `max_history_tokens` with recoverable digests (full data stays in `runs.db`) and
+  per-run `tokens_saved_estimate`; every run stores an explicit receipt.
 
 ### External review fixes (Linux clean-install audit)
 - **Safe truncation**: tool `content` text is now truncated at the value level so it is

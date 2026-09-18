@@ -7,7 +7,8 @@ export function estimateTokens(messages) {
 }
 
 export function compressHistory(messages, { maxHistoryTokens = 60000, keepRecentTurns = 4 } = {}) {
-  if (estimateTokens(messages) <= maxHistoryTokens) return { messages, compressed: 0 };
+  const before = estimateTokens(messages);
+  if (before <= maxHistoryTokens) return { messages, compressed: 0, savedTokens: 0 };
   // Never compress the system/objective head (first message) — only middle turns.
   // A "turn" is an assistant message + its tool results; keep the tail intact.
   const head = messages.slice(0, 1);
@@ -24,5 +25,5 @@ export function compressHistory(messages, { maxHistoryTokens = 60000, keepRecent
     }
     return { role: m.role, content: String(m.content ?? "").slice(0, 300) };
   });
-  return { messages: [...head, ...digested, ...tail], compressed };
+  return { messages: [...head, ...digested, ...tail], compressed, savedTokens: Math.max(0, before - estimateTokens([...head, ...digested, ...tail])) };
 }
