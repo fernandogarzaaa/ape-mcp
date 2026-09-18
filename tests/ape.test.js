@@ -173,12 +173,13 @@ test("tool content text is always valid JSON, even for long multi-step results",
   }, { headlessBypass: true });
   const runId = r.structuredContent.result.run_id;
   let st = null;
-  for (let i = 0; i < 40; i++) {
-    await new Promise((x) => setTimeout(x, 200));
+  for (let i = 0; i < 120; i++) {
+    await new Promise((x) => setTimeout(x, 500));
     const g = await dispatchCall("ape_agent_status", { run_id: runId });
     st = g;
     if (st.structuredContent.result.status !== "running") break;
   }
+  assert.notEqual(st.structuredContent.result.status, "running", "run reaches a terminal state within 60s");
   const text = st.content[0].text;
   let parsed = null;
   try { parsed = JSON.parse(text); } catch (e) { assert.fail("content text must parse as JSON: " + e.message); }
