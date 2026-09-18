@@ -27,9 +27,14 @@ const BASE_URLS = {
   groq: "https://api.groq.com/openai/v1",
   nebius: process.env.APE_NEBIUS_BASE_URL || "https://api.studio.nebius.com/v1",
   opencode: process.env.APE_OPENCODE_BASE_URL || "https://opencode.ai/zen/v1",
+  google: "https://generativelanguage.googleapis.com/v1beta/openai",
   local: process.env.APE_LOCAL_BASE_URL || "http://localhost:11434/v1",
 };
-const OPENAI_COMPAT = new Set(["openai", "openrouter", "groq", "nebius", "opencode", "local"]);
+const OPENAI_COMPAT = new Set(["openai", "openrouter", "groq", "nebius", "opencode", "google", "local"]);
+
+// Providers APE can actually invoke. Anything detected but not in this set (e.g.
+// bedrock, which needs AWS SigV4) is honest-skipped, never silently attempted.
+export const CALLABLE_PROVIDERS = new Set(["anthropic", ...OPENAI_COMPAT, "mock"]);
 
 const DEFAULT_MODELS = {
   anthropic: "claude-sonnet-4-6",
@@ -95,7 +100,7 @@ export async function resolveModel(modelCfg, overrides = {}) {
 
   // 3. Auto: the provider the platform is CURRENTLY using.
   const active = await detectActiveProvider();
-  if (active) {
+  if (active && CALLABLE_PROVIDERS.has(active.provider)) {
     return {
       provider: active.provider,
       id: active.model || requestedModel || defaultModelFor(active.provider),
@@ -107,8 +112,8 @@ export async function resolveModel(modelCfg, overrides = {}) {
     };
   }
 
-  // 4. Best-effort: first stored credential.
-  const stored = await detectProviders();
+  // 4. Best-effort: first stored credential on a callable provider.
+  const stored = (await detectProviders()).filter((p) => CALLABLE_PROVIDERS.has(p));
   if (stored.length) {
     const first = stored[0];
     const cred = await credentialFor(first);
@@ -258,6 +263,7 @@ export async function chat(cfg, { system, messages, tools }) {
     case "groq":
     case "nebius":
     case "opencode":
+    case "google":
     case "local":
       return await openaiChat(cfg, system, messages, tools);
     default:

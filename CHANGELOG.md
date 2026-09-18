@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Production hardening (no stubs)
+- **Console fully wired**: new live `/api/graph` (skein), `/api/mods` (real hook flags),
+  `/api/experience` (recent EVE runs from trace); Graph/Experience/Mods tabs render live
+  data on a 10s poll instead of static copy. Live-audit now 20/20.
+- **Provider set complete**: added `google` (Gemini OpenAI-compatible) and `opencode`
+  (Zen) adapters; `CALLABLE_PROVIDERS` gate honest-skips non-invokable providers
+  (e.g. bedrock) instead of crashing at call time.
+- **Production packaging**: `.npmignore` + per-vendor `.npmignore` files exclude
+  `node_modules`/`__pycache__` (npm-packlist ignores root rules under allowlisted dirs,
+  so the exclusions live inside the vendored trees and are re-created by sync-vendors);
+  `postinstall` installs genesis+eve deps on first install. Package: 1,652 files /
+  13.4 MB with the prebuilt `adam-mcp.exe` included.
+
 ### Host-provider autodetection (`provider: auto`)
 - APE now detects the provider the platform it's installed in is **currently using**
   (active-session state, not just stored credentials) and reuses its credentials.

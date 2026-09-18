@@ -135,6 +135,12 @@ try {
     Check "console-trace" ($tr.count -gt 0) ("events=" + $tr.count)
     $tk = Invoke-RestMethod -Uri ($curl + "api/tasks")
     Check "console-tasks" ($null -ne $tk.tasks) ""
+    $md = Invoke-RestMethod -Uri ($curl + "api/mods")
+    Check "console-mods" (($md.mods | Where-Object { $_.name -eq "policy-gates" }).preCall -eq $true) "policy-gates preCall live"
+    $gr = Invoke-RestMethod -Uri ($curl + "api/graph")
+    Check "console-graph" ($null -ne $gr.graph -and $gr.graph.op -eq "graph") "skein graph live"
+    $ex = Invoke-RestMethod -Uri ($curl + "api/experience")
+    Check "console-experience" ($null -ne $ex.runs) "eve runs live"
   } else { Check "console-page" $false "no URL in output" }
 } catch { Check "console-page" $false $_.ToString().Substring(0, [Math]::Min(120, $_.ToString().Length)) }
 

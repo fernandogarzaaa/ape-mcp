@@ -39,6 +39,12 @@ for (const j of VENDOR_JOBS) {
       copied.push(k);
     } catch (e) { report.jobs.push({ dest: "vendors/" + j.name, keep: k, status: "error: " + String(e).slice(0, 120) }); }
   }
+  // Keep npm-packaging hygiene inside vendored trees (re-created on every sync):
+  // node_modules and python caches are installed/produced locally, never shipped.
+  try {
+    if (["genesis", "eve"].includes(j.name)) writeFileSync(join(dest, ".npmignore"), "node_modules\n");
+    if (j.name === "skein") writeFileSync(join(dest, ".npmignore"), "__pycache__\n*.pyc\n");
+  } catch { /* best-effort */ }
   report.jobs.push({ dest: "vendors/" + j.name, status: "ok", copied, sha: sha || undefined });
 }
 writeFileSync(join(root, "vendors", "vendor-report.json"), JSON.stringify({ ...report, at: new Date().toISOString() }, null, 2));
