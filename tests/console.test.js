@@ -70,4 +70,47 @@ test("console: connector save validates", async () => {
   assert.equal(r.ok, true);
 });
 
+test("console: runs/stream pushes run, step, and spend events", async () => {
+  // Seed a finished mock run so the first tick has something to emit.
+  const { dispatchCall } = await import("../src/server.js");
+  const r = await dispatchCall("ape_agent_run", {
+    profile: "repo-triage",
+    objective: "sse check",
+    _mockScript: [{ tool: "finish", args: { summary: "sse" } }],
+  }, { headlessBypass: true });
+  const runId = r.structuredContent.result.run_id;
+  for (let i = 0; i < 30; i++) {
+    await new Promise((x) => setTimeout(x, 200));
+    const g = await dispatchCall("ape_agent_status", { run_id: runId });
+    if (g.structuredContent.result.status !== "running") break;
+  }
+  const seen = new Set();
+  let reader = null;
+  try {
+    const resp = await fetch(base + "api/runs/stream?since_step=0");
+    reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise((res) => setTimeout(() => res(null), 1500)),
+      ]);
+      if (!chunk) continue;
+      if (chunk.done) break;
+      buf += dec.decode(chunk.value, { stream: true });
+      for (const line of buf.split("\n")) {
+        const m = /^event: (\w+)/.exec(line.trim());
+        if (m) seen.add(m[1]);
+      }
+      if (seen.has("run") && seen.has("step") && seen.has("spend")) break;
+    }
+  } catch { /* network abort is fine */ }
+  try { await reader?.cancel(); } catch { /* ignore */ }
+  assert.ok(seen.has("run"), "run event streamed");
+  assert.ok(seen.has("step"), "step event streamed");
+  assert.ok(seen.has("spend"), "spend event streamed");
+});
+
 test.after(() => { try { server?.close(); } catch { /* ignore */ } });

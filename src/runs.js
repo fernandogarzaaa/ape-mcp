@@ -125,6 +125,12 @@ export function runningCount() {
   return d.prepare("SELECT COUNT(*) AS n FROM runs WHERE status = 'running'").get().n;
 }
 
+// Steps newer than a row id, across all runs (powers the SSE push channel).
+export function stepsSince(lastId = 0, limit = 100) {
+  const d = open();
+  return d.prepare("SELECT s.*, r.profile FROM steps s JOIN runs r ON r.run_id = s.run_id WHERE s.id > ? ORDER BY s.id LIMIT ?").all(lastId, limit);
+}
+
 // Total USD across runs started since the given epoch-ms (for the daily ceiling).
 export function spendSince(ms) {
   const d = open();

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Push channel (live runs without polling)
+- `GET /api/runs/stream` (SSE): pushes `run`, `step`, and `spend` events by
+  diffing the shared `runs.db` every second; console subscribes via EventSource
+  with polling fallback. Header spend strip goes live; Runs tab updates in real time.
+
 ### A2A bridge (non-MCP agents can use APE runs)
 - `GET /.well-known/agent.json` (agent card; bundled profiles as skills) +
   JSON-RPC `POST /a2a` with `message/send`, `tasks/get`, `tasks/cancel`.
