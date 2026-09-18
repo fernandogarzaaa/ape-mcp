@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dispatchCall, toolsList, discover, agentMethod, resourcesList, promptsList, readResource, getPrompt } from "../src/server.js";
+import { agentCard, handleA2A } from "../src/agent/a2a.js";
 import { taskGet } from "../src/tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "../src/auth.js";
 import { startConsole } from "../src/console.js";
@@ -32,6 +33,27 @@ if (args.includes("--http")) {
     if (req.method === "GET" && req.url === "/.well-known/oauth-protected-resource") {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify(protectedResourceDoc(host)));
+    }
+    if (req.method === "GET" && req.url === "/.well-known/agent.json") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(agentCard(`http://${host}`)));
+    }
+    if (req.method === "POST" && req.url === "/a2a") {
+      if (!checkBearer(req).ok) return unauthorized(res, host);
+      let body = "";
+      for await (const c of req) body += c;
+      try {
+        const { id, method, params } = JSON.parse(body || "{}");
+        try {
+          const result = await handleA2A(method, params ?? {});
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
+        } catch (e) {
+          const code = typeof e?.code === "number" ? e.code : -32603;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message: String(e?.message ?? e).slice(0, 300) } }));
+        }
+      } catch (e) { res.writeHead(400); return res.end(JSON.stringify({ error: String(e).slice(0, 200) })); }
     }
     if (req.method === "GET" && req.url === "/discover") {
       res.writeHead(200, { "Content-Type": "application/json" });

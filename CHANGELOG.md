@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### A2A bridge (non-MCP agents can use APE runs)
+- `GET /.well-known/agent.json` (agent card; bundled profiles as skills) +
+  JSON-RPC `POST /a2a` with `message/send`, `tasks/get`, `tasks/cancel`.
+- Compatible subset (request/response + polling; no streaming/push in v1); every
+  A2A task maps 1:1 onto an audited APE run with artifacts on completion.
+
 ### Observability: Runs tab, cost strip, Agent config tab
 - **Runs tab**: full agent-run ledger in the console (run list + expandable step
   detail + receipts) via live `/api/runs` + `/api/runs/get`.
