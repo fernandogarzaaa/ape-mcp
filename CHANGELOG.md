@@ -40,6 +40,10 @@
 - **Context compression + receipts** (AXIOM P0): history capped at
   `max_history_tokens` with recoverable digests (full data stays in `runs.db`) and
   per-run `tokens_saved_estimate`; every run stores an explicit receipt.
+- **Evidence correlation** (AXIOM grounding, reviewer feedback loops): verify-tool
+  outputs combine into agree/conflict/insufficient judgments; `policy.evidence:
+  agree` requires correlated agreement before finish (no more silent SOUND +
+  low-score passes).
 
 ### External review fixes (Linux clean-install audit)
 - **Safe truncation**: tool `content` text is now truncated at the value level so it is

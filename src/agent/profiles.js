@@ -52,6 +52,10 @@ export function loadProfile(name) {
     verify_tools: Array.isArray(profile.policy?.verify_tools) && profile.policy.verify_tools.length
       ? profile.policy.verify_tools
       : [...DEFAULT_VERIFY_TOOLS],
+    // Evidence mode: "any" = presence of a verification step passes (legacy);
+    // "agree" = correlated verdicts must agree (no refutations).
+    evidence: profile.policy?.evidence === "agree" ? "agree" : "any",
+    eve_threshold: Number(profile.policy?.eve_threshold ?? 50),
   };
   return profile;
 }

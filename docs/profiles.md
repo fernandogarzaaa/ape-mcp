@@ -28,8 +28,11 @@ limits:                         # budget governor — enforced every step
   max_usd: 0.50
   max_destructive: 1            # cap on unattended destructive calls (when allowed)
   max_repeats: 3                # halt if the same (tool, args) repeats this often
-policy:                         # destructive-action policy for the loop
-  destructive: deny              # deny (default) | allow — allow still capped + audited
+policy:                         # loop policy
+  destructive: deny              # deny (default) | allow. Allow is still capped + audited
+  verify_before_finish: warn    # warn (default) | enforce | off
+  evidence: any                 # any (presence passes) | agree (verdicts must agree, no refutations)
+  eve_threshold: 50             # EVE score at/above this counts as supporting evidence
 stop_conditions:
   - no_tool_call_in_step
   - explicit_final_answer
