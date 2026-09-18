@@ -121,18 +121,21 @@ export function envActive() {
 
 // --- local inference probe ---
 export async function localProbe() {
-  const candidates = [
+  if (process.env.APE_NO_LOCAL === "1") return null;
+  const bases = [
     process.env.APE_LOCAL_BASE_URL && process.env.APE_LOCAL_BASE_URL.replace(/\/$/, ""),
     "http://localhost:11434",
     "http://localhost:1234",
   ].filter(Boolean);
-  for (const base of candidates) {
+  for (const base of bases) {
+    // OpenAI-compatible models endpoint: <base>/v1/models, unless base already ends in /v1.
+    const url = (base.endsWith("/v1") ? base : base + "/v1") + "/models";
     try {
-      const res = await fetch(base + "/models", { signal: AbortSignal.timeout(1200) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(1200) });
       if (res.ok) {
         const j = await res.json();
         const id = j?.data?.[0]?.id || null;
-        return { provider: "local", model: id, key: null, baseUrl: base, kind: "local", source: "ollama/llama.cpp" };
+        return { provider: "local", model: id, key: null, baseUrl: base.endsWith("/v1") ? base : base + "/v1", kind: "local", source: "ollama/llama.cpp" };
       }
     } catch { /* next */ }
   }

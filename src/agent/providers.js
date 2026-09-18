@@ -4,7 +4,7 @@
 // Supported: anthropic, openai-compatible (openai, openrouter, groq, nebius, local
 // ollama/llama.cpp), mock (deterministic, offline — tests/demos).
 // Provider calls are a sanctioned network egress; `ape-mcp doctor` lists them.
-import { detectActiveProvider, credentialFor, detectProviders } from "./hostdetect.js";
+import { detectActiveProvider, credentialFor, detectProviders, localProbe } from "./hostdetect.js";
 
 const COST_PER_MTok = {
   "claude-sonnet-4-6": { in: 3, out: 15 },
@@ -76,7 +76,14 @@ export async function resolveModel(modelCfg, overrides = {}) {
   // 2. Explicit provider: resolve its credential (env → host stores).
   if (requestedProvider !== "auto") {
     if (requestedProvider === "local") {
-      return { provider: "local", id: requestedModel || null, key: null, baseUrl: BASE_URLS.local, resolution: "explicit", source: "local" };
+      let id = requestedModel || null;
+      let source = "local";
+      if (!id) {
+        const probe = await localProbe();
+        id = probe?.model ?? null;
+        if (probe) source = probe.source;
+      }
+      return { provider: "local", id, key: null, baseUrl: BASE_URLS.local, resolution: "explicit", source };
     }
     const cred = await credentialFor(requestedProvider);
     if (cred) {

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Task-based model routing (P1)
+- Worker classifies the objective (trivial/coding/reasoning/general) with an
+  explicit rule-based classifier; trivial tasks route to a detected local model
+  (free), everything else uses normal resolution. Decision + confidence recorded
+  in the receipt for later judgment. Opt out via `policy.routing: false` or an
+  explicit provider/model. Verified live: trivial JSON task ran free on local
+  llama3.2 with the correct answer.
+
 ### Harness evolution from trajectories (#6)
 - `ape_agent_analyze {profile, window, record}`: computes completion rate, stop-reason
   distribution, cost/step medians, unverified and repetition rates from the run ledger,

@@ -46,6 +46,7 @@ export function loadProfile(name) {
   };
   profile.policy = {
     destructive: profile.policy?.destructive === "allow" ? "allow" : "deny",
+    routing: profile.policy?.routing === false ? false : true,
     verify_before_finish: ["warn", "enforce", "off"].includes(profile.policy?.verify_before_finish)
       ? profile.policy.verify_before_finish
       : "warn",

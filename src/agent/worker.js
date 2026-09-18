@@ -5,6 +5,8 @@
 import { loadProfile } from "./profiles.js";
 import { runAgent } from "./loop.js";
 import { resolveModel } from "./providers.js";
+import { detectProviders } from "./hostdetect.js";
+import { classifyObjective, selectRoutedModel } from "./router.js";
 import { getRun, updateRun, appendStep, recentRuns } from "../runs.js";
 import { adamCall } from "../adam-client.js";
 
@@ -23,8 +25,31 @@ async function main() {
     process.exit(1);
   }
   if (opts.mockScript) profile.model = { provider: "mock", id: "mock-model" };
-  // Resolve the model once at run start (explicit override → provider:auto detection).
-  const resolved = await resolveModel(profile.model, { provider: opts.provider, model: opts.model });
+  // Task-based routing (opt-out via policy.routing: false or explicit provider/model):
+  // trivial objectives go local when a local model is detected; otherwise normal
+  // resolution. The decision is recorded in the receipt for later judgment.
+  let routing = { routed: false, category: "general", confidence: 0, reason: "routing skipped" };
+  let resolved = null;
+  const routingOn = (profile.policy?.routing ?? true) && profile.model.provider === "auto" && !opts.provider && !opts.model && !opts.mockScript;
+  if (routingOn) {
+    const cls = classifyObjective(req.objective);
+    routing = { routed: false, category: cls.category, confidence: cls.confidence, reason: cls.reasons.join("; ") };
+    if (cls.category === "trivial" && cls.confidence > 0) {
+      const detected = await detectProviders();
+      const routed = await selectRoutedModel(cls.category, {
+        detected,
+        resolveProvider: (p) => resolveModel({ provider: p, id: "auto" }),
+      });
+      if (routed) {
+        resolved = routed;
+        routing = { routed: true, category: cls.category, confidence: cls.confidence, reason: routed.routeReason, provider: routed.provider, model: routed.id };
+      }
+    }
+  }
+  if (!resolved) {
+    // Resolve the model once at run start (explicit override → provider:auto detection).
+    resolved = await resolveModel(profile.model, { provider: opts.provider, model: opts.model });
+  }
   if (resolved.error) {
     updateRun(runId, {
       status: "failed",
@@ -42,6 +67,7 @@ async function main() {
     mockScript: opts.mockScript,
     mockCostPerCall: opts.mockCostPerCall,
     resolvedModel: resolved,
+    routing,
   });
   updateRun(runId, {
     status: result.stop_reason === "model_error" ? "failed" : "done",

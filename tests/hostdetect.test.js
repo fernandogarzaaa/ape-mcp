@@ -108,12 +108,13 @@ test("resolveModel: auto resolves the ACTIVE provider (nebius, not stored-first)
 });
 
 test("resolveModel: no provider anywhere → honest error with detected list", async () => {
-  const saved = { home: process.env.OPENCODE_HOME, p: process.env.APE_PROVIDER, a: process.env.ANTHROPIC_API_KEY, o: process.env.OPENAI_API_KEY, c: process.env.CODEX_HOME, cl: process.env.APE_CLAUDE_HOME, loc: process.env.APE_LOCAL_BASE_URL };
+  const saved = { home: process.env.OPENCODE_HOME, p: process.env.APE_PROVIDER, a: process.env.ANTHROPIC_API_KEY, o: process.env.OPENAI_API_KEY, c: process.env.CODEX_HOME, cl: process.env.APE_CLAUDE_HOME, loc: process.env.APE_LOCAL_BASE_URL, noloc: process.env.APE_NO_LOCAL };
   delete process.env.APE_PROVIDER; delete process.env.ANTHROPIC_API_KEY; delete process.env.OPENAI_API_KEY;
   process.env.OPENCODE_HOME = tempDir();  // empty — not the real store
   process.env.CODEX_HOME = tempDir();
   process.env.APE_CLAUDE_HOME = tempDir();
   process.env.APE_LOCAL_BASE_URL = "http://127.0.0.1:9/v1"; // dead port — no local model
+  process.env.APE_NO_LOCAL = "1"; // ignore any real localhost inference server
   try {
     const r = await resolveModel({ provider: "auto" });
     assert.ok(r.error, "returns error, not a silent guess");

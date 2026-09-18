@@ -43,7 +43,7 @@ function checkGrounding(steps, profile) {
   return { ok: true, reason: "agree", correlation: corr };
 }
 
-export async function runAgent({ profile, objective, organism_id = "default", onStep, mockScript, mockCostPerCall = 0, resolvedModel }) {
+export async function runAgent({ profile, objective, organism_id = "default", onStep, mockScript, mockCostPerCall = 0, resolvedModel, routing = null }) {
   const budget = makeBudget(profile.limits);
   const tools = internalTools(profile);
   // resolvedModel comes from host detection; otherwise fall back to the profile config
@@ -248,6 +248,7 @@ const toolCalls = resp.toolCalls ?? [];
     model: usedModel,
     model_provider: modelCfg.provider,
     model_resolution: resolvedModel?.resolution ?? "explicit",
+    routing,
     stop_reason: stopReason,
     outcome,
     unverified,
@@ -265,6 +266,7 @@ const toolCalls = resp.toolCalls ?? [];
       stop_reason: stopReason,
       unverified,
       grounding: grounding?.status ?? null,
+      routing: routing ?? undefined,
       steps: budget.steps,
       tokens: budget.tokens,
       cost_usd: Number(budget.usd.toFixed(6)),

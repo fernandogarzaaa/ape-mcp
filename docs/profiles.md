@@ -33,6 +33,7 @@ policy:                         # loop policy
   verify_before_finish: warn    # warn (default) | enforce | off
   evidence: any                 # any (presence passes) | agree (verdicts must agree, no refutations)
   eve_threshold: 50             # EVE score at/above this counts as supporting evidence
+  routing: true                 # task-based model routing (default on for provider:auto; explicit provider/model bypasses it)
 stop_conditions:
   - no_tool_call_in_step
   - explicit_final_answer
@@ -75,6 +76,15 @@ A profile may still pin a provider or model explicitly — that always wins over
 - `builtin: memory.recall` / `builtin: memory.store` — ADAM durable memory.
 - `builtin: finish` — the explicit-final-answer terminal.
 - `connector: <name>` — a user-defined connector (see connectors.md).
+
+## Task-based routing
+
+When `provider: auto` (the default), the worker classifies the objective before
+resolving the model: **trivial** tasks (parse, extract, format, list) route to a
+detected local model (free); everything else uses normal resolution. The decision
+(category, confidence, reason) is recorded in the run receipt, so routing quality can
+be judged from the ledger later. Explicit `provider`/`model` on the run, or
+`policy: { routing: false }`, bypasses routing entirely.
 
 ## The reasoning loop
 
