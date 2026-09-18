@@ -27,10 +27,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }} -p adam-mcp
+      - name: Rename binary to platform asset name (so linux/macOS don't collide on download)
+        shell: bash
+        run: |
+          src="vendors/adam/target/${{ matrix.target }}/release/adam-mcp${{ contains(matrix.os, 'windows') && '.exe' || '' }}"
+          cp "$src" "${{ matrix.asset }}"
+          ls -la "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: vendors/adam/target/${{ matrix.target }}/release/adam-mcp${{ contains(matrix.os, 'windows') && '.exe' || '' }}
+          path: ${{ matrix.asset }}
   release:
     needs: [build]
     if: startsWith(github.ref, 'refs/tags/v')

@@ -2,6 +2,7 @@
 // (tool, argsHash, durationMs, tokens, cost), stop reason, total cost.
 // SQLite via node:sqlite (WAL for concurrent writer/reader between worker + server).
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "./sqlite.js";
 import { dataDir } from "./trace.js";
@@ -12,6 +13,7 @@ export function runsDbPath() {
 }
 function open() {
   if (db) return db;
+  mkdirSync(dataDir(), { recursive: true });
   db = new DatabaseSync(runsDbPath());
   db.exec("PRAGMA journal_mode=WAL");
   db.exec(`CREATE TABLE IF NOT EXISTS runs (
