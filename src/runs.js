@@ -16,6 +16,8 @@ function open() {
   mkdirSync(dataDir(), { recursive: true });
   db = new DatabaseSync(runsDbPath());
   db.exec("PRAGMA journal_mode=WAL");
+  db.exec("PRAGMA busy_timeout=5000");
+  db.exec("PRAGMA synchronous=NORMAL");
   db.exec(`CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     profile TEXT NOT NULL,
