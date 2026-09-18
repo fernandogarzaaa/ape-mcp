@@ -114,6 +114,18 @@ try {
 try { $w = Invoke-RestMethod -Uri "$api/.well-known/oauth-protected-resource"; Check "well-known" ($w.ape_mode -eq "local-open") "" }
 catch { Check "well-known" $false $_ }
 
+# A2A bridge: agent card + message/send + tasks/get over HTTP
+try {
+  $card = Invoke-RestMethod -Uri "$api/.well-known/agent.json"
+  Check "a2a-card" ($card.name -eq "ape-mcp" -and $card.skills.Count -ge 3) ("skills=" + $card.skills.Count)
+} catch { Check "a2a-card" $false $_ }
+try {
+  $am = @{ jsonrpc = "2.0"; id = 31; method = "message/send"; params = @{ message = @{ role = "user"; parts = @(@{ kind = "text"; text = "audit ping" }); messageId = "m-audit" }; metadata = @{ profile = "repo-triage" } } } | ConvertTo-Json -Depth 6 -Compress
+  $at = Invoke-RestMethod -Uri "$api/a2a" -Method Post -Body $am -ContentType "application/json"
+  $ag = Invoke-RestMethod -Uri "$api/a2a" -Method Post -Body (@{ jsonrpc = "2.0"; id = 32; method = "tasks/get"; params = @{ id = $at.result.id } } | ConvertTo-Json -Compress) -ContentType "application/json"
+  Check "a2a-lifecycle" ($at.result.id -and $ag.result.id -eq $at.result.id) ("task=" + $at.result.id)
+} catch { Check "a2a-lifecycle" $false $_ }
+
 try {
   $resp = echo '{"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}' | node $root\bin\ape-mcp.js
   Check "stdio" ($resp -match "ape_status") ""
