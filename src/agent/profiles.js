@@ -25,6 +25,11 @@ export function loadProfile(name) {
   try { profile = YAML.parse(readFileSync(p, "utf8")); } catch { return null; }
   if (!profile?.name || !profile?.model?.provider) return null;
   profile.source = p;
+  profile.model = {
+    provider: profile.model.provider ?? "auto",
+    id: profile.model.id ?? "auto",
+    fallback: profile.model.fallback,
+  };
   profile.stop_conditions = (profile.stop_conditions ?? ["no_tool_call_in_step", "explicit_final_answer", "budget_exhausted"])
     .filter((s) => VALID_STOPS.includes(s));
   profile.limits = {

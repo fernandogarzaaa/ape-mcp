@@ -34,18 +34,31 @@ stop_conditions:
 
 ## Providers
 
-Credentials come from environment variables — **never stored in profile YAML**:
+**`provider: auto` is the default** — APE detects the provider the platform it's
+installed in is *currently using* and reuses its credentials. Nothing about which provider
+is hardcoded; resolution is dynamic and run-time.
 
-| provider | env |
+Detection reads, in order:
+1. **Explicit** `provider`/`model` on `ape_agent_run`, then `APE_PROVIDER`/`APE_MODEL` env.
+2. **Active provider** — the platform's current session state:
+   - OpenCode: newest `session.model` in `opencode.db` (e.g. `nebius` + `deepseek-ai/DeepSeek-V4-Flash-0731`).
+   - Claude Code: `~/.claude.json` `model` + OAuth access token (Bearer).
+   - Codex: `config.toml` `model` + `auth.json` token.
+   - env: `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/… (+ `*_MODEL`).
+3. **Stored-credential fallback** (marked `best-effort`).
+4. **Local** — Ollama / llama.cpp probe.
+
+| detected provider | credential source |
 |---|---|
-| `anthropic` | `APE_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`) |
-| `openai` | `APE_OPENAI_API_KEY` (+ optional `APE_OPENAI_BASE_URL`) |
-| `openrouter` | `APE_OPENROUTER_API_KEY` |
-| `local` | `APE_LOCAL_BASE_URL` (default `http://localhost:11434/v1`, Ollama/llama.cpp) |
-| `mock` | none — deterministic offline script (tests/demos only) |
+| `nebius`, `groq`, `openrouter`, `openai`, `ollama-cloud` | host store / env key (OpenAI-compatible) |
+| `anthropic` | `ANTHROPIC_API_KEY` env, or Claude session OAuth token (Bearer; needs a valid session) |
+| `local` | Ollama / llama.cpp at `localhost` |
 
-A primary provider failure automatically falls back to `fallback`. Provider calls are a
-sanctioned egress path; `ape-mcp doctor` lists every host APE may contact.
+`ape_status` reports `active_provider` and `detected_providers` (names only — keys are
+never exposed). The run ledger records the resolved `model` and `model_resolution`
+(`explicit` / `active` / `best-effort`) so every run shows exactly what it used.
+
+A profile may still pin a provider or model explicitly — that always wins over detection:
 
 ## Tool entries
 

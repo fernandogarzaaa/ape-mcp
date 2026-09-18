@@ -11,6 +11,7 @@ import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
 import { createRun, getRun, updateRun } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
+import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
 const runningAgents = new Map();
 
@@ -33,7 +34,7 @@ export const TOOL_DEFS = [
   { name: "ape_task_start", description: "Start any APE tool as a background task (Tasks extension); poll with ape_task_get", inputSchema: { type: "object", properties: { tool: { type: "string" }, arguments: { type: "object" } }, required: ["tool"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_task_get", description: "Poll a background task (running/done/failed + result)", inputSchema: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_profiles", description: "List available agent profiles + their declared tools and limits", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
-  { name: "ape_agent_run", description: "Invoke an agent profile against an objective; returns run_id immediately (poll ape_agent_status)", inputSchema: { type: "object", properties: { profile: { type: "string" }, objective: { type: "string" }, organism_id: { type: "string" } }, required: ["profile", "objective"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_run", description: "Invoke an agent profile against an objective; returns run_id immediately (poll ape_agent_status). provider/model override auto-detection", inputSchema: { type: "object", properties: { profile: { type: "string" }, objective: { type: "string" }, organism_id: { type: "string" }, provider: { type: "string" }, model: { type: "string" } }, required: ["profile", "objective"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_agent_status", description: "Poll an agent run: status, steps, cost, outcome", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_cancel", description: "Cancel a running agent run, preserving the partial ledger", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_connector_call", description: "Call a user-defined connector operation (egress-allowlisted). destructive ops need confirm", inputSchema: { type: "object", properties: { connector: { type: "string" }, operation: { type: "string" }, input: { type: "object" }, confirm: { type: "boolean" } }, required: ["connector", "operation"] }, annotations: { readOnly: false, idempotent: false } },
@@ -55,7 +56,18 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
   let result;
   try {
     switch (name) {
-      case "ape_status": result = dispatch.status(a); break;
+      case "ape_status": {
+        const base = dispatch.status(a);
+        // Never expose key/token material on any tool-visible surface.
+        const active = await detectActiveProvider();
+        const safeActive = active ? (({ key, token, ...rest }) => rest)(active) : null;
+        result = {
+          ...base,
+          active_provider: safeActive,
+          detected_providers: await detectProviders(),
+        };
+        break;
+      }
       case "ape_remember": result = await adamCall("adam_memory_store", { kind: a.kind || "episodic", content: a.content, origin: a.origin || "observation", confidence: a.confidence ?? 0.9 }, a.organism_id); break;
       case "ape_recall": result = await adamCall("adam_memory_query", { query: a.query, kind: a.kind, top_k: a.top_k ?? 5 }, a.organism_id); break;
       case "ape_beliefs": result = await adamCall("adam_beliefs", a.statement ? { statement: a.statement, origin: a.origin || "observation" } : {}, a.organism_id); break;
@@ -116,7 +128,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         const profile = loadProfile(a.profile);
         if (!profile) { result = { error: "profile_not_found", profile: a.profile, available: listProfiles() }; break; }
         const runId = createRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default" });
-        const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true });
+        const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
         worker.unref();
         updateRun(runId, { worker_pid: worker.pid });
         worker.on("exit", () => runningAgents.delete(runId));
@@ -197,7 +209,7 @@ export async function agentMethod(method, params = {}) {
       const profile = loadProfile(params.profile);
       if (!profile) return { error: "profile_not_found", profile: params.profile, available: listProfiles() };
       const runId = createRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default" });
-      const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true });
+      const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
       worker.unref();
       updateRun(runId, { worker_pid: worker.pid });
       worker.on("exit", () => runningAgents.delete(runId));

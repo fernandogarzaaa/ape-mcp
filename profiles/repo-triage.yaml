@@ -1,9 +1,8 @@
-name: repo-triage
+﻿name: repo-triage
 description: Triages incoming issues against the codebase and proposes a plan.
 model:
-  provider: anthropic
-  id: claude-sonnet-4-6
-  fallback: { provider: openrouter, id: anthropic/claude-sonnet-4-6 }
+  provider: auto
+  id: auto
 system: |
   You triage issues. Always call memory.recall before proposing.
   Never claim work is done without evidence from a verify step.

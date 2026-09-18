@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Host-provider autodetection (`provider: auto`)
+- APE now detects the provider the platform it's installed in is **currently using**
+  (active-session state, not just stored credentials) and reuses its credentials.
+- Readers: OpenCode session DB (`opencode.db` → newest `session.model`),
+  Claude Code (`~/.claude.json` + OAuth token), Codex (`config.toml` + `auth.json`),
+  env keys, local Ollama/llama.cpp probe.
+- `provider: auto` is the default for all bundled profiles; explicit provider/model on
+  `ape_agent_run` always wins. Resolution precedence: explicit → env → active → stored
+  (best-effort) → local.
+- Transparency: `ape_status` reports `active_provider` + `detected_providers` (names
+  only); the run ledger records resolved `model` + `model_resolution`.
+- Security: key material never leaves the worker — not in ledger, status, or responses
+  (regression-tested); host stores opened readOnly.
+- Fix: `fork()` no longer inherits the parent's `--input-type` execArgv (worker crashed
+  under module-stdin harnesses).
+- nebius base URL corrected to `https://api.studio.nebius.com/v1`.
+- anthropic path supports Claude-session OAuth (Bearer; best-effort refresh) alongside
+  `ANTHROPIC_API_KEY`.
+
 ## 1.0.0 (fork) — 2026-09-18
 
 Hard fork of `fernandogarzaaa/godmode` at post-PR4 HEAD → **ape-mcp**. Hybrid-native MCP

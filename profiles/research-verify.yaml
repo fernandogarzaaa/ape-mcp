@@ -1,9 +1,8 @@
-name: research-verify
+﻿name: research-verify
 description: Searches the web via the bundled web connector, fetches pages, and verifies claims with evidence before finishing.
 model:
-  provider: anthropic
-  id: claude-sonnet-4-6
-  fallback: { provider: openrouter, id: anthropic/claude-sonnet-4-6 }
+  provider: auto
+  id: auto
 system: |
   You research claims using the web connector. Search first, then fetch the most
   relevant page. Never claim a fact is verified without citing the page you fetched.

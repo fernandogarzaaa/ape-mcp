@@ -5,23 +5,26 @@ import { chat, estimateCost, toolSchemas, mockPlan, clearMock } from "./provider
 import { internalTools, invokeTool } from "./registry.js";
 import { shaShort } from "../trace.js";
 
-export async function runAgent({ profile, objective, organism_id = "default", onStep, mockScript, mockCostPerCall = 0 }) {
+export async function runAgent({ profile, objective, organism_id = "default", onStep, mockScript, mockCostPerCall = 0, resolvedModel }) {
   const budget = makeBudget(profile.limits);
   const tools = internalTools(profile);
-  const schemas = toolSchemas(profile.model, tools);
+  // resolvedModel comes from host detection; otherwise fall back to the profile config
+  // (plus its fallback chain) for backward-compatible explicit configs.
+  const modelCfg = resolvedModel ?? { provider: profile.model.provider, id: profile.model.id };
+  const schemas = toolSchemas(modelCfg, tools);
   const system = profile.system ?? "You are a careful agent. Verify before claiming.";
   const messages = [{ role: "user", content: String(objective) }];
   const convKey = `run-${organism_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const providerCfgs = [profile.model, ...(profile.model.fallback ? [profile.model.fallback] : [])];
+  const providerCfgs = [modelCfg, ...(!resolvedModel && profile.model.fallback ? [profile.model.fallback] : [])];
 
   const steps = [];
   const startedAt = Date.now();
   let stopReason = null;
   let outcome = null;
-  let usedModel = profile.model.id;
+  let usedModel = modelCfg.id;
   const record = (step) => { steps.push(step); onStep?.(step); };
 
-  if (profile.model.provider === "mock") mockPlan(convKey, mockScript ?? [], mockCostPerCall);
+  if (modelCfg.provider === "mock") mockPlan(convKey, mockScript ?? [], mockCostPerCall);
 
   try {
     while (true) {
@@ -33,7 +36,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       let lastErr = null;
       for (const p of providerCfgs) {
         try {
-          resp = await chat({ provider: p.provider, id: p.id, convKey }, { system, messages, tools: schemas });
+          resp = await chat({ provider: p.provider, id: p.id, key: p.key, baseUrl: p.baseUrl, convKey }, { system, messages, tools: schemas });
           usedModel = p.id;
           break;
         } catch (e) { lastErr = e; }
@@ -96,12 +99,14 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       if (stopReason) break;
     }
   } finally {
-    if (profile.model.provider === "mock") clearMock(convKey);
+    if (modelCfg.provider === "mock") clearMock(convKey);
   }
 
   return {
     profile: profile.name,
     model: usedModel,
+    model_provider: modelCfg.provider,
+    model_resolution: resolvedModel?.resolution ?? "explicit",
     stop_reason: stopReason,
     outcome,
     step_count: budget.steps,

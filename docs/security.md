@@ -14,9 +14,13 @@ Everything else is vendored and pinned in `vendors/manifest.yaml`. No runtime
 
 ## Secrets
 
-- Credentials live in environment variables (`APE_ANTHROPIC_API_KEY`, connector
-  `token_env`, ...). Profile and connector YAML hold **names only**, so they are safe to
-  commit.
+- Credentials are resolved at run time from **environment variables or the host platform's
+  own credential store** (OpenCode `auth.json`, Claude `.credentials.json`, Codex
+  `auth.json`) — never hardcoded, never written to APE state.
+- **Key material never leaves the worker's memory.** It is not stored in the run ledger,
+  not echoed in `ape_status` / `ape_agent_profiles` / tool responses (only provider +
+  model + `resolution` are surfaced), and never logged. Verified by tests.
+- Host credential stores are read with **readOnly** access; APE never modifies them.
 - `ape-mcp doctor` prints hosts, never tokens.
 
 ## Destructive operations — MRTR confirm

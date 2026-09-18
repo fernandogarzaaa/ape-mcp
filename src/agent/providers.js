@@ -1,8 +1,10 @@
 // Model providers — pluggable, config-driven. Credentials come from environment
-// variables referenced by name; never stored in profile YAML.
-// Supported: anthropic, openai-compatible (covers openrouter, local ollama/llama.cpp,
-// gateways), mock (deterministic, offline — used by bundled tests and demos).
+// variables or the HOST platform's own credential store via provider:auto detection.
+// Nothing about WHICH provider is hardcoded: resolution is dynamic (hostdetect.js).
+// Supported: anthropic, openai-compatible (openai, openrouter, groq, nebius, local
+// ollama/llama.cpp), mock (deterministic, offline — tests/demos).
 // Provider calls are a sanctioned network egress; `ape-mcp doctor` lists them.
+import { detectActiveProvider, credentialFor, detectProviders } from "./hostdetect.js";
 
 const COST_PER_MTok = {
   "claude-sonnet-4-6": { in: 3, out: 15 },
@@ -18,32 +20,107 @@ const COST_PER_MTok = {
 };
 const DEFAULT_RATE = { in: 2, out: 8 };
 
+// Provider → OpenAI-compatible base URL (anthropic + mock are special-cased).
+const BASE_URLS = {
+  openai: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  groq: "https://api.groq.com/openai/v1",
+  nebius: process.env.APE_NEBIUS_BASE_URL || "https://api.studio.nebius.com/v1",
+  local: process.env.APE_LOCAL_BASE_URL || "http://localhost:11434/v1",
+};
+const OPENAI_COMPAT = new Set(["openai", "openrouter", "groq", "nebius", "local"]);
+
+const DEFAULT_MODELS = {
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-4.1",
+  openrouter: "anthropic/claude-sonnet-4-6",
+  groq: "llama-3.3-70b-versatile",
+  nebius: "deepseek-ai/DeepSeek-V4-Flash-0731",
+  local: null,
+};
+
+export function defaultModelFor(provider) {
+  return DEFAULT_MODELS[provider] ?? null;
+}
+
 export function estimateCost(modelId, usage) {
   const r = COST_PER_MTok[modelId] ?? DEFAULT_RATE;
   return (usage.inputTokens / 1e6) * r.in + (usage.outputTokens / 1e6) * r.out;
 }
 
 export function egressHosts() {
-  return [
-    "https://api.anthropic.com",
-    "https://api.openai.com",
-    "https://openrouter.ai",
-  ];
+  const hosts = ["https://api.anthropic.com"];
+  for (const b of Object.values(BASE_URLS)) {
+    try { hosts.push(new URL(b).origin); } catch { /* skip */ }
+  }
+  return [...new Set(hosts)];
 }
 
-function resolveEnv() {
-  const v = (n) => process.env[n];
-  return {
-    anthropic: v("APE_ANTHROPIC_API_KEY") || v("ANTHROPIC_API_KEY"),
-    openaiBase: v("APE_OPENAI_BASE_URL") || "https://api.openai.com/v1",
-    openaiKey: v("APE_OPENAI_API_KEY") || v("OPENAI_API_KEY"),
-    openrouterKey: v("APE_OPENROUTER_API_KEY") || v("OPENROUTER_API_KEY"),
-    localBase: v("APE_LOCAL_BASE_URL") || "http://localhost:11434/v1",
-  };
+// --- provider:auto resolution ---
+export async function resolveModel(modelCfg, overrides = {}) {
+  const requestedProvider = overrides.provider || modelCfg?.provider || "auto";
+  const requestedModel = overrides.model || (modelCfg?.id && modelCfg.id !== "auto" ? modelCfg.id : null);
+
+  // 1. mock / local never need a key.
+  if (requestedProvider === "mock") {
+    return { provider: "mock", id: requestedModel || "mock-model", key: null, resolution: "explicit", source: "mock" };
+  }
+
+  // 2. Explicit provider: resolve its credential (env → host stores).
+  if (requestedProvider !== "auto") {
+    if (requestedProvider === "local") {
+      return { provider: "local", id: requestedModel || null, key: null, baseUrl: BASE_URLS.local, resolution: "explicit", source: "local" };
+    }
+    const cred = await credentialFor(requestedProvider);
+    if (cred) {
+      return {
+        provider: requestedProvider,
+        id: requestedModel || defaultModelFor(requestedProvider),
+        key: cred.key,
+        source: cred.source,
+        resolution: "explicit",
+        oauth: cred.oauth,
+        refreshToken: cred.refreshToken,
+      };
+    }
+    return {
+      error: "provider_unavailable",
+      provider: requestedProvider,
+      detected: await detectProviders(),
+      hint: "no credential found for this provider; set its env key or use provider:auto",
+    };
+  }
+
+  // 3. Auto: the provider the platform is CURRENTLY using.
+  const active = await detectActiveProvider();
+  if (active) {
+    return {
+      provider: active.provider,
+      id: active.model || requestedModel || defaultModelFor(active.provider),
+      key: active.key ?? null,
+      source: active.source,
+      resolution: "active",
+      oauth: active.oauth,
+      refreshToken: active.refreshToken,
+    };
+  }
+
+  // 4. Best-effort: first stored credential.
+  const stored = await detectProviders();
+  if (stored.length) {
+    const first = stored[0];
+    const cred = await credentialFor(first);
+    if (cred) {
+      return { provider: first, id: requestedModel || defaultModelFor(first), key: cred.key, source: cred.source, resolution: "best-effort" };
+    }
+  }
+
+  // 5. Nothing detected.
+  return { error: "no_provider_detected", detected: stored, hint: "set APE_PROVIDER or a provider key, or run a local model" };
 }
 
 // --- Anthropic ---
-async function anthropicChat(env, modelId, system, messages, tools) {
+async function anthropicChat(cfg, system, messages, tools) {
   const wire = [];
   for (const m of messages) {
     if (m.role === "system") continue;
@@ -58,16 +135,25 @@ async function anthropicChat(env, modelId, system, messages, tools) {
       wire.push({ role: m.role, content: m.content ?? "" });
     }
   }
-  const body = { model: modelId, max_tokens: 4096, system, messages: wire, tools };
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const body = { model: cfg.id, max_tokens: 4096, system, messages: wire, tools };
+  let token = cfg.key ?? process.env.ANTHROPIC_API_KEY;
+  const call = (tok) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-api-key": env.anthropic,
+      ...(cfg.oauth ? { authorization: `Bearer ${tok}` } : { "x-api-key": tok }),
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
   });
+  let res = await call(token);
+  // OAuth token expired → best-effort refresh once using the host's refreshToken.
+  if (res.status === 401 && cfg.oauth && cfg.refreshToken) {
+    try {
+      const refreshed = await refreshAnthropicOAuth(cfg.refreshToken);
+      if (refreshed) { token = refreshed; res = await call(token); }
+    } catch { /* keep original error */ }
+  }
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const toolCalls = (data.content ?? []).filter((b) => b.type === "tool_use").map((b) => ({ id: b.id, name: b.name, args: b.input ?? {} }));
@@ -80,8 +166,22 @@ async function anthropicChat(env, modelId, system, messages, tools) {
   };
 }
 
+async function refreshAnthropicOAuth(refreshToken) {
+  const res = await fetch("https://api.anthropic.com/v1/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }).toString(),
+  });
+  if (!res.ok) throw new Error(`oauth refresh ${res.status}`);
+  const j = await res.json();
+  if (!j.access_token) throw new Error("no access_token in refresh response");
+  return j.access_token;
+}
+
 // --- OpenAI-compatible ---
-async function openaiChat(env, base, key, modelId, system, messages, tools) {
+async function openaiChat(cfg, system, messages, tools) {
+  const base = cfg.baseUrl ?? BASE_URLS[cfg.provider];
+  const key = cfg.key ?? (cfg.provider === "local" ? null : process.env.OPENAI_API_KEY);
   const wire = [];
   for (const m of messages) {
     if (m.role === "system") continue;
@@ -94,7 +194,7 @@ async function openaiChat(env, base, key, modelId, system, messages, tools) {
     }
   }
   const body = {
-    model: modelId,
+    model: cfg.id,
     messages: [{ role: "system", content: system }, ...wire],
     tools,
     tool_choice: "auto",
@@ -104,7 +204,7 @@ async function openaiChat(env, base, key, modelId, system, messages, tools) {
     headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw new Error(`${cfg.provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const msg = data.choices?.[0]?.message ?? {};
   const toolCalls = (msg.tool_calls ?? []).map((tc) => {
@@ -145,21 +245,18 @@ async function mockChat(convKey, modelId, system, messages, tools) {
 }
 
 export async function chat(cfg, { system, messages, tools }) {
-  const env = resolveEnv();
   switch (cfg.provider) {
     case "mock":
       return mockChat(cfg.convKey ?? "default", cfg.id, system, messages, tools);
     case "anthropic":
-      if (!env.anthropic) throw new Error("APE_ANTHROPIC_API_KEY not set");
-      return await anthropicChat(env, cfg.id, system, messages, tools);
+      if (!cfg.key && !process.env.ANTHROPIC_API_KEY) throw new Error("no anthropic credential");
+      return await anthropicChat(cfg, system, messages, tools);
     case "openai":
-      if (!env.openaiKey) throw new Error("APE_OPENAI_API_KEY not set");
-      return await openaiChat(env, env.openaiBase, env.openaiKey, cfg.id, system, messages, tools);
     case "openrouter":
-      if (!env.openrouterKey) throw new Error("APE_OPENROUTER_API_KEY not set");
-      return await openaiChat(env, "https://openrouter.ai/api/v1", env.openrouterKey, cfg.id, system, messages, tools);
+    case "groq":
+    case "nebius":
     case "local":
-      return await openaiChat(env, env.localBase, null, cfg.id, system, messages, tools);
+      return await openaiChat(cfg, system, messages, tools);
     default:
       throw new Error(`unknown provider: ${cfg.provider}`);
   }
@@ -171,3 +268,5 @@ export function toolSchemas(cfg, tools) {
   }
   return tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description ?? "", parameters: t.inputSchema ?? { type: "object", properties: {} } } }));
 }
+
+export { OPENAI_COMPAT };

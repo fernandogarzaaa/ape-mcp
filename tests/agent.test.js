@@ -121,7 +121,7 @@ test("agent: MCP integration — ape_agent_run returns run_id, run completes wit
 test("agent: profiles load bundled defaults + list works", () => {
   const p = loadProfile("repo-triage");
   assert.ok(p, "repo-triage bundled profile loads");
-  assert.equal(p.model.provider, "anthropic");
+  assert.equal(p.model.provider, "auto");
   assert.ok(loadProfile("persona-validate"));
   assert.ok(listProfiles().includes("repo-triage"));
 });

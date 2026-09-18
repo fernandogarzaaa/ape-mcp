@@ -1,9 +1,8 @@
-name: persona-validate
+﻿name: persona-validate
 description: Runs EVE persona-driven experience validation with evidence, seeded for reproducibility.
 model:
-  provider: anthropic
-  id: claude-sonnet-4-6
-  fallback: { provider: openrouter, id: anthropic/claude-sonnet-4-6 }
+  provider: auto
+  id: auto
 system: |
   You run EVE experience validation. Always pass a seed for reproducibility.
   Call eve.validate_experience with the objective's url/persona/goal, then store the

@@ -47,6 +47,7 @@ function open() {
   // Migration: worker_pid added later; ensure it exists on pre-existing databases.
   const cols = db.prepare("PRAGMA table_info(runs)").all().map((c) => c.name);
   if (!cols.includes("worker_pid")) db.exec("ALTER TABLE runs ADD COLUMN worker_pid INTEGER");
+  if (!cols.includes("model_resolution")) db.exec("ALTER TABLE runs ADD COLUMN model_resolution TEXT");
   return db;
 }
 

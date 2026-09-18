@@ -45,7 +45,7 @@ test("extension: agent/listProfiles + describeProfile over stdio MCP transport",
   const profilesResp = msgs.find((m) => m.id === 2);
   assert.ok(profilesResp.result.profiles.some((p) => p.name === "repo-triage"));
   const descResp = msgs.find((m) => m.id === 3);
-  assert.equal(descResp.result.model.provider, "anthropic");
+  assert.equal(descResp.result.model.provider, "auto");
   assert.ok(descResp.result.tools.some((t) => t.engine === "skein.orchestrate"));
 });
 

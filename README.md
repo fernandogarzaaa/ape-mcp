@@ -52,6 +52,10 @@ ape-mcp run ape_agent_run '{"profile":"research-verify","objective":"Verify: Wik
 Set a model key first (`APE_ANTHROPIC_API_KEY` or `APE_OPENAI_API_KEY`); `ape_agent_status`
 polls the run and shows every step and its cost.
 
+**No key needed.** Profiles default to `provider: auto`, which detects the provider the
+host platform is *currently using* (OpenCode / Claude Code / Codex session state, env, or
+a local model) and reuses its credentials. `ape_status` shows what was detected.
+
 ## Bundled profiles
 
 | Profile | What it does | Needs |
