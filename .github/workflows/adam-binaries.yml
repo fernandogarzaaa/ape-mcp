@@ -30,9 +30,9 @@ jobs:
       - name: Rename binary to platform asset name (so linux/macOS don't collide on download)
         shell: bash
         run: |
-          src="vendors/adam/target/${{ matrix.target }}/release/adam-mcp${{ contains(matrix.os, 'windows') && '.exe' || '' }}"
-          cp "$src" "${{ matrix.asset }}"
-          ls -la "${{ matrix.asset }}"
+          src="target/${{ matrix.target }}/release/adam-mcp${{ contains(matrix.os, 'windows') && '.exe' || '' }}"
+          cp "$src" "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+          ls -la "$GITHUB_WORKSPACE/${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
