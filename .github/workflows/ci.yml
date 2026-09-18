@@ -1,14 +1,16 @@
-name: ci
+﻿name: ci
 on: [push, pull_request]
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 permissions: { contents: read }
 jobs:
-  godmode:
+  ape:
     strategy:
-      matrix: { node: [20, 22] }
-    runs-on: ubuntu-latest
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,15 +19,20 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: npm install --omit=dev --no-audit --no-fund
+      # Vendored engines carry their own deps (excluded from the repo); install before tests.
+      - run: npm --prefix vendors/genesis install --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix vendors/eve install --ignore-scripts --no-audit --no-fund
       - run: node scripts/check-licenses.mjs
-      - run: node bin/godmode.js doctor
+      - run: node bin/ape-mcp.js doctor
       - run: node scripts/smoke.mjs
-      - run: node --test tests/godmode.test.js
+      - run: node --test tests/ape.test.js tests/agent.test.js tests/connectors.test.js tests/extension.test.js
       - run: node scripts/fetch-adam.mjs --check || true
       - uses: dtolnay/rust-toolchain@stable
       - name: ADAM binary handshake (builds from vendors/adam if missing)
         run: node scripts/verify-adam.mjs --build-if-missing
       - name: Skein import check (vendored)
+        shell: bash
         run: PYTHONPATH=vendors/skein/src python -c "import skein.cli; print('skein ok')"
-      - name: Genesis dist present
+      - name: Genesis + EVE dist present
+        shell: bash
         run: test -f vendors/genesis/dist/cli/run.js && test -f vendors/eve/dist/cli/main.js

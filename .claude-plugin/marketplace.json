@@ -1,1 +1,1 @@
-{"name": "godmode-marketplace", "plugins": [{"name": "godmode", "path": "./", "category": "productivity", "description": "GodMode standalone: evaluation, experience, memory, orchestration, simulation"}]}
+﻿{"name": "ape-mcp-marketplace", "plugins": [{"name": "ape-mcp", "path": "./", "category": "productivity", "description": "APE standalone MCP: evaluation, experience, memory, orchestration, agent"}]}

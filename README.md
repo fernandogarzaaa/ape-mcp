@@ -1,49 +1,72 @@
-# GodMode
+﻿# APE
 
-Standalone universal plugin + MCP product engine: **Genesis** (evaluation & assurance) + **EVE** (experience validation) + **ADAM** (cognitive substrate) + **Skein** (task-graph orchestration) + **EVE-MIRO** (reality-grounded simulation). Users install **only godmode** — the 5 repos ship vendored inside (`vendors/`, pinned in `vendors/manifest.yaml`).
+**APE** is a hybrid-native MCP server: a user-configurable agent, a multi-engine harness
+underneath it, and declarative connectors to reach third-party services — all in one
+package, all vendored, nothing to clone.
+
+```text
+HOST (Claude · Codex · OpenCode · Cursor · Hermes · VSCode)
+        │  one config entry
+        ▼
+APE  → agent runtime →  Genesis · EVE · ADAM · Skein (vendored, pinned)
+        │               connectors (user-authored, egress-allowlisted)
+        ▼
+      .ape/  runs.db · memory · ledger · trace
+```
+
+## Why APE
+
+- **An agent that lives inside MCP.** `ape_agent_run` starts a profile; the reasoning
+  loop runs internally and returns a `run_id`. The host sees one tool call.
+- **Reconfigurable, not fixed.** Profiles are YAML you edit — what the agent is, which
+  tools it may call, its budget. No fork needed.
+- **Reach without wrappers.** Declarative connectors (`egress_allow` + auth-by-env) let
+  you give the agent any API. The bundled `web` connector works with **no API key**.
+- **No 5-repo clone.** Genesis, EVE, ADAM, and Skein ship vendored and commit-pinned.
+  The only network egress is model providers and your connectors — printed by `doctor`.
+- **Auditable.** Every agent step (tool, args hash, duration, tokens, cost) is recorded
+  in the run ledger; every mutation lands in the hash-chained audit ledger.
 
 ## Install
 
+Node.js **≥ 22.5**.
+
 ```bash
-npm i -g godmode            # or clone fernandogarzaaa/godmode
-godmode doctor              # all vendored engines present?
-godmode                     # opens browser console (CLI + Live Trace) on 127.0.0.1 auto-port
+npm i -g ape-mcp
+ape-mcp doctor      # engine build state + every sanctioned egress host
+ape-mcp             # browser console (Live Trace · Tasks · Ledger · CLI)
 ```
 
-MCP clients (Claude/Codex/OpenCode/Cursor/VSCode): point at `bin/godmode-mcp.js` (stdio) or `godmode-mcp --http 8787`. Manifests: `.claude-plugin/`, `.codex/skills/godmode/`, `.opencode/plugin.json`, `mcpServers.json`.
+Point your MCP host at `bin/ape-mcp.js` (stdio) or `ape-mcp --http 8787`. Manifests ship
+in-repo (`.claude-plugin/`, `.opencode/plugin.json`, `mcpServers.json`, `.codex/skills/ape/`).
 
 ## Use
 
 ```bash
-godmode run godmode_status '{}'
-godmode run godmode_validate_experience '{"url":"mock:","persona":"curious-explorer","seed":7}'
-godmode run godmode_audit_claim '{"suite":"code"}'
-godmode run godmode_orchestrate '{"op":"status"}'
+ape-mcp run ape_status '{}'
+ape-mcp run ape_agent_profiles '{}'
+ape-mcp run ape_connector_call '{"connector":"web","operation":"search","input":{"query":"MCP"}}'
+ape-mcp run ape_agent_run '{"profile":"research-verify","objective":"Verify: Wikipedia is free."}'
 ```
 
-Browser console: Live Trace · Tasks · Task Graph · Experience · Ledger · Mods · CLI pane (same dispatch as `tools/call`).
+Set a model key first (`APE_ANTHROPIC_API_KEY` or `APE_OPENAI_API_KEY`); `ape_agent_status`
+polls the run and shows every step and its cost.
 
-## Background tasks
+## Bundled profiles
 
-Long tools run async via the Tasks shape: `godmode_task_start {tool, arguments}` → `{task_id}`,
-poll `godmode_task_get` / `tasks/get` / console Tasks tab. Statuses: running → done|failed,
-persisted in `.godmode/tasks.json`.
+| Profile | What it does | Needs |
+|---|---|---|
+| `repo-triage` | Triages issues, recalls prior decisions, audits claims | model key |
+| `persona-validate` | EVE persona-driven experience validation, seeded | model key |
+| `research-verify` | Web research + verify-before-claim via the `web` connector | model key only |
 
-## Evidence
+## Docs
 
-Every `godmode_audit_claim` writes to the hash-chained ledger at `.godmode/genesis-ledger.db`
-(`Ledger: entry <hash>` in the result). No `--ledger` flag needed.
+Install · [Profiles](docs/profiles.md) · [Connectors](docs/connectors.md) ·
+[Mods](docs/mods.md) · [Security](docs/security.md) ·
+[Protocol compatibility](docs/protocol-compat.md) · [Fixed task set](docs/task-set.md) ·
+[Changelog](CHANGELOG.md)
 
-## Auth
+## License
 
-v1 local-only: HTTP surface open on loopback. Opt-in bearer enforcement:
-`GODMODE_REQUIRE_AUTH=1 GODMODE_TOKENS=<csv>`. Discovery per RFC9728:
-`GET /.well-known/oauth-protected-resource`. Future IdP: `GODMODE_AUTH_SERVERS='["https://idp.example.com"]'`.
-
-## Mods
-
-`godmode.config.yaml` + `mods/<name>/{mod.json,hooks.js}` (`preCall/postCall`, throw-safe). `mods/policy-gates` confirms destructive evolve/force-release (MRTR elicitation).
-
-## Licenses
-
-MIT except `vendors/eve-miro/mirofish/` (AGPL-3.0) — see `NOTICE.md`. MIT-only: `GODMODE_NO_AGPL=1 node scripts/vendor.mjs`.
+MIT — APE code and all vendored engines (Genesis, EVE, ADAM, Skein). See `NOTICE.md`.

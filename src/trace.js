@@ -1,9 +1,9 @@
-import { appendFileSync, mkdirSync, existsSync } from "node:fs";
+﻿import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 export function dataDir() {
-  return process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode");
+  return process.env.APE_DATA_DIR || join(process.cwd(), ".ape");
 }
 export function tracePath() {
   return join(dataDir(), "trace.ndjson");

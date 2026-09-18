@@ -1,4 +1,4 @@
-// Re-vendor changed sources at pinned SHAs (used by CI auto-update; also runnable locally).
+﻿// Re-vendor changed sources at pinned SHAs (used by CI auto-update; also runnable locally).
 // Usage: node scripts/sync-vendors.mjs --src-<name> <dir> --sha-<name> <sha> [--only a,b]
 //    or: node scripts/sync-vendors.mjs --check   (prints current pins)
 import { cpSync, existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
@@ -38,19 +38,6 @@ for (const j of VENDOR_JOBS) {
         filter: (p) => !EXCLUDE_PARTS.some((x) => p.includes(x)) });
       copied.push(k);
     } catch (e) { report.jobs.push({ dest: "vendors/" + j.name, keep: k, status: "error: " + String(e).slice(0, 120) }); }
-  }
-  // mirofish AGPL: copy only when allowed; always record the decision.
-  if (j.name === "eve-miro") {
-    const ms = join(src, "mirofish");
-    if (process.env.GODMODE_NO_AGPL === "1") {
-      writeFileSync(join(dest, "mirofish.EXCLUDED"), "mirofish/ excluded by GODMODE_NO_AGPL=1 (AGPL-3.0). MIT-only build.\n");
-      rmSync(join(dest, "mirofish"), { recursive: true, force: true });
-    } else if (existsSync(ms)) {
-      const md = join(dest, "mirofish");
-      rmSync(md, { recursive: true, force: true });
-      cpSync(ms, md, { recursive: true, force: true, filter: (p) => !EXCLUDE_PARTS.some((x) => p.includes(x)) });
-      copied.push("mirofish[AGPL-3.0, see NOTICE.md]");
-    }
   }
   report.jobs.push({ dest: "vendors/" + j.name, status: "ok", copied, sha: sha || undefined });
 }

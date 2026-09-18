@@ -1,6 +1,6 @@
-# Live GodMode exercise battery — drives the MCP (HTTP) + console exactly like a
+﻿# Live APE exercise battery â€” drives the MCP (HTTP) + console exactly like a
 # plugin client would. Usage: powershell -File scripts/live-audit.ps1
-# NOTE: never name a param `$args` (PowerShell automatic variable) — payloads go empty.
+# NOTE: never name a param `$args` (PowerShell automatic variable) â€” payloads go empty.
 $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 $mcpPort = 18771
@@ -27,57 +27,51 @@ function McpCall($tool, $params) {
 $jm = Start-Job -ArgumentList $root, $mcpPort -ScriptBlock {
   param($repoRoot, $port)
   Set-Location $repoRoot
-  node bin/godmode-mcp.js --http $port
+  node bin/ape-mcp.js --http $port
 }
 Check "server-ready" (WaitReady "$api/discover")
 
 try { $d = Invoke-RestMethod -Uri "$api/discover"; Check "discover" ($d.protocol -eq "2026-07-28") $d.protocol }
 catch { Check "discover" $false $_ }
-try { $t = Invoke-RestMethod -Uri "$api/tools"; Check "tools-list-15" ($t.tools.Count -eq 15) ("count=" + $t.tools.Count) }
-catch { Check "tools-list-15" $false $_ }
+try { $t = Invoke-RestMethod -Uri "$api/tools"; Check "tools-list-20" ($t.tools.Count -eq 20) ("count=" + $t.tools.Count) }
+catch { Check "tools-list-20" $false $_ }
 
 # status + real payload verification (not just resultType)
 try {
-  $r = McpCall "godmode_status" @{}
+  $r = McpCall "ape_status" @{}
   $eng = $r.structuredContent.result.engines
   Check "status-engines" ($r.resultType -eq "complete" -and $eng.genesis -eq "vendored" -and $eng.adam -eq "vendored") ""
 } catch { Check "status-engines" $false $_ }
 
 # remember actually stores via real vendored adam-mcp (returns memory id)
 try {
-  $r = McpCall "godmode_remember" @{ kind = "episodic"; content = "live-audit-marker-42"; origin = "observation"; confidence = 0.9 }
+  $r = McpCall "ape_remember" @{ kind = "episodic"; content = "live-audit-marker-42"; origin = "observation"; confidence = 0.9 }
   $res = $r.structuredContent.result
   Check "remember-payload" ($res._adam -eq "ok" -and $res.result[0].text -match "id") ""
 } catch { Check "remember-payload" $false $_ }
 
 # recall a real query against the stored memory
 try {
-  $r = McpCall "godmode_recall" @{ query = "live-audit-marker-42"; top_k = 3 }
+  $r = McpCall "ape_recall" @{ query = "live-audit-marker-42"; top_k = 3 }
   $res = $r.structuredContent.result
   Check "recall-payload" ($res._adam -eq "ok" -and ($res.result[0].text -match "live-audit-marker-42")) ""
 } catch { Check "recall-payload" $false $_ }
 
 # skein orchestrate status (real engine call via PYTHONPATH unavailable in job; still routes)
 try {
-  $r = McpCall "godmode_orchestrate" @{ op = "status" }
+  $r = McpCall "ape_orchestrate" @{ op = "status" }
   Check "orchestrate-status" ($r.resultType -eq "complete") ""
 } catch { Check "orchestrate-status" $false $_ }
 
-# world simulate provenance contract
-try {
-  $r = McpCall "godmode_world_simulate" @{}
-  Check "world-provenance" ($r.structuredContent.result.provenance -contains "OBSERVED") ""
-} catch { Check "world-provenance" $false $_ }
-
 # MRTR confirm for destructive evolve — REAL payload (was broken by $args bug)
 try {
-  $r = McpCall "godmode_evolve" @{ action = "accept"; proposal_id = "p-live" }
+  $r = McpCall "ape_evolve" @{ action = "accept"; proposal_id = "p-live" }
   Check "mrtr-confirm" ($r.resultType -eq "input_required" -and $r.requestState -and ($r.inputRequests[0].message -match "destructive")) ""
 } catch { Check "mrtr-confirm" $false $_ }
 
-# background task lifecycle — REAL nested tool+arguments
+# background task lifecycle â€” REAL nested tool+arguments
 try {
-  $r = McpCall "godmode_task_start" @{ tool = "godmode_status"; arguments = @{} }
+  $r = McpCall "ape_task_start" @{ tool = "ape_status"; arguments = @{} }
   $id = $r.structuredContent.result.task_id
   $ok = $false
   for ($i = 0; $i -lt 20; $i++) {
@@ -91,29 +85,44 @@ try {
 
 # unknown tool honest error
 try {
-  $r = McpCall "godmode_nonexistent" @{}
+  $r = McpCall "ape_nonexistent" @{}
   Check "unknown-tool" ($r.structuredContent.result.error -eq "unknown_tool") ""
 } catch { Check "unknown-tool" $false $_ }
 
+# agent run lifecycle — mock profile run via MCP, poll to done, ledger populated
+try {
+  $script = @(@{ tool = "skein.orchestrate"; args = @{ op = "status" } }, @{ tool = "finish"; args = @{ summary = "live-agent-ok" } }) | ConvertTo-Json -Depth 6 -Compress
+  $r = McpCall "ape_agent_run" @{ profile = "repo-triage"; objective = "Live agent gate."; _mockScript = @($script | ConvertFrom-Json) }
+  $runId = $r.structuredContent.result.run_id
+  $ok = $false
+  for ($i = 0; $i -lt 60; $i++) {
+    Start-Sleep -Milliseconds 250
+    $g = Invoke-RestMethod -Uri "$api/call" -Method Post -Body (@{ name = "ape_agent_status"; arguments = @{ run_id = $runId } } | ConvertTo-Json -Compress) -ContentType "application/json" -Headers @{ "Mcp-Method" = "tools/call" }
+    if ($g.structuredContent.result.status -eq "done") { $ok = $true; break }
+    if ($g.structuredContent.result.status -eq "failed") { break }
+  }
+  Check "agent-run-lifecycle" $ok ("run=" + $runId)
+} catch { Check "agent-run-lifecycle" $false $_ }
+
 # header mismatch rejection
 try {
-  $body = @{ name = "godmode_status"; arguments = @{} } | ConvertTo-Json -Compress
+  $body = @{ name = "ape_status"; arguments = @{} } | ConvertTo-Json -Compress
   $null = Invoke-RestMethod -Uri "$api/call" -Method Post -Body $body -ContentType "application/json" -Headers @{ "Mcp-Method" = "wrong/method" }
   Check "header-mismatch" $false "no rejection"
 } catch { Check "header-mismatch" ($_.ToString() -match "400") "400 rejected" }
 
-try { $w = Invoke-RestMethod -Uri "$api/.well-known/oauth-protected-resource"; Check "well-known" ($w.godmode_mode -eq "local-open") "" }
+try { $w = Invoke-RestMethod -Uri "$api/.well-known/oauth-protected-resource"; Check "well-known" ($w.ape_mode -eq "local-open") "" }
 catch { Check "well-known" $false $_ }
 
 try {
-  $resp = echo '{"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}' | node $root\bin\godmode-mcp.js
-  Check "stdio" ($resp -match "godmode_status") ""
+  $resp = echo '{"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}' | node $root\bin\ape-mcp.js
+  Check "stdio" ($resp -match "ape_status") ""
 } catch { Check "stdio" $false $_ }
 
 $ju = Start-Job -ArgumentList $root -ScriptBlock {
   param($repoRoot)
   Set-Location $repoRoot
-  node bin/godmode.js serve --no-open
+  node bin/ape-mcp.js serve --no-open
 }
 Start-Sleep -Seconds 3
 try {
@@ -121,7 +130,7 @@ try {
   if ($out -match "(http://127\.0\.0\.1:\d+/)") {
     $curl = $Matches[1]
     $pg = Invoke-WebRequest -Uri $curl -UseBasicParsing
-    Check "console-page" ($pg.StatusCode -eq 200 -and $pg.Content -match "GodMode") $curl
+    Check "console-page" ($pg.StatusCode -eq 200 -and $pg.Content -match "APE") $curl
     $tr = Invoke-RestMethod -Uri ($curl + "api/trace?since=0")
     Check "console-trace" ($tr.count -gt 0) ("events=" + $tr.count)
     $tk = Invoke-RestMethod -Uri ($curl + "api/tasks")

@@ -1,4 +1,4 @@
-// Shared vendor copy rules — single source of truth for local vendor.mjs and CI sync-vendors.mjs.
+﻿// Shared vendor copy rules â€” single source of truth for local vendor.mjs and CI sync-vendors.mjs.
 // keep[] entries are copied verbatim; excluded dir names are never descended into.
 export const VENDOR_JOBS = [
   { name: "genesis", repo: "https://github.com/fernandogarzaaa/genesis",
@@ -9,12 +9,7 @@ export const VENDOR_JOBS = [
     keep: ["crates","bin","protocol","skills","scripts","Cargo.toml","Cargo.lock","Dockerfile","README.md","ARCHITECTURE.md","DESIGN.md","ROADMAP.md","LICENSE",".claude-plugin",".mcp.json"] },
   { name: "skein", repo: "https://github.com/fernandogarzaaa/skein",
     keep: ["src","tests","docs","pyproject.toml","README.md","CHANGELOG.md",".github"] },
-  { name: "eve-miro", repo: "https://github.com/fernandogarzaaa/EVE---MIRO",
-    keep: ["src","eve","schemas","datasets","apps","core","providers","streaming","storage","experiments","scripts","infrastructure","docs","tests","pyproject.toml","Makefile","docker-compose.yml","install.sh","install.ps1","README.md","NOTICE.md","LICENSE","CHANGELOG.md",".env.example",".github"] },
 ];
 
 // Substrings that must never be copied (build outputs, VCS, venvs, caches).
-export const EXCLUDE_PARTS = ["node_modules",".git/","/dist/","target/",".venv/","__pycache__",".pytest_cache/",".eve-output",".godmode/",".egg-info"];
-
-// AGPL boundary: only vendors/eve-miro/mirofish may contain AGPL-3.0.
-export const AGPL_ALLOWED_PREFIX = "vendors/eve-miro/mirofish/";
+export const EXCLUDE_PARTS = ["node_modules",".git/","/dist/","target/",".venv/","__pycache__",".pytest_cache/",".eve-output",".ape/",".egg-info"];

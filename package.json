@@ -1,13 +1,12 @@
-{
-  "name": "godmode",
+﻿{
+  "name": "ape-mcp",
   "version": "1.0.0",
-  "description": "GodMode — standalone universal plugin + MCP product engine combining Genesis (evaluation & assurance) + EVE (experience validation) + ADAM (cognitive substrate) + Skein (task-graph orchestration) + EVE-MIRO (reality-grounded simulation). No 5-repo clone required.",
+  "description": "APE — hybrid-native MCP server with an embedded, user-configurable agent: multi-engine orchestration (Genesis + EVE + ADAM + Skein), declarative connectors, task-graph execution, audit ledger, memory. No 5-repo clone required.",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=20.0.0" },
+  "engines": { "node": ">=22.5.0" },
   "bin": {
-    "godmode": "./bin/godmode.js",
-    "godmode-mcp": "./bin/godmode-mcp.js"
+    "ape-mcp": "./bin/ape-mcp.js"
   },
   "main": "./src/index.js",
   "files": [
@@ -18,17 +17,20 @@
     "skills",
     "schemas",
     "mods",
-    "godmode.config.example.yaml",
+    "profiles",
+    "connectors",
+    "docs",
+    "ape.config.example.yaml",
     "README.md",
     "NOTICE.md"
   ],
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "build": "node scripts/build.mjs",
-    "doctor": "node bin/godmode.js doctor",
+    "doctor": "node bin/ape-mcp.js doctor",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --test tests/godmode.test.js",
-    "console": "node bin/godmode.js"
+    "test": "node --test tests/ape.test.js tests/agent.test.js tests/connectors.test.js tests/extension.test.js",
+    "console": "node bin/ape-mcp.js serve"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -37,6 +39,6 @@
   },
   "mcp": {
     "protocolVersion": "2026-07-28",
-    "server": { "name": "godmode", "version": "1.0.0" }
+    "server": { "name": "ape-mcp", "version": "1.0.0" }
   }
 }

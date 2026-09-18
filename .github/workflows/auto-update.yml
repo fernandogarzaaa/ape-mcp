@@ -1,9 +1,9 @@
-name: auto-update
+﻿name: auto-update
 # Keeps vendors/ in sync with the 5 source repos. Triggers:
 #  - schedule (6h backstop): compares HEAD SHAs vs vendors/manifest.yaml pins
 #  - repository_dispatch (instant): source repos fire `source-updated` on push to main
 #  - workflow_dispatch (manual): optional `repos` csv filter, `force` to re-sync anyway
-# Always ends in ONE batched PR for human review — never auto-merges.
+# Always ends in ONE batched PR for human review â€” never auto-merges.
 on:
   schedule: [{ cron: "0 */6 * * *" }]
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
           node -e "
           const pins = JSON.parse(require('child_process').execSync('node scripts/sync-vendors.mjs --check',{encoding:'utf8'}));
           const { execSync } = require('child_process');
-          const repos = { genesis:'fernandogarzaaa/genesis','eve':'fernandogarzaaa/experience-validation-engine',adam:'fernandogarzaaa/ADAM',skein:'fernandogarzaaa/skein','eve-miro':'fernandogarzaaa/EVE---MIRO' };
+          const repos = { genesis:'fernandogarzaaa/genesis','eve':'fernandogarzaaa/experience-validation-engine',adam:'fernandogarzaaa/ADAM',skein:'fernandogarzaaa/skein' };
           const filter = (process.env.INPUT_REPOS||'').split(',').map(s=>s.trim()).filter(Boolean);
           const payloadRepo = String(process.env.DISPATCH_REPO||'').split('/').pop();
           const payloadSha = process.env.DISPATCH_SHA || '';
@@ -63,7 +63,7 @@ jobs:
         run: |
           node -e "
           const changed = JSON.parse(process.env.CHANGED), shas = JSON.parse(process.env.SHAS);
-          const repos = { genesis:'fernandogarzaaa/genesis','eve':'fernandogarzaaa/experience-validation-engine',adam:'fernandogarzaaa/ADAM',skein:'fernandogarzaaa/skein','eve-miro':'fernandogarzaaa/EVE---MIRO' };
+          const repos = { genesis:'fernandogarzaaa/genesis','eve':'fernandogarzaaa/experience-validation-engine',adam:'fernandogarzaaa/ADAM',skein:'fernandogarzaaa/skein' };
           const { execSync } = require('child_process');
           for (const n of changed) {
             execSync('git clone --depth 1 https://github.com/'+repos[n]+' /tmp/src-'+n, {stdio:'inherit'});
@@ -104,24 +104,24 @@ jobs:
       - name: Verify (doctor + smoke + tests)
         run: |
           npm install --omit=dev --no-audit --no-fund
-          node bin/godmode.js doctor
+          node bin/ape-mcp.js doctor
           node scripts/smoke.mjs
-          node --test tests/godmode.test.js
+          node --test tests/ape.test.js
           node scripts/fetch-adam.mjs --check || true
       - name: Open update PR
         uses: peter-evans/create-pull-request@v7
         with:
           # Default GITHUB_TOKEN works once the repo setting
           # "Allow GitHub Actions to create and approve pull requests" is ON.
-          # Set GODMODE_SYNC_TOKEN (PAT, write on godmode) to skip that setting.
-          token: ${{ secrets.GODMODE_SYNC_TOKEN || github.token }}
+          # Set APE_SYNC_TOKEN (PAT, write on APE) to skip that setting.
+          token: ${{ secrets.APE_SYNC_TOKEN || github.token }}
           branch: auto-update/${{ github.run_id }}
           delete-branch: true
           labels: auto-update
           title: "chore(auto-update): sync vendors ${{ needs.resolve.outputs.changed }}"
           body: |
-            Automated vendor sync. **Human merge required — CI must be green.**
+            Automated vendor sync. **Human merge required â€” CI must be green.**
             - Changed: `${{ needs.resolve.outputs.changed }}`
             - SHAs: `${{ needs.resolve.outputs.shas }}`
-            - Steps run: re-vendor → manifest pins → dist rebuild → license gate → doctor/smoke/tests.
-            - Compare upstream: https://github.com/fernandogarzaaa/godmode/compare/main...auto-update/${{ github.run_id }} (per-repo diffs in commit messages below).
+            - Steps run: re-vendor â†’ manifest pins â†’ dist rebuild â†’ license gate â†’ doctor/smoke/tests.
+            - Compare upstream: https://github.com/fernandogarzaaa/ape-mcp/compare/main...auto-update/${{ github.run_id }} (per-repo diffs in commit messages below).

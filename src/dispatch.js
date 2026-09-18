@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+﻿import { execFile } from "node:child_process";
 import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,18 +6,28 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const V = (p) => join(root, "vendors", p);
 
+// Async execFile — never blocks the event loop. Timeout kills the child and returns
+// a structured error, so long engine runs stay non-blocking and are task-shaped by callers.
 function run(cmd, args, opts = {}) {
-  try {
-    const out = execFileSync(cmd, args, { encoding: "utf8", timeout: 120000, ...opts });
-    return { ok: true, output: String(out).slice(0, 4000) };
-  } catch (e) {
-    return { ok: false, output: String(e.stdout ?? e.message ?? e).slice(0, 4000) };
-  }
+  return new Promise((resolve) => {
+    const child = execFile(cmd, args, { encoding: "utf8", timeout: 120000, ...opts }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = String(stdout || stderr || err.message || err).slice(0, 4000);
+        resolve({ ok: false, output: msg, code: err.code ?? null });
+      } else {
+        resolve({ ok: true, output: String(stdout).slice(0, 4000) });
+      }
+    });
+    if (opts.timeout) {
+      setTimeout(() => { try { child.kill(); } catch { /* already gone */ } }, opts.timeout + 1000);
+    }
+  });
 }
 const fail = (engine, detail) => ({
   error: "engine_not_configured", engine, detail,
-  hint: "Run `godmode doctor` — missing build/key/service. Never a silent stub."
+  hint: "Run `ape-mcp doctor` — missing build/key/service. Never a silent stub."
 });
+export const engineFail = fail;
 
 // Every engine below shells out to IN-PLUGIN vendored paths only.
 // No git clone, no npx -y <other-repo>, no network fetch at runtime.
@@ -50,13 +60,10 @@ export function adamBin() {
 export function skeinSrc() {
   return existsSync(V("skein/src/skein/cli.py")) ? V("skein/src") : null;
 }
-export function miroSrc() {
-  return existsSync(V("eve-miro/src/eve_miro/cli/main.py")) ? V("eve-miro/src") : null;
-}
 
 function ledgerSummary(entry) {
   try {
-    const dir = process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode");
+    const dir = process.env.APE_DATA_DIR || join(process.cwd(), ".ape");
     mkdirSync(dir, { recursive: true });
     appendFileSync(join(dir, "ledger.jsonl"), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
   } catch { /* ledger never breaks calls */ }
@@ -71,50 +78,46 @@ export const dispatch = {
         eve: eveEntry() ? "vendored" : "vendored-unbuilt",
         adam: adamBin() ? "vendored" : "vendored-unbuilt",
         skein: skeinSrc() ? "vendored" : "missing",
-        "eve-miro": miroSrc() ? "vendored" : "missing",
       },
       vendors: "vendors/manifest.yaml",
     };
   },
-  audit_claim({ suite = "code", verifier = "" } = {}) {
+  async audit_claim({ suite = "code", verifier = "" } = {}) {
     const e = genesisEntry();
     if (!e) return { ...fail("genesis", "dist not built; run npm run build in vendors/genesis"), suites: genesisSuites().suites };
     if (!verifier) return { verdict: "UNTESTED", suite, rates: null, findings: [], note: "pass verifier to run; suites listed", suites: genesisSuites().suites };
     // Evidence-persistent by default: every audit lands in the hash-chained ledger.
-    const ledger = join(process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode"), "genesis-ledger.db");
-    const r = run("node", [e, "audit", "--suite", suite, "--verifier", verifier, "--ledger", ledger]);
+    const ledger = join(process.env.APE_DATA_DIR || join(process.cwd(), ".ape"), "genesis-ledger.db");
+    const r = await run("node", [e, "audit", "--suite", suite, "--verifier", verifier, "--ledger", ledger]);
     if (r.ok && r.output) {
       const m = r.output.match(/Ledger: entry (\w+)/);
       if (m) ledgerSummary({ kind: "genesis.audit", suite, verdict: /VERDICT:\s+(\S+)/.exec(r.output)?.[1], ledger_entry: m[1] });
     }
     return { suite, ledger, ...r };
   },
-  validate_experience({ url = "mock:", persona = "curious-explorer", seed = 7 } = {}) {
+  async validate_experience({ url = "mock:", persona = "curious-explorer", seed = 7 } = {}) {
     const e = eveEntry();
     if (!e) return fail("eve", "bin/eve.js + dist missing; build vendors/eve");
-    const r = run("node", [e, "run", url, "--persona", persona, "--seed", String(seed), "--quiet"]);
-    return { url, persona, seed, ...r, report: ".godmode/eve-report (see godmode_report)" };
+    const r = await run("node", [e, "run", url, "--persona", persona, "--seed", String(seed), "--quiet"]);
+    return { url, persona, seed, ...r, report: ".ape/eve-report (see ape_report)" };
   },
-  memory({ op, query = "", kind = "episodic", content = "", organism_id = "default" } = {}) {
-    const b = adamBin();
-    if (!b) return fail("adam", "adam-mcp binary absent; build vendors/adam (cargo build --release -p adam-mcp)");
-    return { engine: "adam", op, organism_id, kind, note: "stdio call via adam-mcp; use resources genome://current for snapshot", query: query.slice(0, 200), stored: op === "store" ? content.slice(0, 200) : undefined };
+  async compare({ run_a = "", run_b = "" } = {}) {
+    const e = genesisEntry();
+    if (!e) return fail("genesis", "dist not built; run npm run build in vendors/genesis");
+    if (!run_a || !run_b) return { note: "pass run_a and run_b result dirs; genesis compare <run-a> <run-b>", runs: [run_a, run_b] };
+    const r = await run("node", [e, "compare", run_a, run_b]);
+    return { run_a, run_b, ...r };
   },
-  orchestrate({ op = "status", node = "", agent_id = "godmode" } = {}) {
+  async orchestrate({ op = "status", node = "", agent_id = "ape-mcp" } = {}) {
     const s = skeinSrc();
     if (!s) return fail("skein", "vendors/skein/src missing");
-    const py = process.env.GODMODE_PYTHON || "python";
+    const py = process.env.APE_PYTHON || "python";
     const map = { status: ["status"], graph: ["graph"], claim: ["claim", node, "--agent-id", agent_id], release: ["release", node], log: ["log", "--node", node] };
     const args = map[op] ?? ["status"];
-    const r = run(py, ["-m", "skein.cli", ...args].filter(Boolean), {
+    const r = await run(py, ["-m", "skein.cli", ...args].filter(Boolean), {
       cwd: process.cwd(),
       env: { ...process.env, PYTHONPATH: s },
     });
     return { op, node, ...r };
-  },
-  world({ scenario = "experiments/typhoon/typhoon_manila_closed_loop.yaml" } = {}) {
-    const s = miroSrc();
-    if (!s) return fail("eve-miro", "vendors/eve-miro/src missing");
-    return { scenario, provenance: ["OBSERVED", "DERIVED", "FORECAST", "SIMULATED"], note: "Run FIXTURES=1 offline; live needs OPENMETEO_LIVE=1 + engines up (fail-closed 503 otherwise)" };
   },
 };

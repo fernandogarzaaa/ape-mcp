@@ -1,4 +1,4 @@
-// Fetch prebuilt adam-mcp for this platform from the godmode GitHub release.
+﻿// Fetch prebuilt adam-mcp for this platform from the APE GitHub release.
 // Standalone guarantee holds: release binaries are built from vendors/adam (same repo),
 // never from the 5 source repos. Fallback: `cargo build --release -p adam-mcp` in vendors/adam.
 import { existsSync, mkdirSync, createWriteStream } from "node:fs";
@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const TAG = process.env.GODMODE_ADAM_TAG || "v1.2.0";
+const TAG = process.env.APE_ADAM_TAG || "v1.2.0";
 
 export function assetFor(platform = process.platform, arch = process.arch) {
   if (platform === "win32") return "adam-mcp-win-x64.exe";
@@ -37,7 +37,7 @@ const asset = assetFor();
 if (!asset) { console.error("unsupported platform for prebuilt adam-mcp; build from vendors/adam"); process.exit(1); }
 const dest = destFor(asset);
 if (existsSync(dest) && !process.argv.includes("--force")) { console.log("present: " + dest); process.exit(0); }
-const url = `https://github.com/fernandogarzaaa/godmode/releases/download/${TAG}/${asset}`;
+const url = `https://github.com/fernandogarzaaa/ape-mcp/releases/download/${TAG}/${asset}`;
 mkdirSync(dirname(dest), { recursive: true });
 console.log("fetching " + url);
 try {

@@ -1,2 +1,0 @@
-source: https://github.com/fernandogarzaaa/experience-validation-engine
-imported: first-party, not a git submodule

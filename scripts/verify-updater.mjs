@@ -1,10 +1,10 @@
-// Local verification for the auto-update pipeline (not run in CI).
+﻿// Local verification for the auto-update pipeline (not run in CI).
 // Usage: node scripts/verify-updater.mjs
 import { readFileSync } from "node:fs";
 import yaml from "yaml";
 
 for (const f of [".github/workflows/ci.yml", ".github/workflows/auto-update.yml",
-  ".github/workflows/adam-binaries.yml", ".github/dependabot.yml", "docs/notify-godmode.template.yml"]) {
+  ".github/workflows/adam-binaries.yml", ".github/dependabot.yml", "docs/notify-APE.template.yml"]) {
   const raw = readFileSync(f, "utf8").replace(/\$\{\{.*?\}\}/g, "EXPR");
   yaml.parse(raw);
   console.log("yaml ok:", f);

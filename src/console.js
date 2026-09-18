@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+﻿import { createServer } from "node:http";
 import { readFileSync, existsSync, readFileSync as r } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +34,7 @@ export function startConsole({ port = 0, open = false } = {}) {
       const since = Number(url.searchParams.get("since") || 0);
       let lines = [];
       try {
-        const p = join(process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode"), "trace.ndjson");
+        const p = join(process.env.APE_DATA_DIR || join(process.cwd(), ".ape"), "trace.ndjson");
         if (existsSync(p)) {
           const all = r(p, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
           lines = all.slice(since);
@@ -48,7 +48,7 @@ export function startConsole({ port = 0, open = false } = {}) {
     if (req.method === "GET" && url.pathname === "/api/ledger") {
       let entries = [];
       try {
-        const p = join(process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode"), "ledger.jsonl");
+        const p = join(process.env.APE_DATA_DIR || join(process.cwd(), ".ape"), "ledger.jsonl");
         if (existsSync(p)) {
           entries = r(p, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-100);
         }

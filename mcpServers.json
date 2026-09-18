@@ -1,1 +1,1 @@
-{"name": "godmode", "version": "1.0.0", "description": "GodMode standalone universal plugin: Genesis+EVE+ADAM+Skein+MIRO in one MCP. No 5-repo clone.", "mcpServers": {"godmode": {"command": "node", "args": ["bin/godmode-mcp.js"]}}}
+﻿{"name": "ape-mcp", "version": "1.0.0", "description": "APE standalone universal MCP: Genesis+EVE+ADAM+Skein in one server. No 5-repo clone.", "mcpServers": {"ape-mcp": {"command": "node", "args": ["bin/ape-mcp.js"]}}}

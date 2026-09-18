@@ -1,3 +1,0 @@
-source: https://github.com/fernandogarzaaa/MiroFish
-upstream: https://github.com/666ghj/MiroFish
-imported: first-party, not a git submodule

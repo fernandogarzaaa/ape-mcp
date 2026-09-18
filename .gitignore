@@ -1,5 +1,5 @@
-node_modules/
-.godmode/
+﻿node_modules/
+.ape/
 .skein/
 .fastembed_cache/
 .tmp-*/

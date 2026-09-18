@@ -1,10 +1,9 @@
-// AGPL boundary gate: fails if AGPL-licensed content appears outside vendors/eve-miro/mirofish,
-// or if the mirofish license itself changes away from AGPL-3.0 without a NOTICE.md update.
+﻿// License gate: every vendored engine must be MIT (or compatible); any AGPL-3.0
+// content anywhere is a hard failure — APE deliberately ships no AGPL component.
 // Usage: node scripts/check-licenses.mjs
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGPL_ALLOWED_PREFIX } from "./vendor-config.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
@@ -14,25 +13,20 @@ function walk(dir, rel = "") {
   for (const e of ents) {
     const p = join(dir, e.name), r = (rel ? rel + "/" : "") + e.name;
     if (e.isDirectory()) {
-      if (["node_modules", ".git", "target", ".venv", "__pycache__", ".eve-output", ".godmode"].includes(e.name)) continue;
+      if (["node_modules", ".git", "target", ".venv", "__pycache__", ".eve-output", ".ape"].includes(e.name)) continue;
       walk(p, r);
     } else if (/^(LICENSE|LICENCE|COPYING)/i.test(e.name) || e.name.endsWith(".license")) {
       let txt = "";
       try { txt = readFileSync(p, "utf8").slice(0, 600); } catch { continue; }
-      const agpl = /Affero General Public License/i.test(txt);
-      const inAllowed = ("vendors/" + r).startsWith(AGPL_ALLOWED_PREFIX) || r.startsWith("vendors/eve-miro/mirofish");
-      if (agpl && !inAllowed) failures.push(`AGPL text outside boundary: ${r}`);
+      if (/Affero General Public License/i.test(txt)) failures.push(`AGPL text found: ${r}`);
     }
   }
 }
 walk(join(root, "vendors"));
-// mirofish license must still exist and still be AGPL-3.0 (drift = human review).
-const mf = join(root, "vendors", "eve-miro", "mirofish", "LICENSE");
-const mx = join(root, "vendors", "eve-miro", "mirofish.EXCLUDED");
-if (!existsSync(mf) && !existsSync(mx)) {
-  failures.push("mirofish/ LICENSE missing and no mirofish.EXCLUDED marker — re-run vendor/sync");
-} else if (existsSync(mf) && !/Affero General Public License/i.test(readFileSync(mf, "utf8").slice(0, 600))) {
-  failures.push("mirofish/LICENSE no longer reads as AGPL — update NOTICE.md before merging");
+// Every vendored engine must carry a license file.
+for (const n of ["genesis", "eve", "adam", "skein"]) {
+  const hasLic = readdirSync(join(root, "vendors", n)).some((x) => /^(LICENSE|LICENCE|COPYING)/i.test(x));
+  if (!hasLic) failures.push(`vendors/${n} missing LICENSE`);
 }
 if (failures.length) { console.error("LICENSE GATE FAILED:\n- " + failures.join("\n- ")); process.exit(1); }
-console.log("license gate ok: AGPL confined to vendors/eve-miro/mirofish");
+console.log("license gate ok: all vendored engines MIT, no AGPL content");

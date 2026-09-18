@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>GodMode — CLI + Observability</title>
+<title>APE â€” CLI + Observability</title>
 <style>
 :root{--bg:#0b1020;--card:#141a2e;--ink:#e8eefc;--muted:#93a0c2;--obs:#3dd68c;--sim:#f5c542;--der:#6ea8ff;--fc:#ff8a5b;--bad:#ff5d73;--line:#243056;--btn:#1c2544}
 *{box-sizing:border-box}body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:var(--bg);color:var(--ink)}
@@ -27,15 +27,15 @@ input,select{flex:1;background:#0a0e1c;color:var(--ink);border:1px solid #334070
 <body>
 <canvas id="bg"></canvas>
 <header>
-<div><h1>GodMode <span>CLI + Observability</span></h1><div class="muted">Genesis + EVE + ADAM + Skein + MIRO · stateless MCP 2026-07-28 · state in handles</div></div>
+<div><h1>APE <span>CLI + Observability</span></h1><div class="muted">Genesis + EVE + ADAM + Skein · stateless MCP 2026-07-28 · state in handles</div></div>
 <nav><button class="active" data-tab="trace">Live Trace</button><button data-tab="tasks">Tasks</button><button data-tab="graph">Task Graph</button><button data-tab="exp">Experience</button><button data-tab="ledger">Ledger</button><button data-tab="mods">Mods</button></nav>
 </header>
 <main>
-<section class="card"><span class="badge obs">OBSERVED</span><span class="badge sim">SIMULATED</span><span class="badge" style="background:#132544;color:var(--der)">DERIVED</span><span class="muted"> — provenance labels mandatory; simulated output is never observation.</span> <span id="status" class="muted"></span></section>
-<section class="card" id="tab-trace"><h3>Live Trace <span class="muted">poll /api/trace?since= · animated waterfall</span></h3><svg width="100%" height="46" aria-hidden="true"><line x1="0" y1="23" x2="100%" y2="23" stroke="#f5c542" stroke-width="2" class="flow"/></svg><table><thead><tr><th>ts</th><th>tool</th><th>ms</th><th>summary</th></tr></thead><tbody id="rows"></tbody></table></section>
-<section class="card" id="tab-tasks" hidden><h3>Tasks <span class="muted">background runs (Tasks extension) · start via CLI: godmode_task_start</span></h3><table><thead><tr><th>id</th><th>tool</th><th>status</th><th>finished</th></tr></thead><tbody id="taskrows"></tbody></table></section>
-<section class="card" id="tab-graph" hidden><h3>Task Graph <span class="muted">skein: claim → worktree → verify gate → handoff</span></h3><div id="graph" class="muted">Use CLI below: {"name":"godmode_orchestrate","arguments":{"op":"graph"}}</div></section>
-<section class="card" id="tab-exp" hidden><h3>Experience <span class="muted">EVE: persona + seed + evidence</span></h3><div id="exp" class="muted">Use CLI below: {"name":"godmode_validate_experience","arguments":{"url":"mock:","persona":"curious-explorer","seed":7}}</div></section>
+<section class="card"><span class="badge obs">OBSERVED</span><span class="badge sim">SIMULATED</span><span class="badge" style="background:#132544;color:var(--der)">DERIVED</span><span class="muted"> â€” provenance labels mandatory; simulated output is never observation.</span> <span id="status" class="muted"></span></section>
+<section class="card" id="tab-trace"><h3>Live Trace <span class="muted">poll /api/trace?since= Â· animated waterfall</span></h3><svg width="100%" height="46" aria-hidden="true"><line x1="0" y1="23" x2="100%" y2="23" stroke="#f5c542" stroke-width="2" class="flow"/></svg><table><thead><tr><th>ts</th><th>tool</th><th>ms</th><th>summary</th></tr></thead><tbody id="rows"></tbody></table></section>
+<section class="card" id="tab-tasks" hidden><h3>Tasks <span class="muted">background runs (Tasks extension) Â· start via CLI: ape_task_start</span></h3><table><thead><tr><th>id</th><th>tool</th><th>status</th><th>finished</th></tr></thead><tbody id="taskrows"></tbody></table></section>
+<section class="card" id="tab-graph" hidden><h3>Task Graph <span class="muted">skein: claim â†’ worktree â†’ verify gate â†’ handoff</span></h3><div id="graph" class="muted">Use CLI below: {"name":"ape_orchestrate","arguments":{"op":"graph"}}</div></section>
+<section class="card" id="tab-exp" hidden><h3>Experience <span class="muted">EVE: persona + seed + evidence</span></h3><div id="exp" class="muted">Use CLI below: {"name":"ape_validate_experience","arguments":{"url":"mock:","persona":"curious-explorer","seed":7}}</div></section>
 <section class="card" id="tab-ledger" hidden><h3>Ledger <span class="muted">genesis audits + ADAM governance (hash-chained)</span></h3><table><thead><tr><th>ts</th><th>kind</th><th>verdict/entry</th></tr></thead><tbody id="ledgerrows"></tbody></table></section>
 <section class="card" id="tab-mods" hidden><h3>Mods <span class="muted">config + mods/ dir</span></h3><div id="mods" class="muted">policy-gates enabled. Toggle: mods/&lt;name&gt;/mod.json {"enabled":false}.</div></section>
 <section class="card"><h3>CLI <span class="muted">same dispatch as MCP tools/call</span></h3><div id="cli"><select id="tool"></select><input id="args" value='{}'/><button class="btn pulse" onclick="call()">Run</button></div><pre id="out"></pre></section>
@@ -43,8 +43,8 @@ input,select{flex:1;background:#0a0e1c;color:var(--ink);border:1px solid #334070
 <script>
 let since=0,tools=[];
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");["trace","tasks","graph","exp","ledger","mods"].forEach(t=>document.getElementById("tab-"+t).hidden=t!==b.dataset.tab);});
-async function init(){const t=await(await fetch("/api/tools")).json();tools=t.tools||[];document.getElementById("tool").innerHTML=tools.map(x=>`<option>${x.name}</option>`).join("");document.getElementById("status").textContent=`${tools.length} tools · ttlMs ${t.ttlMs}`;}
-async function poll(){const r=await(await fetch("/api/trace?since="+since)).json();since=r.count||since;const tb=document.getElementById("rows");(r.events||[]).slice(-30).forEach(e=>{const tr=document.createElement("tr");tr.className="fadein";tr.innerHTML=`<td>${(e.ts||"").slice(11,19)}</td><td>${e.tool}</td><td>${e.durationMs}</td><td>${(e.resultSummary||"").slice(0,120)}</td>`;tb.prepend(tr);});while(tb.rows.length>30)tb.deleteRow(-1);try{const t=await(await fetch("/api/tasks")).json();const tt=document.getElementById("taskrows");tt.innerHTML=(t.tasks||[]).map(x=>`<tr><td>${x.id}</td><td>${x.tool}</td><td>${x.status}</td><td>${(x.finished||"—").slice(11,19)}</td></tr>`).join("");}catch{}try{const L=await(await fetch("/api/ledger")).json();document.getElementById("ledgerrows").innerHTML=(L.entries||[]).map(e=>`<tr><td>${(e.ts||"").slice(11,19)}</td><td>${e.kind||""}</td><td>${e.verdict||""} ${e.ledger_entry||""}</td></tr>`).join("");}catch{}}
+async function init(){const t=await(await fetch("/api/tools")).json();tools=t.tools||[];document.getElementById("tool").innerHTML=tools.map(x=>`<option>${x.name}</option>`).join("");document.getElementById("status").textContent=`${tools.length} tools Â· ttlMs ${t.ttlMs}`;}
+async function poll(){const r=await(await fetch("/api/trace?since="+since)).json();since=r.count||since;const tb=document.getElementById("rows");(r.events||[]).slice(-30).forEach(e=>{const tr=document.createElement("tr");tr.className="fadein";tr.innerHTML=`<td>${(e.ts||"").slice(11,19)}</td><td>${e.tool}</td><td>${e.durationMs}</td><td>${(e.resultSummary||"").slice(0,120)}</td>`;tb.prepend(tr);});while(tb.rows.length>30)tb.deleteRow(-1);try{const t=await(await fetch("/api/tasks")).json();const tt=document.getElementById("taskrows");tt.innerHTML=(t.tasks||[]).map(x=>`<tr><td>${x.id}</td><td>${x.tool}</td><td>${x.status}</td><td>${(x.finished||"â€”").slice(11,19)}</td></tr>`).join("");}catch{}try{const L=await(await fetch("/api/ledger")).json();document.getElementById("ledgerrows").innerHTML=(L.entries||[]).map(e=>`<tr><td>${(e.ts||"").slice(11,19)}</td><td>${e.kind||""}</td><td>${e.verdict||""} ${e.ledger_entry||""}</td></tr>`).join("");}catch{}}
 async function call(){const name=document.getElementById("tool").value;let a={};try{a=JSON.parse(document.getElementById("args").value||"{}")}catch(e){document.getElementById("out").textContent="bad JSON args";return}const r=await(await fetch("/api/call",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,arguments:a})})).json();document.getElementById("out").textContent=JSON.stringify(r,null,2).slice(0,6000);poll();}
 init();poll();setInterval(poll,2000);
 // ambient particle drift (rich motion, paused when hidden)

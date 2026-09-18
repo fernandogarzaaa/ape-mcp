@@ -3,13 +3,12 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VENDOR_JOBS } from "./vendor-config.mjs";
 
-// Local checkout paths for the 5 source repos on this machine.
+// Local checkout paths for the 4 source repos on this machine.
 const LOCAL = {
   genesis: "C:\\Users\\garza\\genesis_repo",
   eve: "E:\\workspace\\experience-validation-engine",
   adam: "C:\\Users\\garza\\ADAM",
   skein: "E:\\skein",
-  "eve-miro": "C:\\Users\\garza\\EVE---MIRO",
 };
 
 const { execFileSync } = await import("node:child_process");

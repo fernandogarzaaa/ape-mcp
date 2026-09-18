@@ -1,4 +1,4 @@
-// Background tasks (MCP Tasks-extension shape, file-backed so console polling
+﻿// Background tasks (MCP Tasks-extension shape, file-backed so console polling
 // works across processes). Long tools run deferred; status: running -> done|failed.
 // Limitation (honest): handlers execute in-process; a running tool blocks the loop
 // until execFileSync returns. Polling still observes running -> done transitions.
@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 function dir() {
-  const d = process.env.GODMODE_DATA_DIR || join(process.cwd(), ".godmode");
+  const d = process.env.APE_DATA_DIR || join(process.cwd(), ".ape");
   mkdirSync(d, { recursive: true });
   return d;
 }

@@ -1,6 +1,6 @@
-# NOTICE — GodMode license split (combined distribution)
+﻿# NOTICE — APE license split (combined distribution)
 
-- GodMode code (`bin/`, `src/`, `console/`, `skills/`, `mods/`, `schemas/`): **MIT**.
+- APE code (`bin/`, `src/`, `console/`, `skills/`, `mods/`, `schemas/`): **MIT**.
 - `vendors/genesis` (MIT), `vendors/eve` (MIT), `vendors/adam` (MIT), `vendors/skein` (MIT): see each `LICENSE`.
-- `vendors/eve-miro`: data fabric + in-tree `eve/` are **MIT** (see `vendors/eve-miro/LICENSE`, `NOTICE.md`); `vendors/eve-miro/mirofish/` is **AGPL-3.0** (see `vendors/eve-miro/mirofish/LICENSE`).
-- Combined distribution including `mirofish/` is subject to AGPL-3.0 for that component. MIT-only build: `GODMODE_NO_AGPL=1 node scripts/vendor.mjs` (writes `mirofish.EXCLUDED`).
+- Every engine ships vendored and commit-pinned via `vendors/manifest.yaml`. No runtime `git clone`, no `npx -y <other-repo>`.
+- The only runtime network egress is user-declared connectors (`APE_*` env auth) and configured model providers for the embedded agent — both explicit, both listed by `ape-mcp doctor`.
