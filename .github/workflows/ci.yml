@@ -25,7 +25,7 @@ jobs:
       - run: node scripts/check-licenses.mjs
       - run: node bin/ape-mcp.js doctor
       - run: node scripts/smoke.mjs
-      - run: node --test tests/ape.test.js tests/agent.test.js tests/connectors.test.js tests/extension.test.js
+      - run: npm test
       - name: ADAM prebuilt handshake (where present; else explicit-unavailable is covered by tests)
         shell: bash
         run: node scripts/verify-adam.mjs || echo "::warning::no prebuilt adam-mcp for $(uname -s); tests cover the explicit-unavailable contract"
