@@ -30,6 +30,8 @@ let spawnCount = 0;
 export function adamSpawnCount() { return spawnCount; }
 
 let session = null;
+let brokenUntil = 0;
+let consecutiveTimeouts = 0;
 
 function makeSession(bin) {
   const child = spawn(bin, [], {
@@ -55,6 +57,16 @@ function makeSession(bin) {
         const id = s.nextId++;
         const timer = setTimeout(() => {
           s.pending.delete(id);
+          consecutiveTimeouts++;
+          // A hung child poisons every future call — kill it and cool down so
+          // subsequent calls fail fast instead of each burning a full timeout.
+          try { s.child.kill(); } catch { /* gone */ }
+          if (consecutiveTimeouts >= 2) {
+            s.alive = false;
+            if (session === s) session = null;
+            brokenUntil = Date.now() + 300000;
+            consecutiveTimeouts = 0;
+          }
           resolve({ _adam: "timeout", tool });
         }, timeoutMs);
         s.pending.set(id, { resolve, tool, timer });
@@ -76,6 +88,7 @@ function makeSession(bin) {
           if (p) {
             clearTimeout(p.timer);
             s.pending.delete(msg.id);
+            consecutiveTimeouts = 0;
             p.resolve(msg.error
               ? { _adam: "rpc-error", tool: p.tool, error: msg.error }
               : { _adam: "ok", tool: p.tool, result: msg.result?.content ?? msg.result?.result ?? msg });
@@ -104,6 +117,7 @@ function makeSession(bin) {
 }
 
 async function ensureSession() {
+  if (Date.now() < brokenUntil) return null;
   const bin = adamBinary();
   if (!bin) return null;
   if (session && session.alive && session.bin === bin) {
@@ -112,7 +126,24 @@ async function ensureSession() {
   }
   session = makeSession(bin);
   await session.initPromise;
-  return session.alive ? session : null;
+  if (!session.alive) {
+    brokenUntil = Date.now() + 120000;
+    return null;
+  }
+  // Health probe: a binary that answers initialize but never answers tools/call
+  // would otherwise burn the full 60s invoke timeout on EVERY call. Probe once
+  // with a short timeout; on failure, fail fast for a cooldown window.
+  const probe = await session.invoke("adam_genome", { organism_id: "health" }, 5000);
+  if (probe._adam !== "ok") {
+    try { session.child.kill(); } catch { /* gone */ }
+    session.alive = false;
+    session = null;
+    brokenUntil = Date.now() + 300000;
+    consecutiveTimeouts = 0;
+    return null;
+  }
+  consecutiveTimeouts = 0;
+  return session;
 }
 
 export async function adamCall(tool, args = {}, organismId = "default") {
