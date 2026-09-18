@@ -53,8 +53,9 @@ export function failEve() {
 export function adamBin() {
   const cands = [
     V("adam/target/release/adam-mcp"), V("adam/target/release/adam-mcp.exe"),
-    V("adam/bin/adam-mcp"),
+    V("adam/target/debug/adam-mcp"), V("adam/target/debug/adam-mcp.exe"),
   ];
+  // vendors/adam/bin/adam-mcp is a self-build shell wrapper, not a binary — excluded.
   return cands.find((p) => existsSync(p)) ?? null;
 }
 export function skeinSrc() {

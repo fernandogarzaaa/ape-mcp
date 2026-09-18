@@ -14,8 +14,9 @@ export function adamBinary() {
   const cands = [
     join(root, "vendors", "adam", "target", "release", process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp"),
     join(root, "vendors", "adam", "target", "debug", process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp"),
-    join(root, "vendors", "adam", "bin", "adam-mcp"),
   ];
+  // NOTE: vendors/adam/bin/adam-mcp is a self-build WRAPPER (shell script), not a
+  // binary — intentionally excluded so we never spawn it as an MCP process.
   return cands.find((p) => existsSync(p)) ?? null;
 }
 
