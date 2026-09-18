@@ -9,7 +9,7 @@ import { loadMods } from "./mods.js";
 import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
-import { createRun, getRun, updateRun } from "./runs.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
@@ -90,6 +90,24 @@ export function runStatusSummary(result) {
     recent_steps: recent,
     steps_omitted: Math.max(0, steps.length - recent.length),
   };
+}
+
+// Run-level ceilings above any single run's budget: cap concurrent forks and total
+// daily spend. Env-overridable; honest errors, never silent drops.
+function checkRunCeilings() {
+  reconcileRuns();
+  const maxConcurrent = Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4);
+  if (runningCount() >= maxConcurrent) {
+    return { error: "too_many_runs", running: runningCount(), max_concurrent: maxConcurrent, hint: "wait for a run to finish or raise APE_MAX_CONCURRENT_RUNS" };
+  }
+  const dailyCap = Number(process.env.APE_MAX_DAILY_USD ?? 25);
+  if (dailyCap > 0) {
+    const spent = spendSince(Date.now() - 86400000);
+    if (spent >= dailyCap) {
+      return { error: "daily_budget_exceeded", spent_usd: spent, daily_cap_usd: dailyCap, hint: "raise APE_MAX_DAILY_USD or wait for the window to roll" };
+    }
+  }
+  return null;
 }
 
 export async function dispatchCall(name, args = {}, ctx = {}) {
@@ -184,6 +202,8 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
       case "ape_agent_run": {
         const profile = loadProfile(a.profile);
         if (!profile) { result = { error: "profile_not_found", profile: a.profile, available: listProfiles() }; break; }
+        const ceiling = checkRunCeilings();
+        if (ceiling) { result = ceiling; break; }
         const runId = createRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default" });
         const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
         worker.unref();
@@ -193,7 +213,10 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         result = { run_id: runId, status: "running", profile: a.profile, poll: "ape_agent_status" };
         break;
       }
-      case "ape_agent_status": result = getRun(a.run_id); break;
+      case "ape_agent_status":
+        reconcileRuns();
+        result = getRun(a.run_id);
+        break;
       case "ape_agent_cancel": {
         const run = getRun(a.run_id);
         const w = runningAgents.get(a.run_id);
@@ -325,6 +348,8 @@ export async function agentMethod(method, params = {}) {
     case "agent/run": {
       const profile = loadProfile(params.profile);
       if (!profile) return { error: "profile_not_found", profile: params.profile, available: listProfiles() };
+      const ceiling = checkRunCeilings();
+      if (ceiling) return ceiling;
       const runId = createRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default" });
       const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
       worker.unref();
@@ -334,6 +359,7 @@ export async function agentMethod(method, params = {}) {
       return { run_id: runId, status: "running", profile: params.profile };
     }
     case "agent/getRun":
+      reconcileRuns();
       return getRun(params.run_id);
     case "agent/cancel": {
       const run = getRun(params.run_id);

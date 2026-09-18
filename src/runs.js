@@ -87,3 +87,36 @@ export function updateRun(runId, patch) {
   const cols = keys.map((k) => `${k} = ?`).join(", ");
   d.prepare(`UPDATE runs SET ${cols} WHERE run_id = ?`).run(...keys.map((k) => patch[k]), runId);
 }
+
+// Janitor: workers are detached forks; if one dies before updateRun() (OOM, restart),
+// its row would stay "running" forever. Reconcile by checking worker PIDs.
+export function reconcileRuns({ graceMs = 60000 } = {}) {
+  const d = open();
+  const running = d.prepare("SELECT run_id, worker_pid, started_at FROM runs WHERE status = 'running'").all();
+  let fixed = 0;
+  const now = Date.now();
+  for (const r of running) {
+    let alive = false;
+    if (r.worker_pid) {
+      try { process.kill(r.worker_pid, 0); alive = true; } catch { alive = false; }
+    }
+    const age = now - new Date(r.started_at).getTime();
+    if (!alive && age > graceMs) {
+      d.prepare("UPDATE runs SET status = 'stopped', stop_reason = 'worker_gone', finished_at = ? WHERE run_id = ?")
+        .run(new Date().toISOString(), r.run_id);
+      fixed++;
+    }
+  }
+  return { checked: running.length, fixed };
+}
+
+export function runningCount() {
+  const d = open();
+  return d.prepare("SELECT COUNT(*) AS n FROM runs WHERE status = 'running'").get().n;
+}
+
+// Total USD across runs started since the given epoch-ms (for the daily ceiling).
+export function spendSince(ms) {
+  const d = open();
+  return d.prepare("SELECT COALESCE(SUM(total_cost), 0) AS s FROM runs WHERE started_at >= ?").get(new Date(ms).toISOString()).s;
+}

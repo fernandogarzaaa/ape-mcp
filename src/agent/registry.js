@@ -47,3 +47,24 @@ export async function invokeTool(tool, args, ctx) {
   }
   return { error: "unknown_tool", name: tool.name };
 }
+
+// Whether invoking this tool with these args is destructive (mutates external or
+// organism state). Checked by the loop BEFORE invoking — the policy gate lives at
+// call time, not just in tool definitions.
+export function isDestructiveCall(tool, args) {
+  if (!tool) return false;
+  if (tool.kind === "engine") {
+    // ape_evolve is only destructive on accept/apply; propose/list are safe.
+    if (tool.apeName === "ape_evolve") {
+      return args?.action === "accept" || args?.action === "apply";
+    }
+    const def = TOOL_DEFS.find((t) => t.name === tool.apeName);
+    return def?.annotations?.destructive === true;
+  }
+  if (tool.kind === "connector") {
+    const conn = connectorList().find((c) => c.name === tool.connector);
+    const op = conn?.operations?.find((o) => o.name === args?.operation);
+    return op?.annotations?.destructive === true;
+  }
+  return false; // memory, finish, unknown tools are never destructive
+}

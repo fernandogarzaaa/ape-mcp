@@ -70,6 +70,11 @@ function ledgerSummary(entry) {
     appendFileSync(join(dir, "ledger.jsonl"), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
   } catch { /* ledger never breaks calls */ }
 }
+// Prominent audit stream for agent destructive attempts (allowed or denied) —
+// impossible to miss, separate from per-step records.
+export function auditDestructive(entry) {
+  ledgerSummary({ kind: "agent.destructive", ...entry });
+}
 
 export const dispatch = {
   status({ organism_id = "default" } = {}) {

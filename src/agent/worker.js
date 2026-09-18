@@ -1,10 +1,12 @@
 // Agent run worker — forked per run by the MCP server so agent loops never block
 // the protocol process. Reads the run row (created by the server), executes the
-// reasoning loop, streams step records to runs.db, updates the run, exits.
+// reasoning loop, streams step records to runs.db, updates the run, writes an outcome
+// memory (so future runs can recall it without the model having to store one), exits.
 import { loadProfile } from "./profiles.js";
 import { runAgent } from "./loop.js";
 import { resolveModel } from "./providers.js";
 import { getRun, updateRun, appendStep } from "../runs.js";
+import { adamCall } from "../adam-client.js";
 
 const runId = process.argv[2];
 let opts = {};
@@ -52,6 +54,12 @@ async function main() {
     outcome: typeof result.outcome === "string" ? result.outcome.slice(0, 4000) : JSON.stringify(result.outcome ?? null).slice(0, 4000),
     finished_at: new Date().toISOString(),
   });
+  // Structural feedback loop (not gated on the model calling memory.store): every run
+  // leaves an outcome record the next run on a similar objective can recall.
+  try {
+    const summary = `run ${req.profile}: objective="${String(req.objective).slice(0, 200)}" stop=${result.stop_reason} steps=${result.step_count} cost=$${Number(result.total_cost).toFixed(4)} model=${result.model_provider}/${result.model} outcome="${String(typeof result.outcome === "string" ? result.outcome : JSON.stringify(result.outcome ?? "")).slice(0, 300)}"`;
+    await adamCall("adam_memory_store", { kind: "episodic", content: summary, origin: "observation", confidence: 0.8 }, req.organism_id ?? "default");
+  } catch { /* outcome memory is best-effort; the run already succeeded */ }
   process.exit(0);
 }
 

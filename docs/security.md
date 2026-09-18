@@ -23,11 +23,18 @@ Everything else is vendored and pinned in `vendors/manifest.yaml`. No runtime
 - Host credential stores are read with **readOnly** access; APE never modifies them.
 - `ape-mcp doctor` prints hosts, never tokens.
 
-## Destructive operations — MRTR confirm
+## Destructive operations — MRTR confirm + loop policy
 
 Tools and connector ops annotated `destructive: true` return `input_required` unless
-explicitly confirmed. An agent calling a destructive connector op is told to ask the
-user; it cannot silently mutate external state.
+explicitly confirmed. Inside an agent loop (which cannot answer elicitations):
+
+- Default profile policy **denies** unattended destructive calls (`ape_evolve`
+  accept/apply, destructive connector ops). The model gets an honest
+  `destructive_not_allowed` error telling it to finish with a proposal instead.
+- Profiles may set `policy: { destructive: allow }`, still capped by
+  `limits.max_destructive` (default 1) per run.
+- **Every** destructive attempt (denied, capped, or executed) is written to the
+  prominent `agent.destructive` audit stream (trace + `ledger.jsonl`).
 
 ## Auth (local-first)
 
@@ -42,6 +49,12 @@ The **budget governor** (`max_usd`, `max_steps`, `max_tokens`, `max_wall_seconds
 only thing between a misconfigured agent loop and an unbounded bill. It is checked after
 every model call and every tool call, and each limit halts the loop independently. Not
 optional polish.
+
+Above a single run: `APE_MAX_CONCURRENT_RUNS` (default 4) caps forked workers, and
+`APE_MAX_DAILY_USD` (default 25) caps total spend per rolling 24h — both refuse new runs
+with honest errors. Stale `running` rows (dead workers) reconcile to `worker_gone` on
+status/run calls, preserving the partial ledger. Identical repeated calls halt with
+`repetition_detected` instead of burning budget.
 
 ## Mods
 

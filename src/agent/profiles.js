@@ -37,6 +37,11 @@ export function loadProfile(name) {
     max_tokens: profile.limits?.max_tokens ?? 120000,
     max_wall_seconds: profile.limits?.max_wall_seconds ?? 300,
     max_usd: profile.limits?.max_usd ?? 0.5,
+    max_destructive: profile.limits?.max_destructive ?? 1,
+    max_repeats: profile.limits?.max_repeats ?? 3,
+  };
+  profile.policy = {
+    destructive: profile.policy?.destructive === "allow" ? "allow" : "deny",
   };
   return profile;
 }

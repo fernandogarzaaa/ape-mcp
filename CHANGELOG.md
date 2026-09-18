@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Harness audit fixes (control-flow review)
+- **Destructive bypass closed**: agent-internal calls no longer silently skip
+  confirmation. Profile `policy.destructive` (default `deny`) + per-run
+  `limits.max_destructive` cap (default 1); every attempt hits the prominent
+  `agent.destructive` audit stream (trace + ledger).
+- **Connector timeouts**: per-operation `timeout_ms` (default 30s, `AbortController`);
+  a hung endpoint can no longer defeat `max_wall_seconds`.
+- **Repetition detection**: identical `(tool, args)` N times in a row halts with
+  `repetition_detected` (`limits.max_repeats`, default 3).
+- **Stale-run janitor**: dead-worker rows reconcile to `worker_gone` on status/run
+  calls, preserving partial ledgers.
+- **Run-level ceilings**: `APE_MAX_CONCURRENT_RUNS` (4) + `APE_MAX_DAILY_USD` (25),
+  both honest-refusals.
+- **Tool-output framing**: results re-enter the model marked as untrusted data.
+- **Feedback loop**: worker auto-writes a compact outcome memory after every run, so
+  the next similar objective has something real to recall.
+
 ### External review fixes (Linux clean-install audit)
 - **Safe truncation**: tool `content` text is now truncated at the value level so it is
   always valid JSON (was: sliced serialized string → `Unterminated string` crashes on

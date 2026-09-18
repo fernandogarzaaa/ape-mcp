@@ -26,6 +26,10 @@ limits:                         # budget governor — enforced every step
   max_tokens: 120000
   max_wall_seconds: 300
   max_usd: 0.50
+  max_destructive: 1            # cap on unattended destructive calls (when allowed)
+  max_repeats: 3                # halt if the same (tool, args) repeats this often
+policy:                         # destructive-action policy for the loop
+  destructive: deny              # deny (default) | allow — allow still capped + audited
 stop_conditions:
   - no_tool_call_in_step
   - explicit_final_answer

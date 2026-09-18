@@ -107,18 +107,27 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
   const auth = resolveAuth(conn);
   if (auth.error) return { error: auth.error, connector: conn.name };
   const body = renderBody(op, input);
+  // Hard timeout: engine calls have a 120s cap; connectors must not stall a step
+  // indefinitely and defeat max_wall_seconds. Per-operation `timeout_ms`, else 30s.
+  const timeoutMs = Number(op.timeout_ms ?? conn.timeout_ms ?? 30000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const init = {
     method: op.method,
     headers: { accept: "application/json", ...(auth.headers ?? {}) },
     ...(body !== null ? { body: JSON.stringify(body) } : {}),
+    signal: ctrl.signal,
   };
   try {
     const res = await fetch(url, init);
+    clearTimeout(timer);
     const text = await res.text();
     let json = null;
     try { json = JSON.parse(text); } catch { /* non-json body */ }
     return { ok: res.ok, status: res.status, operation: op.name, url, body: json ?? text.slice(0, 4000) };
   } catch (e) {
-    return { ok: false, error: "connector_fetch_failed", message: String(e?.message ?? e).slice(0, 200), url };
+    clearTimeout(timer);
+    const timedOut = e?.name === "AbortError";
+    return { ok: false, error: timedOut ? "connector_timeout" : "connector_fetch_failed", message: String(e?.message ?? e).slice(0, 200), url, timeout_ms: timedOut ? timeoutMs : undefined };
   }
 }
