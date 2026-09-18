@@ -132,8 +132,10 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         else if (run.status === "running" && run.worker_pid) { try { process.kill(run.worker_pid); } catch { /* already gone */ } }
         if (run.status === "running") {
           updateRun(a.run_id, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
+          result = { run_id: a.run_id, status: "stopped", stop_reason: "cancelled" };
+        } else {
+          result = { run_id: a.run_id, status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
         }
-        result = { run_id: a.run_id, status: "stopped", stop_reason: "cancelled", was: run.status };
         break;
       }
       case "ape_connector_list": {
@@ -208,13 +210,12 @@ export async function agentMethod(method, params = {}) {
       const run = getRun(params.run_id);
       const w = runningAgents.get(params.run_id);
       if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(params.run_id); }
-      else if (run.status === "running" && run.worker_pid) {
-        try { process.kill(run.worker_pid); } catch { /* already gone */ }
-      }
+      else if (run.status === "running" && run.worker_pid) { try { process.kill(run.worker_pid); } catch { /* already gone */ } }
       if (run.status === "running") {
         updateRun(params.run_id, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
+        return { run_id: params.run_id, status: "stopped", stop_reason: "cancelled" };
       }
-      return { run_id: params.run_id, status: "stopped", stop_reason: "cancelled" };
+      return { run_id: params.run_id, status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
     }
     default:
       return { error: "unknown_method", method };
