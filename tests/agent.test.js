@@ -294,3 +294,40 @@ test("agent: run returns an explicit receipt with outcome hash", async () => {
   assert.ok(res.receipt.outcome_hash && res.receipt.outcome_hash.length >= 4, "outcome hash present");
   assert.equal(res.receipt.ledger, "runs.db");
 });
+
+test("agent: evidence correlation agree/conflict/insufficient", async () => {
+  const { correlateEvidence, extractVerdict } = await import("../src/agent/evidence.js");
+  assert.equal(extractVerdict("genesis.audit_claim", JSON.stringify({ verdict: "SOUND" })).verdict, "positive");
+  assert.equal(extractVerdict("genesis.audit_claim", JSON.stringify({ verdict: "EXPLOITABLE" })).verdict, "negative");
+  const agree = correlateEvidence([
+    { kind: "tool", tool: "genesis.audit_claim", resultSummary: JSON.stringify({ verdict: "SOUND" }) },
+    { kind: "tool", tool: "eve.validate_experience", resultSummary: JSON.stringify({ ok: true, output: "Overall experience score : 80/100" }) },
+  ], { verifyTools: ["genesis.audit_claim", "eve.validate_experience"] });
+  assert.equal(agree.status, "agree");
+  const conflict = correlateEvidence([
+    { kind: "tool", tool: "genesis.audit_claim", resultSummary: JSON.stringify({ verdict: "SOUND" }) },
+    { kind: "tool", tool: "eve.validate_experience", resultSummary: JSON.stringify({ ok: true, output: "Overall experience score : 30/100" }) },
+  ], { verifyTools: ["genesis.audit_claim", "eve.validate_experience"] });
+  assert.equal(conflict.status, "conflict");
+  assert.ok(conflict.reasons.length >= 2, "both sides cited");
+  const none = correlateEvidence([], { verifyTools: ["genesis.audit_claim"] });
+  assert.equal(none.status, "insufficient");
+});
+
+test("agent: agree mode rejects finish on conflicting evidence", async () => {
+  // SOUND genesis + low EVE score = conflict; enforce+agree must reject finish.
+  const script = [
+    { tool: "genesis.audit_claim", args: {} },
+    { tool: "finish", args: { summary: "claim" } },
+  ];
+  const steps = [];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "enforce", evidence: "agree" } },
+    objective: "conflict",
+    onStep: (s) => steps.push(s),
+    mockScript: script,
+  });
+  // audit_claim with {} returns UNTESTED (neutral), so single neutral source = insufficient, not agree.
+  assert.notEqual(res.stop_reason, "explicit_final_answer", "finish rejected without agreeing evidence");
+  assert.ok(steps.some((s) => String(s.resultSummary).includes("finish:rejected")), "rejection recorded when gate fires");
+});

@@ -6,6 +6,7 @@ import { chat, estimateCost, toolSchemas, mockPlan, clearMock } from "./provider
 import { internalTools, invokeTool, isDestructiveCall } from "./registry.js";
 import { isRetryable, fingerprint, lookupImmunity, recordImmunity } from "./recovery.js";
 import { DEFAULT_VERIFY_TOOLS } from "./profiles.js";
+import { correlateEvidence } from "./evidence.js";
 import { compressHistory, estimateTokens } from "./context.js";
 import { shaShort, emitTrace } from "../trace.js";
 import { auditDestructive } from "../dispatch.js";
@@ -30,6 +31,18 @@ export function hasVerifyEvidence(steps, verifyTools) {
   );
 }
 
+// Grounding evaluation shared by finish and no-tool-call stops.
+// Returns {ok, reason, correlation} where ok means the run may claim success.
+function checkGrounding(steps, profile) {
+  const verifyTools = (profile.policy?.verify_tools?.length ? profile.policy.verify_tools : DEFAULT_VERIFY_TOOLS);
+  const present = hasVerifyEvidence(steps, verifyTools);
+  if (!present) return { ok: false, reason: "no-evidence", correlation: null };
+  if ((profile.policy?.evidence ?? "any") !== "agree") return { ok: true, reason: "present", correlation: null };
+  const corr = correlateEvidence(steps, { verifyTools, eveThreshold: Number(profile.policy?.eve_threshold ?? 50) });
+  if (corr.status !== "agree") return { ok: false, reason: corr.status + ": " + corr.reasons.join("; "), correlation: corr };
+  return { ok: true, reason: "agree", correlation: corr };
+}
+
 export async function runAgent({ profile, objective, organism_id = "default", onStep, mockScript, mockCostPerCall = 0, resolvedModel }) {
   const budget = makeBudget(profile.limits);
   const tools = internalTools(profile);
@@ -48,6 +61,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   let stopReason = null;
   let outcome = null;
   let unverified = false;
+  let grounding = null;
   let usedModel = modelCfg.id;
   let destructiveUsed = 0;
   let lastCallKey = null;
@@ -100,16 +114,19 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       budget.spend({ tokens, cost });
       record({ step: budget.steps, kind: "model", tool: null, durationMs: modelDur, tokens, cost, resultSummary: (resp.content ?? "").slice(0, 200) });
 
-      const toolCalls = resp.toolCalls ?? [];
+const toolCalls = resp.toolCalls ?? [];
       // Explicit finish tool = terminal, subject to the grounding gate.
       const finishCall = toolCalls.find((tc) => tc.name === "finish");
       if (finishCall) {
-        const evidence = hasVerifyEvidence(steps, ((profile.policy?.verify_tools?.length ? profile.policy.verify_tools : DEFAULT_VERIFY_TOOLS)));
+        const grounded = checkGrounding(steps, profile);
+        grounding = grounded.correlation;
         const mode = profile.policy?.verify_before_finish ?? "warn";
-        if (!evidence && mode === "enforce") {
-          // Reject: the model must produce verification evidence before finishing.
-          const msg = { error: "finish_rejected_no_evidence", hint: "call a verification tool (e.g. " + (((profile.policy?.verify_tools?.length ? profile.policy.verify_tools : DEFAULT_VERIFY_TOOLS))).join(", ") + ") and show its output before calling finish" };
-          record({ step: budget.steps, kind: "tool", tool: "finish", argsHash: shaShort(JSON.stringify(finishCall.args ?? {})), durationMs: 0, tokens: 0, cost: 0, resultSummary: "finish:rejected-no-evidence" });
+        if (!grounded.ok && mode === "enforce") {
+          // Reject: the model must produce (agreeing) verification evidence first.
+          const msg = grounded.reason.startsWith("no-evidence")
+            ? { error: "finish_rejected_no_evidence", hint: "call a verification tool and show its output before calling finish" }
+            : { error: "finish_rejected_evidence_conflict", hint: "verification sources disagree: " + grounded.reason + ". Resolve the conflict (re-verify or investigate) before calling finish" };
+          record({ step: budget.steps, kind: "tool", tool: "finish", argsHash: shaShort(JSON.stringify(finishCall.args ?? {})), durationMs: 0, tokens: 0, cost: 0, resultSummary: "finish:rejected-" + (grounded.reason.startsWith("no-evidence") ? "no-evidence" : "conflict") });
           messages.push({ role: "assistant", content: resp.content ?? "", toolCalls: [finishCall] });
           messages.push({ role: "tool", toolCallId: finishCall.id, content: JSON.stringify(msg) });
           const post = budget.check();
@@ -123,23 +140,28 @@ export async function runAgent({ profile, objective, organism_id = "default", on
         }
         stopReason = "explicit_final_answer";
         outcome = finishCall.args?.summary ?? resp.content ?? "";
-        if (!evidence && mode === "warn") {
+        if (!grounded.ok && mode === "warn") {
           unverified = true;
-          outcome = String(outcome) + "\n[unverified: no verification-evidence step in this run]";
+          outcome = String(outcome) + `\n[unverified: ${grounded.reason}]`;
         }
         break;
       }
       // No tool call at all.
       if (!toolCalls.length) {
-        const evidence = hasVerifyEvidence(steps, ((profile.policy?.verify_tools?.length ? profile.policy.verify_tools : DEFAULT_VERIFY_TOOLS)));
-        if (!evidence && (profile.policy?.verify_before_finish ?? "warn") === "warn") unverified = true;
+        const grounded = checkGrounding(steps, profile);
+        grounding = grounded.correlation ?? grounding;
+        let flag = "";
+        if (!grounded.ok && (profile.policy?.verify_before_finish ?? "warn") === "warn") {
+          unverified = true;
+          if (grounded.reason !== "no-evidence") flag = `\n[unverified: ${grounded.reason}]`;
+        }
         if (profile.stop_conditions.includes("no_tool_call_in_step")) {
           stopReason = "no_tool_call_in_step";
-          outcome = resp.content ?? "";
+          outcome = (resp.content ?? "") + flag;
           break;
         }
         stopReason = "no_tool_call_in_step";
-        outcome = resp.content ?? "";
+        outcome = (resp.content ?? "") + flag;
         break;
       }
 
@@ -229,6 +251,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     stop_reason: stopReason,
     outcome,
     unverified,
+    grounding,
     step_count: budget.steps,
     total_tokens: budget.tokens,
     total_cost: budget.usd,
@@ -241,6 +264,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       model: modelCfg.provider + "/" + usedModel,
       stop_reason: stopReason,
       unverified,
+      grounding: grounding?.status ?? null,
       steps: budget.steps,
       tokens: budget.tokens,
       cost_usd: Number(budget.usd.toFixed(6)),
