@@ -66,6 +66,32 @@ export function safeTruncate(value, maxChars) {
   return { truncated: true, note: "result exceeds display budget; see structuredContent for the full result" };
 }
 
+// Compact run summary for content.text: sufficient for the model to continue even
+// when the host does not forward structuredContent. Full step ledger stays in
+// structuredContent.result.steps.
+export function runStatusSummary(result) {
+  const steps = Array.isArray(result.steps) ? result.steps : [];
+  const recent = steps.slice(-8).map((s) => ({
+    step: s.step,
+    kind: s.kind,
+    tool: s.tool,
+    summary: String(s.resultSummary ?? "").slice(0, 160),
+  }));
+  return {
+    run_id: result.run_id,
+    status: result.status,
+    stop_reason: result.stop_reason,
+    model: result.model,
+    resolution: result.model_resolution,
+    steps: result.step_count,
+    cost_usd: result.total_cost,
+    tokens: result.total_tokens,
+    outcome: String(result.outcome ?? "").slice(0, 800),
+    recent_steps: recent,
+    steps_omitted: Math.max(0, steps.length - recent.length),
+  };
+}
+
 export async function dispatchCall(name, args = {}, ctx = {}) {
   const t0 = Date.now();
   const traceId = ctx.traceId || newTraceId();
@@ -203,9 +229,15 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
     result = { error: "handler_failed", message: String(e).slice(0, 300) };
   }
   for (const m of mods) { try { if (m.hooks?.postCall) result = (await m.hooks.postCall(name, a, result, ctx)) ?? result; } catch { /* mods never break core */ } }
+  // Display payload: for run status with many steps, emit a compact SUMMARY the model
+  // can act on from content.text alone (hosts are not required to forward
+  // structuredContent). structuredContent always carries the full record.
+  const display = (name === "ape_agent_status" && Array.isArray(result?.steps) && result.steps.length > 8)
+    ? runStatusSummary(result)
+    : safeTruncate(result, 4000);
   const out = {
     resultType: "complete", traceId,
-    content: [{ type: "text", text: JSON.stringify(safeTruncate(result, 4000)) }],
+    content: [{ type: "text", text: JSON.stringify(display) }],
     structuredContent: { tool: name, ok: !result?.error, result },
   };
   emitTrace({ traceId, tool: name, argsHash: shaShort(JSON.stringify(args)), handles: a.organism_id ?? a.node ?? "", durationMs: Date.now() - t0, resultSummary: JSON.stringify(result).slice(0, 200), modApplied: mods.map((m) => m.name).join(",") });

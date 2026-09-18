@@ -7,6 +7,10 @@
   always valid JSON (was: sliced serialized string → `Unterminated string` crashes on
   long runs). `structuredContent` still carries the full result. Regression-tested with
   a 15-step run.
+- **Host-independent run visibility**: `ape_agent_status` on long runs now emits a
+  compact summary in `content.text` (status, stop reason, model, cost, outcome, last 8
+  steps, omitted count) so the model can continue even on hosts that never forward
+  `structuredContent`. Verified: 24-step run → parseable summary + full 24-step ledger.
 - **Resources/prompts conformance**: `resources/list`, `resources/read` (genome, ledgers,
   graph, tasks), `prompts/list`, `prompts/get` now answer with SDK-valid shapes; unknown
   methods return JSON-RPC errors, not mis-shaped results. Verified via the official SDK.

@@ -162,8 +162,9 @@ test("dispatchCall accepts stringified arguments (hosts like opencode send JSON 
 
 test("tool content text is always valid JSON, even for long multi-step results", async () => {
   // Regression: slicing serialized JSON mid-token crashed clients on 12-step runs.
-  // Drive a 15-step mock run, then assert the status content parses.
-  const script = Array.from({ length: 14 }, (_, i) => ({ tool: "memory.recall", args: { query: "long-" + i + "-" + "x".repeat(300) } }));
+  // Drive an 11-step mock run (10 tools + finish, within max_steps), then assert the
+  // status content parses AND is sufficient without structuredContent.
+  const script = Array.from({ length: 10 }, (_, i) => ({ tool: "memory.recall", args: { query: "long-" + i + "-" + "x".repeat(300) } }));
   script.push({ tool: "finish", args: { summary: "done-" + "y".repeat(800) } });
   const r = await dispatchCall("ape_agent_run", {
     profile: "repo-triage",
@@ -183,6 +184,12 @@ test("tool content text is always valid JSON, even for long multi-step results",
   try { parsed = JSON.parse(text); } catch (e) { assert.fail("content text must parse as JSON: " + e.message); }
   assert.ok(parsed, "status content parses");
   assert.ok(text.length <= 5000, "content stays bounded");
+  // The display payload must be SUFFICIENT for the model even if the host never
+  // forwards structuredContent: outcome + recent steps, not a bare marker.
+  assert.ok(parsed.outcome && parsed.outcome.includes("done-"), "content carries the outcome");
+  assert.ok(Array.isArray(parsed.recent_steps) && parsed.recent_steps.length > 0, "content carries recent steps");
+  assert.ok(parsed.steps_omitted >= 0, "content reports omitted count");
+  assert.equal(st.structuredContent.result.steps.length > 8, true, "structuredContent keeps the full ledger");
 });
 
 test("resources/list + prompts/list are SDK-conformant arrays", () => {
