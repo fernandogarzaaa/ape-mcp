@@ -11,14 +11,28 @@ let db = null;
 export function runsDbPath() {
   return join(dataDir(), "runs.db");
 }
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { /* ignore */ }
+}
+function isBusy(e) {
+  return /busy|locked/i.test(String(e?.message ?? e?.errstr ?? e));
+}
 function open() {
   if (db) return db;
   mkdirSync(dataDir(), { recursive: true });
-  db = new DatabaseSync(runsDbPath());
-  db.exec("PRAGMA journal_mode=WAL");
-  db.exec("PRAGMA busy_timeout=5000");
-  db.exec("PRAGMA synchronous=NORMAL");
-  db.exec(`CREATE TABLE IF NOT EXISTS runs (
+  let lastErr = null;
+  // A forked worker may hold a write lock (WAL) while this process opens the DB
+  // (e.g. server reconciling while a worker streams steps). Retry instead of
+  // throwing SQLITE_BUSY on first contention.
+  for (let i = 0; i < 25; i++) {
+    let handle = null;
+    try {
+      handle = new DatabaseSync(runsDbPath());
+      handle.exec("PRAGMA busy_timeout=5000");
+      handle.exec("PRAGMA journal_mode=WAL");
+      handle.exec("PRAGMA synchronous=NORMAL");
+      handle.exec(`CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     profile TEXT NOT NULL,
     model TEXT NOT NULL,
@@ -34,7 +48,7 @@ function open() {
     started_at TEXT NOT NULL,
     finished_at TEXT
   )`);
-  db.exec(`CREATE TABLE IF NOT EXISTS steps (
+      handle.exec(`CREATE TABLE IF NOT EXISTS steps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
     step INTEGER NOT NULL,
@@ -47,14 +61,23 @@ function open() {
     result_summary TEXT,
     ts TEXT NOT NULL
   )`);
-  db.exec("CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id)");
-  // Migration: worker_pid added later; ensure it exists on pre-existing databases.
-  const cols = db.prepare("PRAGMA table_info(runs)").all().map((c) => c.name);
-  if (!cols.includes("worker_pid")) db.exec("ALTER TABLE runs ADD COLUMN worker_pid INTEGER");
-  if (!cols.includes("model_resolution")) db.exec("ALTER TABLE runs ADD COLUMN model_resolution TEXT");
-  if (!cols.includes("unverified")) db.exec("ALTER TABLE runs ADD COLUMN unverified INTEGER DEFAULT 0");
-  if (!cols.includes("receipt")) db.exec("ALTER TABLE runs ADD COLUMN receipt TEXT");
-  return db;
+      handle.exec("CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id)");
+      // Migration: worker_pid added later; ensure it exists on pre-existing databases.
+      const cols = handle.prepare("PRAGMA table_info(runs)").all().map((c) => c.name);
+      if (!cols.includes("worker_pid")) handle.exec("ALTER TABLE runs ADD COLUMN worker_pid INTEGER");
+      if (!cols.includes("model_resolution")) handle.exec("ALTER TABLE runs ADD COLUMN model_resolution TEXT");
+      if (!cols.includes("unverified")) handle.exec("ALTER TABLE runs ADD COLUMN unverified INTEGER DEFAULT 0");
+      if (!cols.includes("receipt")) handle.exec("ALTER TABLE runs ADD COLUMN receipt TEXT");
+      db = handle;
+      return db;
+    } catch (e) {
+      lastErr = e;
+      try { handle?.close(); } catch { /* ignore */ }
+      if (!isBusy(e)) throw e;
+      sleepSync(200);
+    }
+  }
+  throw lastErr;
 }
 
 export function createRun({ profile, model, objective, organism_id = "default" }) {
