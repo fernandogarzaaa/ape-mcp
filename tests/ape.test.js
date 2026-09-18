@@ -142,3 +142,22 @@ test("ape_evolve accept/reject route to real ADAM mutation tools (or explicit un
   if (rr._adam === "ok") assert.equal(rr.tool, "adam_reject_mutation");
   else assert.ok(["unavailable", "spawn-error", "exited", "timeout", "rpc-error"].includes(rr._adam), "explicit not silent");
 });
+
+test("dispatchCall accepts stringified arguments (hosts like opencode send JSON strings)", async () => {
+  // A tool that requires args must NOT see them as a string (spread chars) — the
+  // earlier bug: a.profile was undefined -> profile_not_found.
+  const r = await dispatchCall("ape_agent_run", JSON.stringify({
+    profile: "repo-triage",
+    objective: "regression",
+    _mockScript: [{ tool: "finish", args: { summary: "ok" } }],
+  }), { headlessBypass: true });
+  const res = r.structuredContent.result;
+  assert.notEqual(res.error, "profile_not_found", "string args must be parsed into an object");
+  assert.ok(res.run_id, "run started from stringified arguments");
+  // And the same call with an object must keep working.
+  const r2 = await dispatchCall("ape_agent_run", { profile: "repo-triage", objective: "regression", _mockScript: [{ tool: "finish", args: { summary: "ok" } }] }, { headlessBypass: true });
+  assert.ok(r2.structuredContent.result.run_id, "object args still work");
+  // Malformed string degrades to {} (honest behavior, not a crash).
+  const r3 = await dispatchCall("ape_task_get", "not-json{");
+  assert.equal(r3.structuredContent.result.status, "not_found");
+});

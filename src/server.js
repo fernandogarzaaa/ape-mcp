@@ -45,7 +45,13 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
   const t0 = Date.now();
   const traceId = ctx.traceId || newTraceId();
   const mods = await loadMods(root);
-  let a = { ...args };
+  // MCP hosts may deliver `arguments` as a JSON string (e.g. opencode) or an object.
+  let a;
+  if (typeof args === "string") {
+    try { a = JSON.parse(args) || {}; } catch { a = {}; }
+  } else {
+    a = { ...(args ?? {}) };
+  }
   for (const m of mods) { try { if (m.hooks?.preCall) a = (await m.hooks.preCall(name, a, ctx)) ?? a; } catch (e) { emitTrace({ traceId, tool: name, modApplied: m.name + ":preCall-error" }); } }
   // MRTR-style confirm for destructive evolve without explicit confirm
   if (name === "ape_evolve" && (a.action === "accept" || a.action === "apply") && a.confirm !== true && !ctx.headlessBypass) {
