@@ -6,10 +6,11 @@ VSCode with one config entry.
 ## Requirements
 
 - Node.js **>= 22.5** (uses the built-in `node:sqlite` — no native dependencies).
-- Vendored engines ship in-package. Genesis and EVE need their own npm deps on first run:
+- Vendored engines ship in-package. Genesis and EVE need their own npm deps, installed
+  automatically by the `postinstall` script on first `npm install` (no manual step).
+  If that was skipped, run manually:
   `npm --prefix vendors/genesis install --ignore-scripts` and
-  `npm --prefix vendors/eve install --ignore-scripts` (the CI workflow and `auto-update`
-  do this for you).
+  `npm --prefix vendors/eve install --ignore-scripts`.
 
 ## From npm
 
