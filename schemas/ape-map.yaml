@@ -20,6 +20,7 @@ tools:
   - { name: ape_agent_run, from: [ape(agent runtime)], args: { profile, objective, organism_id }, out: { run_id, status }, long_running: true }
   - { name: ape_agent_status, from: [ape(agent runtime)], args: { run_id }, out: { status, steps, cost, outcome } }
   - { name: ape_agent_cancel, from: [ape(agent runtime)], args: { run_id }, out: { status, stop_reason } }
+  - { name: ape_agent_analyze, from: [ape(harness evolution)], args: { profile, window, record }, out: { findings, suggestions } }
   - { name: ape_connector_list, from: [ape(connectors)], args: {}, out: { connectors: [] } }
   - { name: ape_connector_call, from: [ape(connectors)], args: { connector, operation, input, confirm }, out: { ok, status, body }, destructive_confirm: true }
 resources:

@@ -37,6 +37,7 @@ export const TOOL_DEFS = [
   { name: "ape_agent_run", description: "Invoke an agent profile against an objective; returns run_id immediately (poll ape_agent_status). provider/model override auto-detection", inputSchema: { type: "object", properties: { profile: { type: "string" }, objective: { type: "string" }, organism_id: { type: "string" }, provider: { type: "string" }, model: { type: "string" } }, required: ["profile", "objective"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_agent_status", description: "Poll an agent run: status, steps, cost, outcome", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_cancel", description: "Cancel a running agent run, preserving the partial ledger", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_analyze", description: "Analyze a profile's recent runs and propose concrete profile edits (harness evolution from trajectories)", inputSchema: { type: "object", properties: { profile: { type: "string" }, window: { type: "number" }, record: { type: "boolean" } }, required: ["profile"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_connector_call", description: "Call a user-defined connector operation (egress-allowlisted). destructive ops need confirm", inputSchema: { type: "object", properties: { connector: { type: "string" }, operation: { type: "string" }, input: { type: "object" }, confirm: { type: "boolean" } }, required: ["connector", "operation"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_connector_list", description: "List loaded connectors + their operations and egress hosts", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
 ];
@@ -228,6 +229,15 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         } else {
           result = { run_id: a.run_id, status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
         }
+        break;
+      }
+      case "ape_agent_analyze": {
+        const { analyzeProfile, recordAnalysis } = await import("./agent/analyze.js");
+        const analysis = analyzeProfile(a.profile, { window: Number(a.window ?? 20) });
+        if (a.record === true && !analysis.error) {
+          analysis.recorded = await recordAnalysis(a.profile, analysis, a.organism_id);
+        }
+        result = analysis;
         break;
       }
       case "ape_connector_list": {
