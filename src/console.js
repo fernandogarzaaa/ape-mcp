@@ -8,7 +8,7 @@ import { dispatch } from "./dispatch.js";
 import { taskList, taskGet } from "./tasks.js";
 import { loadMods } from "./mods.js";
 import { dataDir } from "./trace.js";
-import { listRuns, getRun, runningCount, spendSince } from "./runs.js";
+import { listRuns, getRun, runningCount, spendSince, stepsSince } from "./runs.js";
 import { connectorList } from "./connectors.js";
 import { listProfiles, describeProfile, loadProfile } from "./agent/profiles.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "./auth.js";
@@ -165,6 +165,58 @@ export function startConsole({ port = 0, open = false } = {}) {
     if (req.method === "GET" && url.pathname === "/api/runs/get") {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ run: getRun(url.searchParams.get("run_id")) }));
+    }
+    if (req.method === "GET" && url.pathname === "/api/runs/stream") {
+      // Server-sent events: push run/step/spend changes instead of polling.
+      // The writer (detached worker) and this reader share runs.db (WAL);
+      // we diff snapshots every second and emit only what changed.
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      let lastStepId = Number(url.searchParams.get("since_step") || 0);
+      let lastStatuses = new Map();
+      let alive = true;
+      req.on("close", () => { alive = false; clearInterval(timer); });
+      const send = (event, data) => {
+        if (!alive) return false;
+        try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); return true; }
+        catch { alive = false; return false; }
+      };
+      const tick = () => {
+        if (!alive) return;
+        try {
+          // New/changed runs.
+          const runs = listRuns(50);
+          for (const r of runs) {
+            const prev = lastStatuses.get(r.run_id);
+            if (prev === undefined || prev !== r.status) {
+              lastStatuses.set(r.run_id, r.status);
+              if (!send("run", r)) return;
+            }
+          }
+          // New steps.
+          const steps = stepsSince(lastStepId, 100);
+          for (const s of steps) {
+            lastStepId = Math.max(lastStepId, s.id);
+            if (!send("step", s)) return;
+          }
+          // Spend (cheap; drives the header strip live).
+          const dailyCap = Number(process.env.APE_MAX_DAILY_USD ?? 25);
+          const maxConcurrent = Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4);
+          send("spend", {
+            today_usd: spendSince(Date.now() - 86400000),
+            daily_cap_usd: dailyCap,
+            running: runningCount(),
+            max_concurrent: maxConcurrent,
+          });
+          res.write(": ping\n\n");
+        } catch { /* next tick */ }
+      };
+      const timer = setInterval(tick, 1000);
+      tick();
+      return;
     }
     if (req.method === "GET" && url.pathname === "/api/spend") {
       const dailyCap = Number(process.env.APE_MAX_DAILY_USD ?? 25);

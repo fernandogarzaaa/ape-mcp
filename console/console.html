@@ -63,7 +63,27 @@ async function init(){const t=await(await fetch("/api/tools")).json();tools=t.to
 async function poll(){const r=await(await fetch("/api/trace?since="+since)).json();since=r.count||since;const tb=document.getElementById("rows");(r.events||[]).slice(-30).forEach(e=>{const tr=document.createElement("tr");tr.className="fadein";tr.innerHTML=`<td>${(e.ts||"").slice(11,19)}</td><td>${e.tool}</td><td>${e.durationMs}</td><td>${(e.resultSummary||"").slice(0,120)}</td>`;tb.prepend(tr);});while(tb.rows.length>30)tb.deleteRow(-1);try{const t=await(await fetch("/api/tasks")).json();const tt=document.getElementById("taskrows");tt.innerHTML=(t.tasks||[]).map(x=>`<tr><td>${x.id}</td><td>${x.tool}</td><td>${x.status}</td><td>${(x.finished||"â€”").slice(11,19)}</td></tr>`).join("");}catch{}try{const L=await(await fetch("/api/ledger")).json();document.getElementById("ledgerrows").innerHTML=(L.entries||[]).map(e=>{const d=(e.kind||"")==="agent.destructive";return `<tr${d?' style="background:#3b1a1a"':""}><td>${(e.ts||"").slice(11,19)}</td><td>${d?"⚠ "+e.kind:e.kind||""}</td><td>${e.verdict||""} ${e.ledger_entry||""} ${e.tool||""}</td></tr>`;}).join("");}catch{}try{const S=await(await fetch("/api/spend")).json();document.getElementById("spend").textContent=`· spend $${Number(S.today_usd||0).toFixed(4)}/$${S.daily_cap_usd} · runs ${S.running}/${S.max_concurrent}`;}catch{}}
 async function call(){const name=document.getElementById("tool").value;let a={};try{a=JSON.parse(document.getElementById("args").value||"{}")}catch(e){document.getElementById("out").textContent="bad JSON args";return}const r=await(await fetch("/api/call",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,arguments:a})})).json();document.getElementById("out").textContent=JSON.stringify(r,null,2).slice(0,6000);poll();}
 async function pollSlow(){try{const g=await(await fetch("/api/graph")).json();document.getElementById("graph").textContent=(g.graph?.output||JSON.stringify(g.graph)).slice(0,3000);}catch{document.getElementById("graph").textContent="graph unavailable";}try{const e=await(await fetch("/api/experience")).json();document.getElementById("exp").innerHTML=(e.runs||[]).length?(e.runs||[]).map(x=>`<div><b>${x.tool}</b> <span class="muted">${(x.ts||"").slice(11,19)} · ${x.durationMs}ms</span><br/>${(x.resultSummary||"").slice(0,240)}</div>`).join(""):"no EVE runs yet — use ape_validate_experience";}catch{}try{const m=await(await fetch("/api/mods")).json();document.getElementById("mods").innerHTML=(m.mods||[]).map(x=>`<div>${x.name} <span class="muted">v${x.version} · preCall=${x.preCall} postCall=${x.postCall}</span></div>`).join("")+'<div class="muted">Toggle: mods/&lt;name&gt;/mod.json {"enabled":false}.</div>';}catch{}}
-init();poll();pollSlow();pollRuns();pollAgent();setInterval(poll,2000);setInterval(pollSlow,10000);setInterval(pollRuns,5000);
+init();poll();pollSlow();pollRuns();pollAgent();setInterval(poll,2000);setInterval(pollSlow,10000);
+let sseOk = false;
+try {
+  const es = new EventSource("/api/runs/stream");
+  es.addEventListener("run", () => { sseOk = true; pollRuns(); });
+  es.addEventListener("step", (e) => {
+    sseOk = true;
+    try {
+      const s = JSON.parse(e.data);
+      const tb = document.getElementById("runrows");
+      if (tb && !document.getElementById("tab-runs").hidden) pollRuns();
+    } catch {}
+  });
+  es.addEventListener("spend", (e) => {
+    try {
+      const S = JSON.parse(e.data);
+      document.getElementById("spend").textContent = `· spend $${Number(S.today_usd||0).toFixed(4)}/$${S.daily_cap_usd} · runs ${S.running}/${S.max_concurrent} · live`;
+    } catch {}
+  });
+  es.onerror = () => { try { es.close(); } catch {} if (!sseOk) setInterval(pollRuns, 5000); };
+} catch { setInterval(pollRuns, 5000); }
 async function pollRuns(){try{const R=await(await fetch("/api/runs")).json();const tb=document.getElementById("runrows");tb.innerHTML=(R.runs||[]).map(x=>`<tr data-run="${x.run_id}" onclick="showRun('${x.run_id}')" style="cursor:pointer"><td>${(x.run_id||"").slice(0,13)}</td><td>${x.profile||""}</td><td>${(x.model||"").slice(0,28)}</td><td>${x.status||""}${x.unverified?" ⚠":""}</td><td>${x.step_count??""}</td><td>$${Number(x.total_cost||0).toFixed(4)}</td><td>${(x.started_at||"").slice(11,19)}</td></tr>`).join("");}catch{}}
 async function showRun(id){try{const R=await(await fetch("/api/runs/get?run_id="+encodeURIComponent(id))).json();const r=R.run||{};const steps=(r.steps||[]).map(s=>`#${s.step} [${s.kind}] ${s.tool||"model"} ${s.durationMs||0}ms ${s.tokens||0}tok $${Number(s.cost||0).toFixed(5)}\n  ${(s.resultSummary||"").slice(0,200)}`).join("\n");document.getElementById("rundetail").textContent=`${r.run_id}\nprofile=${r.profile} model=${r.model} stop=${r.stop_reason}${r.unverified?" UNVERIFIED":""}\nsteps=${r.step_count} tokens=${r.total_tokens} cost=$${Number(r.total_cost||0).toFixed(5)}\noutcome: ${(r.outcome||"").slice(0,600)}\n--- steps ---\n${steps.slice(-3000)}`;}catch{document.getElementById("rundetail").textContent="run unavailable";}}
 let editKind=null,editName=null;
