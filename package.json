@@ -22,7 +22,8 @@
     "docs",
     "ape.config.example.yaml",
     "README.md",
-    "NOTICE.md"
+    "NOTICE.md",
+    "LICENSE"
   ],
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
