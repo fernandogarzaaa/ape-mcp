@@ -33,8 +33,8 @@ Check "server-ready" (WaitReady "$api/discover")
 
 try { $d = Invoke-RestMethod -Uri "$api/discover"; Check "discover" ($d.protocol -eq "2026-07-28") $d.protocol }
 catch { Check "discover" $false $_ }
-try { $t = Invoke-RestMethod -Uri "$api/tools"; Check "tools-list-20" ($t.tools.Count -eq 20) ("count=" + $t.tools.Count) }
-catch { Check "tools-list-20" $false $_ }
+try { $t = Invoke-RestMethod -Uri "$api/tools"; Check "tools-list-21" ($t.tools.Count -eq 21) ("count=" + $t.tools.Count) }
+catch { Check "tools-list-21" $false $_ }
 
 # status + real payload verification (not just resultType)
 try {

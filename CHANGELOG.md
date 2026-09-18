@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Harness evolution from trajectories (#6)
+- `ape_agent_analyze {profile, window, record}`: computes completion rate, stop-reason
+  distribution, cost/step medians, unverified and repetition rates from the run ledger,
+  and proposes concrete profile patches (raise `max_steps` to p90, enforce
+  verification, add fallback provider). Optional `record` persists the learning as an
+  ADAM belief. Console Agent tab has per-profile [analyze] with patch display.
+
 ### Push channel (live runs without polling)
 - `GET /api/runs/stream` (SSE): pushes `run`, `step`, and `spend` events by
   diffing the shared `runs.db` every second; console subscribes via EventSource
