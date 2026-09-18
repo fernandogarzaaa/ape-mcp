@@ -167,6 +167,7 @@ export async function credentialFor(provider) {
     groq: "GROQ_API_KEY",
     google: "GOOGLE_API_KEY",
     nebius: "APE_NEBIUS_API_KEY",
+    opencode: "OPENCODE_API_KEY",
   };
   const env = envMap[provider];
   if (env && process.env[env]) return { key: process.env[env], source: "environment" };

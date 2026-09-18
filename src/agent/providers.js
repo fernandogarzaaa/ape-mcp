@@ -26,9 +26,10 @@ const BASE_URLS = {
   openrouter: "https://openrouter.ai/api/v1",
   groq: "https://api.groq.com/openai/v1",
   nebius: process.env.APE_NEBIUS_BASE_URL || "https://api.studio.nebius.com/v1",
+  opencode: process.env.APE_OPENCODE_BASE_URL || "https://opencode.ai/zen/v1",
   local: process.env.APE_LOCAL_BASE_URL || "http://localhost:11434/v1",
 };
-const OPENAI_COMPAT = new Set(["openai", "openrouter", "groq", "nebius", "local"]);
+const OPENAI_COMPAT = new Set(["openai", "openrouter", "groq", "nebius", "opencode", "local"]);
 
 const DEFAULT_MODELS = {
   anthropic: "claude-sonnet-4-6",
@@ -36,6 +37,7 @@ const DEFAULT_MODELS = {
   openrouter: "anthropic/claude-sonnet-4-6",
   groq: "llama-3.3-70b-versatile",
   nebius: "deepseek-ai/DeepSeek-V4-Flash-0731",
+  opencode: "muse-spark-1.3-contributor-free",
   local: null,
 };
 
@@ -255,6 +257,7 @@ export async function chat(cfg, { system, messages, tools }) {
     case "openrouter":
     case "groq":
     case "nebius":
+    case "opencode":
     case "local":
       return await openaiChat(cfg, system, messages, tools);
     default:

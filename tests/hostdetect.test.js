@@ -157,4 +157,19 @@ test("hostdetect: ape_status active_provider never leaks key material", async ()
   } finally { if (prevHome) process.env.OPENCODE_HOME = prevHome; else delete process.env.OPENCODE_HOME; }
 });
 
+test("hostdetect: opencode provider resolves from host store with zen base URL", async () => {
+  const prevHome = process.env.OPENCODE_HOME;
+  const home = tempDir();
+  writeFileSync(join(home, "auth.json"), JSON.stringify({ opencode: { type: "api", key: "sk-opencode-test" } }));
+  process.env.OPENCODE_HOME = home;
+  try {
+    const { credentialFor } = await import("../src/agent/hostdetect.js");
+    const cred = await credentialFor("opencode");
+    assert.equal(cred.key, "sk-opencode-test");
+    const r = await resolveModel({ provider: "opencode", id: "muse-spark-1.3-contributor-free" });
+    assert.equal(r.provider, "opencode");
+    assert.equal(r.resolution, "explicit");
+  } finally { if (prevHome) process.env.OPENCODE_HOME = prevHome; else delete process.env.OPENCODE_HOME; }
+});
+
 test.after(cleanup);
