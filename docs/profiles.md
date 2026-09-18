@@ -86,6 +86,13 @@ detected local model (free); everything else uses normal resolution. The decisio
 be judged from the ledger later. Explicit `provider`/`model` on the run, or
 `policy: { routing: false }`, bypasses routing entirely.
 
+## Structural recall
+
+Every run automatically hydrates its context with similar past outcomes before the
+loop starts (ranked by text similarity, thresholded — no match means no injection).
+This does not depend on the model remembering to call `memory.recall`; the next run
+on a related objective starts with what worked and what failed.
+
 ## Checkpoint and resume
 
 The loop checkpoints its state (messages, budget, counters) after every model turn

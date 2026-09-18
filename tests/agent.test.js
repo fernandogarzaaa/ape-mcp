@@ -326,6 +326,32 @@ test("agent: run returns an explicit receipt with outcome hash", async () => {
   assert.equal(res.receipt.ledger, "runs.db");
 });
 
+test("agent: similar past outcomes rank above unrelated ones", async () => {
+  const { similarity, rankBySimilarity, buildHydrationContext } = await import("../src/agent/similarity.js");
+  assert.ok(similarity("fix flaky unit test on windows", "fix flaky unit test on windows") > 0.9, "identical ≈ 1");
+  assert.ok(similarity("audit the login verifier", "bake chocolate cake recipe") < 0.1, "unrelated ≈ 0");
+  const ranked = rankBySimilarity("triage flaky windows tests", [
+    { id: 1, text: "run repo-triage: triage flaky windows unit tests, passed" },
+    { id: 2, text: "chocolate cake recipe with cocoa and sugar" },
+    { id: 3, text: "run repo-triage: windows test triage, found race" },
+  ]);
+  assert.ok(ranked.length >= 2, "related outcomes surface");
+  assert.ok(!ranked.some((r) => r.id === 2), "unrelated filtered");
+  assert.ok(buildHydrationContext("triage tests", [{ text: "prior triage found a race" }]).includes("Similar past runs"));
+  assert.equal(buildHydrationContext("triage tests", [{ text: "completely unrelated zebra quantum" }]), null, "no match means no hydration");
+});
+
+test("agent: initialContext is injected ahead of the objective", async () => {
+  const script = [{ tool: "finish", args: { summary: "ctx ok" } }];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off" } },
+    objective: "ctx test",
+    mockScript: script,
+    initialContext: "Similar past runs:\n1. prior outcome here",
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+});
+
 test("agent: evidence correlation agree/conflict/insufficient", async () => {
   const { correlateEvidence, extractVerdict } = await import("../src/agent/evidence.js");
   assert.equal(extractVerdict("genesis.audit_claim", JSON.stringify({ verdict: "SOUND" })).verdict, "positive");

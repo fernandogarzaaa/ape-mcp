@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Semantic recall (structural, not model-gated)
+- Every run hydrates its context with similar past outcomes before the loop starts
+  (ADAM query + local shingle-cosine ranking, thresholded). No longer depends on the
+  model remembering to call `memory.recall`; skipped on resume to avoid duplication.
+
 ### Checkpoint and resume (#7)
 - Loop state checkpoints to `runs.db` after every model turn; `ape_agent_resume`
   (`agent/resume`) forks a replacement worker from the last step. Refuses finished

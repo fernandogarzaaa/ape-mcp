@@ -7,6 +7,7 @@ import { runAgent } from "./loop.js";
 import { resolveModel } from "./providers.js";
 import { detectProviders } from "./hostdetect.js";
 import { classifyObjective, selectRoutedModel } from "./router.js";
+import { rankBySimilarity, buildHydrationContext } from "./similarity.js";
 import { getRun, updateRun, appendStep, recentRuns, saveCheckpoint, loadCheckpoint } from "../runs.js";
 import { adamCall } from "../adam-client.js";
 
@@ -15,6 +16,19 @@ let opts = {};
 try { opts = JSON.parse(process.argv[3] ?? "{}"); } catch { /* ignore */ }
 
 if (!runId) process.exit(1);
+
+// Structural recall: fetch similar past outcomes BEFORE the loop starts, so the
+// model doesn't have to remember to call memory.recall. Best-effort; a miss
+// simply means no hydration (the run proceeds normally).
+async function hydrateContext(objective, organismId) {
+  try {
+    const r = await adamCall("adam_memory_query", { query: String(objective).slice(0, 500), top_k: 5 }, organismId);
+    if (r._adam !== "ok") return null;
+    const candidates = (r.result ?? []).map((c, i) => ({ id: i, text: c?.text ?? "" })).filter((c) => c.text);
+    if (!candidates.length) return null;
+    return buildHydrationContext(objective, candidates);
+  } catch { return null; }
+}
 
 async function main() {
   const req = getRun(runId);
@@ -70,6 +84,7 @@ async function main() {
     resolvedModel: resolved,
     routing,
     initial: opts.resume ? loadCheckpoint(runId)?.state ?? null : null,
+    initialContext: opts.resume ? null : await hydrateContext(req.objective, req.organism_id ?? "default"),
   });
   updateRun(runId, {
     status: result.stop_reason === "model_error" ? "failed" : "done",
