@@ -135,6 +135,10 @@ try {
     Check "console-trace" ($tr.count -gt 0) ("events=" + $tr.count)
     $tk = Invoke-RestMethod -Uri ($curl + "api/tasks")
     Check "console-tasks" ($null -ne $tk.tasks) ""
+    $rn = Invoke-RestMethod -Uri ($curl + "api/runs")
+    Check "console-runs" ($null -ne $rn.runs) ("runs=" + $rn.runs.Count)
+    $sp = Invoke-RestMethod -Uri ($curl + "api/spend")
+    Check "console-spend" ($null -ne $sp.today_usd) ("today=$" + $sp.today_usd)
     $md = Invoke-RestMethod -Uri ($curl + "api/mods")
     Check "console-mods" (($md.mods | Where-Object { $_.name -eq "policy-gates" }).preCall -eq $true) "policy-gates preCall live"
     $gr = Invoke-RestMethod -Uri ($curl + "api/graph")

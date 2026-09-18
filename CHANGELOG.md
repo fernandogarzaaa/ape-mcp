@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Observability: Runs tab, cost strip, Agent config tab
+- **Runs tab**: full agent-run ledger in the console (run list + expandable step
+  detail + receipts) via live `/api/runs` + `/api/runs/get`.
+- **Cost strip**: header shows today's spend vs `APE_MAX_DAILY_USD` cap + running
+  count via `/api/spend`.
+- **Destructive highlights**: `agent.destructive` ledger rows render prominently.
+- **Agent tab**: profiles + connectors browser with starter templates, in-console
+  YAML editor, and validated save to `.ape/profiles|connectors` (path-traversal
+  safe). Guidance text covers provider/model/tools/policy/connector authoring.
+- Endpoints: `/api/connectors`, `/api/profiles`, `/api/profile`, `/api/templates`,
+  `POST /api/profile/save`, `POST /api/connector/save`.
+
 ### Harness audit fixes (control-flow review)
 - **Destructive bypass closed**: agent-internal calls no longer silently skip
   confirmation. Profile `policy.destructive` (default `deny`) + per-run
