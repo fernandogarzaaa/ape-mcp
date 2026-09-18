@@ -65,8 +65,8 @@ export function egressHosts() {
 
 // --- provider:auto resolution ---
 export async function resolveModel(modelCfg, overrides = {}) {
-  const requestedProvider = overrides.provider || modelCfg?.provider || "auto";
-  const requestedModel = overrides.model || (modelCfg?.id && modelCfg.id !== "auto" ? modelCfg.id : null);
+  const requestedProvider = overrides.provider || process.env.APE_PROVIDER || modelCfg?.provider || "auto";
+  const requestedModel = overrides.model || process.env.APE_MODEL || (modelCfg?.id && modelCfg.id !== "auto" ? modelCfg.id : null);
 
   // 1. mock / local never need a key.
   if (requestedProvider === "mock") {

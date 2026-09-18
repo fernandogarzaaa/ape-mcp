@@ -7,7 +7,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dispatchCall, toolsList, discover, agentMethod } from "../src/server.js";
+import { dispatchCall, toolsList, discover, agentMethod, resourcesList, promptsList, readResource, getPrompt } from "../src/server.js";
 import { taskGet } from "../src/tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "../src/auth.js";
 import { startConsole } from "../src/console.js";
@@ -147,23 +147,32 @@ if (args.includes("--http")) {
         const msg = JSON.parse(line);
         const { id, method, params } = msg;
         if (id === undefined) continue; // notification — no response
-        let result;
-        if (method === "initialize") {
-          const requested = typeof params?.protocolVersion === "string" ? params.protocolVersion : null;
-          // Negotiate: accept any protocol version the client speaks (methods are
-          // compatible), fall back to our pin when unspecified.
-          result = { protocolVersion: requested ?? "2026-07-28", capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
-        } else if (method === "ping") {
-          result = {};
-        } else if (method === "server/discover") result = discover();
-        else if (method === "tools/list") result = toolsList();
-        else if (method === "tasks/get") result = { resultType: "complete", task: taskGet(params?.task_id) };
-        else if (method === "tools/call") result = await dispatchCall(params?.name, params?.arguments ?? {});
-        else if (method.startsWith("agent/")) result = await agentMethod(method, params ?? {});
-        else result = { error: "unknown_method", method };
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+        try {
+          let result;
+          if (method === "initialize") {
+            const requested = typeof params?.protocolVersion === "string" ? params.protocolVersion : null;
+            // Negotiate: accept any protocol version the client speaks (methods are
+            // compatible), fall back to our pin when unspecified.
+            result = { protocolVersion: requested ?? "2026-07-28", capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
+          } else if (method === "ping") {
+            result = {};
+          } else if (method === "server/discover") result = discover();
+          else if (method === "tools/list") result = toolsList();
+          else if (method === "resources/list") result = resourcesList();
+          else if (method === "resources/read") result = await readResource(params?.uri);
+          else if (method === "prompts/list") result = promptsList();
+          else if (method === "prompts/get") result = await getPrompt(params?.name, params?.arguments ?? {});
+          else if (method === "tasks/get") result = { resultType: "complete", task: taskGet(params?.task_id) };
+          else if (method === "tools/call") result = await dispatchCall(params?.name, params?.arguments ?? {});
+          else if (method.startsWith("agent/")) result = await agentMethod(method, params ?? {});
+          else throw { code: -32601, message: `unknown_method: ${method}` };
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+        } catch (e) {
+          const code = typeof e?.code === "number" ? e.code : -32603;
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message: String(e?.message ?? e).slice(0, 300) } }) + "\n");
+        }
       } catch (e) {
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32603, message: String(e).slice(0, 200) } }) + "\n");
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }) + "\n");
       }
     }
   });

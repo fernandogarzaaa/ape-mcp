@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
-import { dispatchCall, toolsList, discover, TOOL_DEFS } from "../src/server.js";
+import { dispatchCall, toolsList, discover, TOOL_DEFS, safeTruncate, resourcesList, promptsList, readResource, getPrompt } from "../src/server.js";
 import { protectedResourceDoc, checkBearer, authRequired } from "../src/auth.js";
 
 test("discover pins 2026-07-28 + tasks ext", () => {
@@ -144,8 +144,6 @@ test("ape_evolve accept/reject route to real ADAM mutation tools (or explicit un
 });
 
 test("dispatchCall accepts stringified arguments (hosts like opencode send JSON strings)", async () => {
-  // A tool that requires args must NOT see them as a string (spread chars) — the
-  // earlier bug: a.profile was undefined -> profile_not_found.
   const r = await dispatchCall("ape_agent_run", JSON.stringify({
     profile: "repo-triage",
     objective: "regression",
@@ -160,4 +158,49 @@ test("dispatchCall accepts stringified arguments (hosts like opencode send JSON 
   // Malformed string degrades to {} (honest behavior, not a crash).
   const r3 = await dispatchCall("ape_task_get", "not-json{");
   assert.equal(r3.structuredContent.result.status, "not_found");
+});
+
+test("tool content text is always valid JSON, even for long multi-step results", async () => {
+  // Regression: slicing serialized JSON mid-token crashed clients on 12-step runs.
+  // Drive a 15-step mock run, then assert the status content parses.
+  const script = Array.from({ length: 14 }, (_, i) => ({ tool: "memory.recall", args: { query: "long-" + i + "-" + "x".repeat(300) } }));
+  script.push({ tool: "finish", args: { summary: "done-" + "y".repeat(800) } });
+  const r = await dispatchCall("ape_agent_run", {
+    profile: "repo-triage",
+    objective: "long run",
+    _mockScript: script,
+  }, { headlessBypass: true });
+  const runId = r.structuredContent.result.run_id;
+  let st = null;
+  for (let i = 0; i < 40; i++) {
+    await new Promise((x) => setTimeout(x, 200));
+    const g = await dispatchCall("ape_agent_status", { run_id: runId });
+    st = g;
+    if (st.structuredContent.result.status !== "running") break;
+  }
+  const text = st.content[0].text;
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { assert.fail("content text must parse as JSON: " + e.message); }
+  assert.ok(parsed, "status content parses");
+  assert.ok(text.length <= 5000, "content stays bounded");
+});
+
+test("resources/list + prompts/list are SDK-conformant arrays", () => {
+  const rl = resourcesList();
+  assert.ok(Array.isArray(rl.resources), "resources is an array");
+  assert.ok(rl.resources.every((r) => r.uri && r.name), "each resource has uri + name");
+  const pl = promptsList();
+  assert.ok(Array.isArray(pl.prompts), "prompts is an array");
+  assert.ok(pl.prompts.every((p) => p.name), "each prompt has a name");
+});
+
+test("resources/read serves real content; unknown URIs error honestly", async () => {
+  const g = await readResource("genome://current");
+  assert.ok(Array.isArray(g.contents) && g.contents[0]?.uri === "genome://current");
+  const t = await readResource("tasks://current");
+  assert.ok(Array.isArray(t.contents));
+  await assert.rejects(readResource("nope://x"), /not found/);
+  const p = await getPrompt("ape-triage", { topic: "flaky tests" });
+  assert.ok(p.messages[0]?.content?.text?.includes("flaky tests"));
+  await assert.rejects(getPrompt("nope"), /unknown prompt/);
 });

@@ -144,6 +144,28 @@ test("hostdetect: keys are read internally but never reach summaries/ledger fiel
   } finally { if (prevHome) process.env.OPENCODE_HOME = prevHome; else delete process.env.OPENCODE_HOME; }
 });
 
+test("resolveModel: APE_PROVIDER/APE_MODEL env override active detection", async () => {
+  const prevHome = process.env.OPENCODE_HOME;
+  const prevP = process.env.APE_PROVIDER;
+  const prevM = process.env.APE_MODEL;
+  process.env.OPENCODE_HOME = makeOpencodeHome(); // active would be nebius
+  process.env.APE_PROVIDER = "groq";
+  process.env.APE_MODEL = "llama-3.3-70b-versatile";
+  const prevKey = process.env.GROQ_API_KEY;
+  process.env.GROQ_API_KEY = "sk-groq-env-override";
+  try {
+    const r = await resolveModel({ provider: "auto", id: "auto" });
+    assert.equal(r.provider, "groq", "env override wins over active detection");
+    assert.equal(r.id, "llama-3.3-70b-versatile");
+    assert.equal(r.key, "sk-groq-env-override");
+  } finally {
+    if (prevHome) process.env.OPENCODE_HOME = prevHome; else delete process.env.OPENCODE_HOME;
+    if (prevP) process.env.APE_PROVIDER = prevP; else delete process.env.APE_PROVIDER;
+    if (prevM) process.env.APE_MODEL = prevM; else delete process.env.APE_MODEL;
+    if (prevKey) process.env.GROQ_API_KEY = prevKey; else delete process.env.GROQ_API_KEY;
+  }
+});
+
 test("hostdetect: ape_status active_provider never leaks key material", async () => {
   const prevHome = process.env.OPENCODE_HOME;
   process.env.OPENCODE_HOME = makeOpencodeHome();

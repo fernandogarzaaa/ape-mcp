@@ -51,9 +51,10 @@ export function failEve() {
   return fail("eve", "bin/eve.js + dist missing; build vendors/eve");
 }
 export function adamBin() {
+  const plat = process.platform === "win32";
   const cands = [
-    V("adam/target/release/adam-mcp"), V("adam/target/release/adam-mcp.exe"),
-    V("adam/target/debug/adam-mcp"), V("adam/target/debug/adam-mcp.exe"),
+    V(plat ? "adam/target/release/adam-mcp.exe" : "adam/target/release/adam-mcp"),
+    V(plat ? "adam/target/debug/adam-mcp.exe" : "adam/target/debug/adam-mcp"),
   ];
   // vendors/adam/bin/adam-mcp is a self-build shell wrapper, not a binary — excluded.
   return cands.find((p) => existsSync(p)) ?? null;

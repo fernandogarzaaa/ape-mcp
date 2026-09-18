@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### External review fixes (Linux clean-install audit)
+- **Safe truncation**: tool `content` text is now truncated at the value level so it is
+  always valid JSON (was: sliced serialized string → `Unterminated string` crashes on
+  long runs). `structuredContent` still carries the full result. Regression-tested with
+  a 15-step run.
+- **Resources/prompts conformance**: `resources/list`, `resources/read` (genome, ledgers,
+  graph, tasks), `prompts/list`, `prompts/get` now answer with SDK-valid shapes; unknown
+  methods return JSON-RPC errors, not mis-shaped results. Verified via the official SDK.
+- **Ledger completeness**: hallucinated `unknown_tool` calls are now recorded as steps
+  (was: invisible), feeding the §8.2 hallucination metrics.
+- **Env overrides honored**: `APE_PROVIDER` / `APE_MODEL` now resolve (were documented
+  but unread); precedence explicit args → env → active → stored → local.
+- **adamBin() platform-aware**; model steps record real `duration_ms`; node:sqlite
+  warning filter matches Node's actual message; connector tests tolerate sandboxed
+  non-2xx networks.
+- **EVE on clean installs**: `pngjs` was present but vendor deps were never installed;
+  `postinstall` now installs genesis+eve deps on first `npm install` (verified live).
+
 ### Production hardening (no stubs)
 - **Console fully wired**: new live `/api/graph` (skein), `/api/mods` (real hook flags),
   `/api/experience` (recent EVE runs from trace); Graph/Experience/Mods tabs render live

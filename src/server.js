@@ -41,6 +41,31 @@ export const TOOL_DEFS = [
   { name: "ape_connector_list", description: "List loaded connectors + their operations and egress hosts", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
 ];
 
+// Truncation that preserves valid JSON. Slicing a serialized string can split
+// mid-token and produce unparseable output that crashes clients — instead we shorten
+// the VALUE (long strings, long arrays) until it fits, so the text is always
+// parseable. structuredContent carries the full result regardless.
+export function safeTruncate(value, maxChars) {
+  const shorten = (v, cap) => {
+    if (typeof v === "string") return v.length > cap ? v.slice(0, cap) + "…[truncated]" : v;
+    if (Array.isArray(v)) {
+      const items = v.length > 200 ? [...v.slice(0, 200), `…[${v.length - 200} more]`] : v;
+      return items.map((x) => (typeof x === "string" ? x : shorten(x, cap)));
+    }
+    if (v && typeof v === "object") {
+      const o = {};
+      for (const [k, x] of Object.entries(v)) o[k] = shorten(x, cap);
+      return o;
+    }
+    return v;
+  };
+  for (const cap of [1500, 500, 150, 40]) {
+    const t = shorten(value, cap);
+    if (JSON.stringify(t).length <= maxChars) return t;
+  }
+  return { truncated: true, note: "result exceeds display budget; see structuredContent for the full result" };
+}
+
 export async function dispatchCall(name, args = {}, ctx = {}) {
   const t0 = Date.now();
   const traceId = ctx.traceId || newTraceId();
@@ -180,7 +205,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
   for (const m of mods) { try { if (m.hooks?.postCall) result = (await m.hooks.postCall(name, a, result, ctx)) ?? result; } catch { /* mods never break core */ } }
   const out = {
     resultType: "complete", traceId,
-    content: [{ type: "text", text: JSON.stringify(result).slice(0, 4000) }],
+    content: [{ type: "text", text: JSON.stringify(safeTruncate(result, 4000)) }],
     structuredContent: { tool: name, ok: !result?.error, result },
   };
   emitTrace({ traceId, tool: name, argsHash: shaShort(JSON.stringify(args)), handles: a.organism_id ?? a.node ?? "", durationMs: Date.now() - t0, resultSummary: JSON.stringify(result).slice(0, 200), modApplied: mods.map((m) => m.name).join(",") });
@@ -189,6 +214,60 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
 
 export function toolsList() {
   return { protocol: PROTOCOL, tools: [...TOOL_DEFS].sort((a, b) => a.name.localeCompare(b.name)), ttlMs: 60000, cacheScope: "public" };
+}
+
+const RESOURCES = [
+  { uri: "genome://current", name: "genome", description: "Current ADAM genome payload", mimeType: "application/json" },
+  { uri: "ledger://genesis", name: "genesis-ledger", description: "Genesis hash-chained audit ledger", mimeType: "application/json" },
+  { uri: "ledger://ape", name: "ape-ledger", description: "APE run/ledger summaries", mimeType: "application/json" },
+  { uri: "graph://skein/current", name: "skein-graph", description: "Current Skein task graph", mimeType: "application/json" },
+  { uri: "tasks://current", name: "tasks", description: "Background task list", mimeType: "application/json" },
+];
+const PROMPTS = [
+  { name: "ape-triage", description: "Triage an issue: recall prior decisions, verify, store the outcome", arguments: [{ name: "topic", required: true }] },
+  { name: "ape-validate", description: "Run a seeded EVE validation and store the decision", arguments: [{ name: "url", required: true }] },
+  { name: "ape-audit", description: "Audit a verifier with Genesis and record the verdict", arguments: [{ name: "verifier", required: true }] },
+];
+
+export function resourcesList() {
+  return { resources: RESOURCES };
+}
+export function promptsList() {
+  return { prompts: PROMPTS };
+}
+export async function readResource(uri) {
+  if (uri === "genome://current") {
+    const g = await adamCall("adam_genome", {}, "default");
+    return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(g).slice(0, 8000) }] };
+  }
+  if (uri === "ledger://genesis" || uri === "ledger://ape") {
+    const dir = dataDir();
+    const file = uri === "ledger://genesis" ? "genesis-ledger.db" : "ledger.jsonl";
+    const p = join(dir, file);
+    if (!existsSync(p)) return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ present: false, hint: "no entries yet" }) }] };
+    if (file.endsWith(".jsonl")) {
+      const lines = readFileSync(p, "utf8").split("\n").filter(Boolean).slice(-20);
+      return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(lines.map((l) => { try { return JSON.parse(l); } catch { return l; } })) }] };
+    }
+    return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ present: true, path: p, note: "sqlite ledger; query via ape_report" }) }] };
+  }
+  if (uri === "graph://skein/current") {
+    const g = await dispatch.orchestrate({ op: "graph" });
+    return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(g).slice(0, 8000) }] };
+  }
+  if (uri === "tasks://current") {
+    return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(taskList()) }] };
+  }
+  throw Object.assign(new Error(`resource not found: ${uri}`), { code: -32002 });
+}
+export async function getPrompt(name, args = {}) {
+  const bodies = {
+    "ape-triage": `Triage "${args.topic ?? "{topic}"}": first call ape_recall with the topic, then verify with the relevant engine tool, then ape_remember the decision. Never claim completion without evidence.`,
+    "ape-validate": `Validate "${args.url ?? "{url}"}" with ape_validate_experience (always pass a seed), then ape_remember the decision with the seed and persona.`,
+    "ape-audit": `Audit verifier "${args.verifier ?? "{verifier}"}" with ape_audit_claim, record the verdict, and append the ledger entry reference.`,
+  };
+  if (!bodies[name]) throw Object.assign(new Error(`unknown prompt: ${name}`), { code: -32602 });
+  return { messages: [{ role: "user", content: { type: "text", text: bodies[name] } }] };
 }
 export function discover() {
   return {

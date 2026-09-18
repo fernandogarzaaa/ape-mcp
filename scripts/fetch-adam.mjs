@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const TAG = process.env.APE_ADAM_TAG || "v1.2.0";
+const TAG = process.env.APE_ADAM_TAG || "v1.0.0";
 
 export function assetFor(platform = process.platform, arch = process.arch) {
   if (platform === "win32") return "adam-mcp-win-x64.exe";

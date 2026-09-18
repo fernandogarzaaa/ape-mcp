@@ -125,3 +125,21 @@ test("agent: profiles load bundled defaults + list works", () => {
   assert.ok(loadProfile("persona-validate"));
   assert.ok(listProfiles().includes("repo-triage"));
 });
+
+test("agent: hallucinated tool names are recorded in the ledger (not invisible)", async () => {
+  const script = [
+    { tool: "not_a_real_tool_xyz", args: { x: 1 } },
+    { tool: "finish", args: { summary: "done" } },
+  ];
+  const steps = [];
+  const res = await runAgent({
+    profile: baseProfile,
+    objective: "hallucinate",
+    onStep: (s) => steps.push(s),
+    mockScript: script,
+  });
+  const bad = steps.filter((s) => s.kind === "tool" && s.tool === "not_a_real_tool_xyz");
+  assert.ok(bad.length >= 1, "hallucinated tool call recorded");
+  assert.ok(bad[0].resultSummary.includes("unknown_tool"), "recorded as unknown_tool");
+  assert.equal(res.stop_reason, "explicit_final_answer");
+});

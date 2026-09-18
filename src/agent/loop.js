@@ -34,6 +34,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       // Model call with provider fallback chain.
       let resp = null;
       let lastErr = null;
+      const modelT0 = Date.now();
       for (const p of providerCfgs) {
         try {
           resp = await chat({ provider: p.provider, id: p.id, key: p.key, baseUrl: p.baseUrl, convKey }, { system, messages, tools: schemas });
@@ -41,6 +42,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
           break;
         } catch (e) { lastErr = e; }
       }
+      const modelDur = Date.now() - modelT0;
       if (!resp) {
         stopReason = "model_error";
         outcome = { error: String(lastErr?.message ?? lastErr ?? "model call failed").slice(0, 400) };
@@ -52,7 +54,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       const tokens = resp.usage.inputTokens + resp.usage.outputTokens;
       const cost = resp.mockCost ?? estimateCost(usedModel, resp.usage);
       budget.spend({ tokens, cost });
-      record({ step: budget.steps, kind: "model", tool: null, durationMs: 0, tokens, cost, resultSummary: (resp.content ?? "").slice(0, 200) });
+      record({ step: budget.steps, kind: "model", tool: null, durationMs: modelDur, tokens, cost, resultSummary: (resp.content ?? "").slice(0, 200) });
 
       const toolCalls = resp.toolCalls ?? [];
       // Explicit finish tool = terminal.
@@ -83,10 +85,13 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       for (const tc of toolCalls) {
         const tool = tools.find((t) => t.name === tc.name);
         let res;
+        const t0 = Date.now();
         if (!tool) {
+          // Hallucinated tool name — recorded, not invisible. This is the ledger
+          // signal for unverified-claim / hallucination metrics.
           res = { error: "unknown_tool", name: tc.name };
+          record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "unknown_tool" });
         } else {
-          const t0 = Date.now();
           try { res = await invokeTool(tool, tc.args ?? {}, { organism_id }); }
           catch (e) { res = { error: "handler_failed", message: String(e).slice(0, 200) }; }
           const dur = Date.now() - t0;
