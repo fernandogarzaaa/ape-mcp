@@ -9,7 +9,7 @@ import { loadMods } from "./mods.js";
 import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
-import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince } from "./runs.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
@@ -37,6 +37,7 @@ export const TOOL_DEFS = [
   { name: "ape_agent_run", description: "Invoke an agent profile against an objective; returns run_id immediately (poll ape_agent_status). provider/model override auto-detection", inputSchema: { type: "object", properties: { profile: { type: "string" }, objective: { type: "string" }, organism_id: { type: "string" }, provider: { type: "string" }, model: { type: "string" } }, required: ["profile", "objective"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_agent_status", description: "Poll an agent run: status, steps, cost, outcome", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_cancel", description: "Cancel a running agent run, preserving the partial ledger", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_resume", description: "Resume a stopped/failed run from its last checkpoint with a replacement worker", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_agent_analyze", description: "Analyze a profile's recent runs and propose concrete profile edits (harness evolution from trajectories)", inputSchema: { type: "object", properties: { profile: { type: "string" }, window: { type: "number" }, record: { type: "boolean" } }, required: ["profile"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_connector_call", description: "Call a user-defined connector operation (egress-allowlisted). destructive ops need confirm", inputSchema: { type: "object", properties: { connector: { type: "string" }, operation: { type: "string" }, input: { type: "object" }, confirm: { type: "boolean" } }, required: ["connector", "operation"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_connector_list", description: "List loaded connectors + their operations and egress hosts", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
@@ -91,6 +92,47 @@ export function runStatusSummary(result) {
     recent_steps: recent,
     steps_omitted: Math.max(0, steps.length - recent.length),
   };
+}
+
+// Resume a stopped/failed run from its last checkpoint with a replacement worker.
+// Refuses live workers, finished runs, missing checkpoints, and resume-cap excess.
+function resumeRun(runId, workerOpts = {}) {
+  reconcileRuns();
+  const run = getRun(runId);
+  if (!run || run.status === "not_found") return { error: "run_not_found", run_id: runId };
+  if (run.status === "done") return { error: "run_finished", run_id: runId, status: run.status, hint: "completed runs cannot resume" };
+  const w = runningAgents.get(runId);
+  if (w) return { error: "run_active", run_id: runId, hint: "a live worker owns this run; cancel first to take over" };
+  if (run.status === "running") {
+    if (run.worker_pid) {
+      try { process.kill(run.worker_pid, 0); return { error: "run_active", run_id: runId, hint: "worker process still alive; cancel first" }; }
+      catch { /* pid dead — fall through to resume */ }
+    } else {
+      return { error: "run_active", run_id: runId, hint: "run is marked running with no dead worker proof; cancel first" };
+    }
+  }
+  const maxResumes = Number(process.env.APE_MAX_RESUMES ?? 3);
+  if ((run.resumes ?? 0) >= maxResumes) {
+    return { error: "resume_cap_reached", run_id: runId, resumes: run.resumes, max: maxResumes };
+  }
+  const cp = loadCheckpoint(runId);
+  if (!cp) return { error: "no_checkpoint", run_id: runId, hint: "this run predates checkpointing or never reached a model turn" };
+  const ceiling = checkRunCeilings();
+  if (ceiling) return ceiling;
+  const profile = loadProfile(run.profile);
+  if (!profile) return { error: "profile_not_found", profile: run.profile };
+  updateRun(runId, {
+    status: "running",
+    stop_reason: null,
+    finished_at: null,
+    resumes: (run.resumes ?? 0) + 1,
+  });
+  const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ ...workerOpts, resume: true })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
+  worker.unref();
+  updateRun(runId, { worker_pid: worker.pid });
+  worker.on("exit", () => runningAgents.delete(runId));
+  runningAgents.set(runId, worker);
+  return { run_id: runId, status: "running", resumed_from_step: cp.step, resumes: (run.resumes ?? 0) + 1, poll: "ape_agent_status" };
 }
 
 // Run-level ceilings above any single run's budget: cap concurrent forks and total
@@ -229,6 +271,10 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         } else {
           result = { run_id: a.run_id, status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
         }
+        break;
+      }
+      case "ape_agent_resume": {
+        result = resumeRun(a.run_id, { mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model });
         break;
       }
       case "ape_agent_analyze": {
@@ -382,6 +428,8 @@ export async function agentMethod(method, params = {}) {
       }
       return { run_id: params.run_id, status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
     }
+    case "agent/resume":
+      return resumeRun(params.run_id, { mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model });
     default:
       return { error: "unknown_method", method };
   }

@@ -7,7 +7,7 @@ import { runAgent } from "./loop.js";
 import { resolveModel } from "./providers.js";
 import { detectProviders } from "./hostdetect.js";
 import { classifyObjective, selectRoutedModel } from "./router.js";
-import { getRun, updateRun, appendStep, recentRuns } from "../runs.js";
+import { getRun, updateRun, appendStep, recentRuns, saveCheckpoint, loadCheckpoint } from "../runs.js";
 import { adamCall } from "../adam-client.js";
 
 const runId = process.argv[2];
@@ -64,10 +64,12 @@ async function main() {
     objective: req.objective,
     organism_id: req.organism_id ?? "default",
     onStep: (step) => appendStep(runId, step),
+    onCheckpoint: (state) => saveCheckpoint(runId, state.budget?.steps ?? 0, state),
     mockScript: opts.mockScript,
     mockCostPerCall: opts.mockCostPerCall,
     resolvedModel: resolved,
     routing,
+    initial: opts.resume ? loadCheckpoint(runId)?.state ?? null : null,
   });
   updateRun(runId, {
     status: result.stop_reason === "model_error" ? "failed" : "done",

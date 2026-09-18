@@ -214,6 +214,37 @@ test("agent: concurrent cap refuses new runs honestly", async () => {
   }
 });
 
+test("agent: resume restarts a stopped run from its checkpoint", async () => {
+  const { createRun, updateRun, saveCheckpoint } = await import("../src/runs.js");
+  // Stopped run WITH checkpoint -> resumes.
+  const id = createRun({ profile: "repo-triage", model: "mock/mock", objective: "resume me" });
+  updateRun(id, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
+  saveCheckpoint(id, 3, { messages: [{ role: "user", content: "resume me" }], budget: { steps: 3, tokens: 10, usd: 0 }, usedModel: "mock-model" });
+  const re = await dispatchCall("ape_agent_resume", {
+    run_id: id, _mockScript: [{ tool: "finish", args: { summary: "resumed done" } }],
+  }, { headlessBypass: true });
+  const rr = re.structuredContent.result;
+  assert.equal(rr.run_id, id);
+  assert.equal(rr.status, "running", "resume restarts: " + JSON.stringify(rr).slice(0, 200));
+  assert.ok((rr.resumed_from_step ?? 0) >= 0);
+  // Let the resumed worker finish to avoid cross-test interference, then check.
+  for (let i = 0; i < 40; i++) {
+    await new Promise((x) => setTimeout(x, 250));
+    const g = await dispatchCall("ape_agent_status", { run_id: id });
+    if (g.structuredContent.result.status !== "running") break;
+  }
+  // Done runs refuse.
+  const doneId = createRun({ profile: "repo-triage", model: "mock/mock", objective: "quick" });
+  updateRun(doneId, { status: "done", stop_reason: "explicit_final_answer", finished_at: new Date().toISOString() });
+  const rd = await dispatchCall("ape_agent_resume", { run_id: doneId }, { headlessBypass: true });
+  assert.equal(rd.structuredContent.result.error, "run_finished", "completed runs refuse resume");
+  // Missing checkpoint refuses honestly.
+  const nocp = createRun({ profile: "repo-triage", model: "mock/mock", objective: "nocp" });
+  updateRun(nocp, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
+  const rn = await dispatchCall("ape_agent_resume", { run_id: nocp }, { headlessBypass: true });
+  assert.equal(rn.structuredContent.result.error, "no_checkpoint");
+});
+
 test("agent: grounding gate warn mode flags unverified finish", async () => {
   const script = [
     { tool: "memory.recall", args: { query: "x" } },

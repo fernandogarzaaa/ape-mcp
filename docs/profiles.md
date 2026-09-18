@@ -86,6 +86,14 @@ detected local model (free); everything else uses normal resolution. The decisio
 be judged from the ledger later. Explicit `provider`/`model` on the run, or
 `policy: { routing: false }`, bypasses routing entirely.
 
+## Checkpoint and resume
+
+The loop checkpoints its state (messages, budget, counters) after every model turn
+into `runs.db`. A stopped or failed run with a checkpoint can be resumed with
+`ape_agent_resume {run_id}` (or `agent/resume`), which forks a replacement worker
+from the last step. Completed runs refuse; live workers must be cancelled first;
+resumes are capped (`APE_MAX_RESUMES`, default 3).
+
 ## The reasoning loop
 
 ```

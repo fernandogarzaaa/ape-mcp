@@ -62,12 +62,20 @@ function open() {
     ts TEXT NOT NULL
   )`);
       handle.exec("CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id)");
+      // Checkpoints: serialized loop state per run for resume (one row per run, upserted).
+      handle.exec(`CREATE TABLE IF NOT EXISTS checkpoints (
+    run_id TEXT PRIMARY KEY,
+    step INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
       // Migration: worker_pid added later; ensure it exists on pre-existing databases.
       const cols = handle.prepare("PRAGMA table_info(runs)").all().map((c) => c.name);
       if (!cols.includes("worker_pid")) handle.exec("ALTER TABLE runs ADD COLUMN worker_pid INTEGER");
       if (!cols.includes("model_resolution")) handle.exec("ALTER TABLE runs ADD COLUMN model_resolution TEXT");
       if (!cols.includes("unverified")) handle.exec("ALTER TABLE runs ADD COLUMN unverified INTEGER DEFAULT 0");
       if (!cols.includes("receipt")) handle.exec("ALTER TABLE runs ADD COLUMN receipt TEXT");
+      if (!cols.includes("resumes")) handle.exec("ALTER TABLE runs ADD COLUMN resumes INTEGER DEFAULT 0");
       db = handle;
       return db;
     } catch (e) {
@@ -159,4 +167,18 @@ export function stepsSince(lastId = 0, limit = 100) {
 export function spendSince(ms) {
   const d = open();
   return d.prepare("SELECT COALESCE(SUM(total_cost), 0) AS s FROM runs WHERE started_at >= ?").get(new Date(ms).toISOString()).s;
+}
+
+export function saveCheckpoint(runId, step, state) {
+  const d = open();
+  d.prepare("INSERT INTO checkpoints (run_id, step, state, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET step = excluded.step, state = excluded.state, updated_at = excluded.updated_at")
+    .run(runId, step, JSON.stringify(state), new Date().toISOString());
+}
+
+export function loadCheckpoint(runId) {
+  const d = open();
+  const row = d.prepare("SELECT * FROM checkpoints WHERE run_id = ?").get(runId);
+  if (!row) return null;
+  try { return { ...row, state: JSON.parse(row.state) }; }
+  catch { return null; }
 }

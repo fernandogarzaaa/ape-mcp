@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Checkpoint and resume (#7)
+- Loop state checkpoints to `runs.db` after every model turn; `ape_agent_resume`
+  (`agent/resume`) forks a replacement worker from the last step. Refuses finished
+  runs, live workers, missing checkpoints, and resume-cap excess — all honestly.
+
 ### Task-based model routing (P1)
 - Worker classifies the objective (trivial/coding/reasoning/general) with an
   explicit rule-based classifier; trivial tasks route to a detected local model
