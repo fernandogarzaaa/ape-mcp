@@ -16,6 +16,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Documented reviewer login for API review requests. Requires Copilot
+          # code review enabled for the account/repo; otherwise GitHub accepts
+          # the request but attaches nothing (fallback keeps the job green —
+          # branch protection still enforces human review + CI).
           gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers" \
-            -f 'reviewers[]=github-copilot[bot]' \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' \
             || echo "copilot review unavailable; human review still required by branch protection"
