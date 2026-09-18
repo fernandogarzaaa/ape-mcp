@@ -5,7 +5,7 @@
 import { loadProfile } from "./profiles.js";
 import { runAgent } from "./loop.js";
 import { resolveModel } from "./providers.js";
-import { getRun, updateRun, appendStep } from "../runs.js";
+import { getRun, updateRun, appendStep, recentRuns } from "../runs.js";
 import { adamCall } from "../adam-client.js";
 
 const runId = process.argv[2];
@@ -51,6 +51,8 @@ async function main() {
     total_cost: result.total_cost,
     model: result.model_provider + "/" + result.model,
     model_resolution: result.model_resolution,
+    unverified: result.unverified ? 1 : 0,
+    receipt: JSON.stringify({ ...result.receipt, run_id: runId }).slice(0, 2000),
     outcome: typeof result.outcome === "string" ? result.outcome.slice(0, 4000) : JSON.stringify(result.outcome ?? null).slice(0, 4000),
     finished_at: new Date().toISOString(),
   });
@@ -60,6 +62,11 @@ async function main() {
     const summary = `run ${req.profile}: objective="${String(req.objective).slice(0, 200)}" stop=${result.stop_reason} steps=${result.step_count} cost=$${Number(result.total_cost).toFixed(4)} model=${result.model_provider}/${result.model} outcome="${String(typeof result.outcome === "string" ? result.outcome : JSON.stringify(result.outcome ?? "")).slice(0, 300)}"`;
     await adamCall("adam_memory_store", { kind: "episodic", content: summary, origin: "observation", confidence: 0.8 }, req.organism_id ?? "default");
   } catch { /* outcome memory is best-effort; the run already succeeded */ }
+  // Genome-mutation feedback: consecutive failures for one profile propose an
+  // investigation (fires once per streak, when the count hits the threshold).
+  try {
+    await maybeProposeFromFailures(req.profile, req.organism_id ?? "default");
+  } catch { /* feedback is best-effort */ }
   process.exit(0);
 }
 
@@ -67,3 +74,24 @@ main().catch((e) => {
   try { updateRun(runId, { status: "failed", stop_reason: "worker_crash", outcome: String(e).slice(0, 400), finished_at: new Date().toISOString() }); } catch { /* ignore */ }
   process.exit(1);
 });
+
+const FAILURE_REASONS = new Set(["model_error", "no_provider", "worker_crash", "worker_gone", "repetition_detected"]);
+
+async function maybeProposeFromFailures(profileName, organismId) {
+  const threshold = Number(process.env.APE_FEEDBACK_THRESHOLD ?? 3);
+  if (!(threshold > 0)) return;
+  const recent = recentRuns(profileName, threshold + 2);
+  let streak = 0;
+  for (const r of recent) {
+    if (r.status === "failed" || FAILURE_REASONS.has(r.stop_reason)) streak++;
+    else break;
+  }
+  // Fire exactly once per streak: only when the count HITS the threshold.
+  if (streak !== threshold) return;
+  const reasons = recent.slice(0, threshold).map((r) => r.stop_reason).join(", ");
+  await adamCall("adam_propose_mutation", {
+    kind: "investigate_conflict",
+    topic: `profile ${profileName} failed ${threshold} consecutive runs (${reasons})`,
+    rationale: "agent harness feedback: repeated run failures for one profile",
+  }, organismId);
+}

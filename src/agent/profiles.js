@@ -16,6 +16,8 @@ function userDir() {
 
 const VALID_STOPS = ["no_tool_call_in_step", "explicit_final_answer", "budget_exhausted"];
 
+export const DEFAULT_VERIFY_TOOLS = ["genesis.audit_claim", "eve.validate_experience", "eve.mcp_eval", "genesis.compare"];
+
 export function loadProfile(name) {
   const userPath = join(userDir(), `${name}.yaml`);
   const bundlePath = join(bundledDir(), `${name}.yaml`);
@@ -39,9 +41,17 @@ export function loadProfile(name) {
     max_usd: profile.limits?.max_usd ?? 0.5,
     max_destructive: profile.limits?.max_destructive ?? 1,
     max_repeats: profile.limits?.max_repeats ?? 3,
+    max_retries: profile.limits?.max_retries ?? 1,
+    max_history_tokens: profile.limits?.max_history_tokens ?? 60000,
   };
   profile.policy = {
     destructive: profile.policy?.destructive === "allow" ? "allow" : "deny",
+    verify_before_finish: ["warn", "enforce", "off"].includes(profile.policy?.verify_before_finish)
+      ? profile.policy.verify_before_finish
+      : "warn",
+    verify_tools: Array.isArray(profile.policy?.verify_tools) && profile.policy.verify_tools.length
+      ? profile.policy.verify_tools
+      : [...DEFAULT_VERIFY_TOOLS],
   };
   return profile;
 }

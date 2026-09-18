@@ -52,6 +52,8 @@ function open() {
   const cols = db.prepare("PRAGMA table_info(runs)").all().map((c) => c.name);
   if (!cols.includes("worker_pid")) db.exec("ALTER TABLE runs ADD COLUMN worker_pid INTEGER");
   if (!cols.includes("model_resolution")) db.exec("ALTER TABLE runs ADD COLUMN model_resolution TEXT");
+  if (!cols.includes("unverified")) db.exec("ALTER TABLE runs ADD COLUMN unverified INTEGER DEFAULT 0");
+  if (!cols.includes("receipt")) db.exec("ALTER TABLE runs ADD COLUMN receipt TEXT");
   return db;
 }
 
@@ -74,6 +76,12 @@ export function getRun(runId) {
 export function listRuns(limit = 20) {
   const d = open();
   return d.prepare("SELECT run_id, profile, model, status, stop_reason, step_count, total_cost, total_tokens, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT ?").all(limit);
+}
+
+// Recent runs for one profile, newest first — used by the failure-feedback loop.
+export function recentRuns(profile, limit = 10) {
+  const d = open();
+  return d.prepare("SELECT run_id, status, stop_reason, model, total_cost, started_at FROM runs WHERE profile = ? ORDER BY started_at DESC LIMIT ?").all(profile, limit);
 }
 
 export function appendStep(runId, step) {

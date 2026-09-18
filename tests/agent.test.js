@@ -213,3 +213,83 @@ test("agent: concurrent cap refuses new runs honestly", async () => {
     if (prev) process.env.APE_MAX_CONCURRENT_RUNS = prev; else delete process.env.APE_MAX_CONCURRENT_RUNS;
   }
 });
+
+test("agent: grounding gate warn mode flags unverified finish", async () => {
+  const script = [
+    { tool: "memory.recall", args: { query: "x" } },
+    { tool: "finish", args: { summary: "claim without evidence" } },
+  ];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "warn" } },
+    objective: "unverified",
+    mockScript: script,
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  assert.equal(res.unverified, true, "warn mode flags, not blocks");
+  assert.ok(String(res.outcome).includes("[unverified"), "outcome carries the flag");
+});
+
+test("agent: grounding gate enforce mode rejects finish without evidence", async () => {
+  const script = [
+    { tool: "memory.recall", args: { query: "x" } },
+    { tool: "finish", args: { summary: "claim without evidence" } },
+  ];
+  const steps = [];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "enforce" } },
+    objective: "enforced",
+    onStep: (s) => steps.push(s),
+    mockScript: script,
+  });
+  assert.notEqual(res.stop_reason, "explicit_final_answer", "finish rejected without evidence");
+  assert.ok(steps.some((s) => s.resultSummary.includes("finish:rejected-no-evidence")), "rejection recorded");
+});
+
+test("agent: grounding gate passes when verification evidence exists", async () => {
+  // audit_claim with no verifier returns UNTESTED (no error) — counts as evidence.
+  const script2 = [
+    { tool: "genesis.audit_claim", args: {} },
+    { tool: "finish", args: { summary: "verified claim" } },
+  ];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "enforce" } },
+    objective: "evidenced",
+    mockScript: script2,
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  assert.equal(res.unverified, false);
+});
+
+test("agent: recovery retries transient failures once and records immunity", async () => {
+  const { isRetryable, fingerprint } = await import("../src/agent/recovery.js");
+  assert.ok(isRetryable({ error: "handler_failed" }));
+  assert.ok(isRetryable({ error: "connector_timeout" }));
+  assert.ok(!isRetryable({ error: "engine_not_configured" }));
+  assert.ok(!isRetryable({ error: "unknown_tool" }));
+  assert.ok(!isRetryable({}));
+  assert.equal(fingerprint("x.y", { error: "handler_failed" }), "x.y:handler_failed");
+});
+
+test("agent: context compression digests old turns, keeps tail", async () => {
+  const { compressHistory, estimateTokens } = await import("../src/agent/context.js");
+  const big = Array.from({ length: 30 }, (_, i) => ({ role: "tool", toolCallId: "t" + i, content: "result-" + i + "-" + "z".repeat(2000) }));
+  const messages = [{ role: "user", content: "objective" }, ...big];
+  const before = estimateTokens(messages);
+  const { messages: out, compressed } = compressHistory(messages, { maxHistoryTokens: 5000, keepRecentTurns: 2 });
+  assert.ok(compressed > 0, "old turns digested");
+  assert.ok(estimateTokens(out) < before, "history shrank");
+  assert.ok(out[out.length - 1].content.includes("result-29"), "tail intact");
+});
+
+test("agent: run returns an explicit receipt with outcome hash", async () => {
+  const script = [{ tool: "finish", args: { summary: "receipt check" } }];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off" } },
+    objective: "receipt",
+    mockScript: script,
+  });
+  assert.ok(res.receipt, "receipt present");
+  assert.equal(res.receipt.stop_reason, res.stop_reason);
+  assert.ok(res.receipt.outcome_hash && res.receipt.outcome_hash.length >= 4, "outcome hash present");
+  assert.equal(res.receipt.ledger, "runs.db");
+});
