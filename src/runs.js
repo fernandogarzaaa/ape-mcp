@@ -76,6 +76,17 @@ function open() {
       if (!cols.includes("unverified")) handle.exec("ALTER TABLE runs ADD COLUMN unverified INTEGER DEFAULT 0");
       if (!cols.includes("receipt")) handle.exec("ALTER TABLE runs ADD COLUMN receipt TEXT");
       if (!cols.includes("resumes")) handle.exec("ALTER TABLE runs ADD COLUMN resumes INTEGER DEFAULT 0");
+      if (!cols.includes("outcome_family")) handle.exec("ALTER TABLE runs ADD COLUMN outcome_family TEXT");
+      if (!cols.includes("outcome_hash")) handle.exec("ALTER TABLE runs ADD COLUMN outcome_hash TEXT");
+      handle.exec("CREATE INDEX IF NOT EXISTS idx_runs_family ON runs(outcome_family)");
+      // Variant deprecation: marks a family's outcome variant as dead with a reason.
+      handle.exec(`CREATE TABLE IF NOT EXISTS deprecated_variants (
+    family TEXT NOT NULL,
+    outcome_hash TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    deprecated_at TEXT NOT NULL,
+    PRIMARY KEY (family, outcome_hash)
+  )`);
       db = handle;
       return db;
     } catch (e) {
@@ -88,11 +99,11 @@ function open() {
   throw lastErr;
 }
 
-export function createRun({ profile, model, objective, organism_id = "default" }) {
+export function createRun({ profile, model, objective, organism_id = "default", outcome_family = null }) {
   const d = open();
   const runId = "run-" + randomUUID().slice(0, 12);
-  d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, status, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?)")
-    .run(runId, profile, model, objective, organism_id, new Date().toISOString());
+  d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, status, started_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)")
+    .run(runId, profile, model, objective, organism_id, outcome_family, new Date().toISOString());
   return runId;
 }
 
@@ -128,6 +139,48 @@ export function updateRun(runId, patch) {
   if (!keys.length) return;
   const cols = keys.map((k) => `${k} = ?`).join(", ");
   d.prepare(`UPDATE runs SET ${cols} WHERE run_id = ?`).run(...keys.map((k) => patch[k]), runId);
+}
+
+// Dedup lookup: latest successfully finished run of the same outcome family for
+// this organism inside the window. Lets the worker skip redundant reruns.
+export function findDuplicate({ family, organism_id = "default", windowSec = 3600, excludeRunId = null }) {
+  if (!family || !(windowSec > 0)) return null;
+  const d = open();
+  const since = new Date(Date.now() - windowSec * 1000).toISOString();
+  return d.prepare(`SELECT run_id, status, stop_reason, step_count, total_cost, total_tokens, outcome_hash, receipt, finished_at
+    FROM runs WHERE outcome_family = ? AND organism_id = ? AND status = 'done'
+    AND finished_at >= ? AND run_id != COALESCE(?, '')
+    ORDER BY finished_at DESC LIMIT 1`).get(family, organism_id, since, excludeRunId) ?? null;
+}
+
+// Cost-per-outcome + variant tracking for one family: how many runs, what they
+// cost, which outcome variants appeared, and which are deprecated.
+export function familyStats(family) {
+  const d = open();
+  const runs = d.prepare(`SELECT run_id, status, stop_reason, step_count, total_cost, outcome_hash, started_at, finished_at
+    FROM runs WHERE outcome_family = ? ORDER BY started_at`).all(family);
+  const done = runs.filter((r) => r.status === "done");
+  const costs = done.map((r) => r.total_cost ?? 0);
+  const variants = [...new Set(done.map((r) => r.outcome_hash).filter(Boolean))];
+  const deprecated = d.prepare("SELECT outcome_hash, reason, deprecated_at FROM deprecated_variants WHERE family = ?").all(family);
+  const depSet = new Set(deprecated.map((x) => x.outcome_hash));
+  return {
+    family,
+    runs: runs.length,
+    completed: done.length,
+    total_cost_usd: Number(costs.reduce((a, b) => a + b, 0).toFixed(6)),
+    avg_cost_usd: costs.length ? Number((costs.reduce((a, b) => a + b, 0) / costs.length).toFixed(6)) : 0,
+    avg_steps: done.length ? Number((done.reduce((a, r) => a + (r.step_count ?? 0), 0) / done.length).toFixed(1)) : 0,
+    variants: variants.map((h) => ({ outcome_hash: h, deprecated: depSet.has(h) })),
+    deprecated,
+  };
+}
+
+export function deprecateVariant({ family, outcome_hash, reason }) {
+  const d = open();
+  d.prepare("INSERT INTO deprecated_variants (family, outcome_hash, reason, deprecated_at) VALUES (?, ?, ?, ?) ON CONFLICT(family, outcome_hash) DO UPDATE SET reason = excluded.reason, deprecated_at = excluded.deprecated_at")
+    .run(family, outcome_hash, reason, new Date().toISOString());
+  return { family, outcome_hash, reason };
 }
 
 // Janitor: workers are detached forks; if one dies before updateRun() (OOM, restart),

@@ -9,7 +9,8 @@ import { loadMods } from "./mods.js";
 import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
-import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint } from "./runs.js";
+import { familyOf } from "./agent/outcomes.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
@@ -39,6 +40,8 @@ export const TOOL_DEFS = [
   { name: "ape_agent_cancel", description: "Cancel a running agent run, preserving the partial ledger", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_agent_resume", description: "Resume a stopped/failed run from its last checkpoint with a replacement worker", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_agent_analyze", description: "Analyze a profile's recent runs and propose concrete profile edits (harness evolution from trajectories)", inputSchema: { type: "object", properties: { profile: { type: "string" }, window: { type: "number" }, record: { type: "boolean" } }, required: ["profile"] }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_agent_family", description: "Cost-per-outcome + variant tracking for an outcome family (pass family id or raw objective)", inputSchema: { type: "object", properties: { family: { type: "string" }, objective: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_agent_deprecate", description: "Mark an outcome variant of a family as deprecated with a reason", inputSchema: { type: "object", properties: { family: { type: "string" }, outcome_hash: { type: "string" }, reason: { type: "string" } }, required: ["family", "outcome_hash", "reason"] }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_connector_call", description: "Call a user-defined connector operation (egress-allowlisted). destructive ops need confirm", inputSchema: { type: "object", properties: { connector: { type: "string" }, operation: { type: "string" }, input: { type: "object" }, confirm: { type: "boolean" } }, required: ["connector", "operation"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_connector_list", description: "List loaded connectors + their operations and egress hosts", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
 ];
@@ -247,7 +250,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         if (!profile) { result = { error: "profile_not_found", profile: a.profile, available: listProfiles() }; break; }
         const ceiling = checkRunCeilings();
         if (ceiling) { result = ceiling; break; }
-        const runId = createRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default" });
+        const runId = createRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default", outcome_family: familyOf(a.objective) });
         const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
         worker.unref();
         updateRun(runId, { worker_pid: worker.pid });
@@ -284,6 +287,18 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
           analysis.recorded = await recordAnalysis(a.profile, analysis, a.organism_id);
         }
         result = analysis;
+        break;
+      }
+      case "ape_agent_family": {
+        // Cost-per-outcome + variant tracking for one outcome family (or an
+        // objective, which is normalized to its family automatically).
+        const family = a.family ?? familyOf(a.objective ?? "");
+        result = familyStats(family);
+        break;
+      }
+      case "ape_agent_deprecate": {
+        if (!a.family || !a.outcome_hash || !a.reason) { result = { error: "missing_args", need: ["family", "outcome_hash", "reason"] }; break; }
+        result = deprecateVariant({ family: a.family, outcome_hash: a.outcome_hash, reason: a.reason });
         break;
       }
       case "ape_connector_list": {
@@ -406,7 +421,7 @@ export async function agentMethod(method, params = {}) {
       if (!profile) return { error: "profile_not_found", profile: params.profile, available: listProfiles() };
       const ceiling = checkRunCeilings();
       if (ceiling) return ceiling;
-      const runId = createRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default" });
+      const runId = createRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default", outcome_family: familyOf(params.objective) });
       const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
       worker.unref();
       updateRun(runId, { worker_pid: worker.pid });

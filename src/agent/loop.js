@@ -9,6 +9,7 @@ import { DEFAULT_VERIFY_TOOLS } from "./profiles.js";
 import { correlateEvidence } from "./evidence.js";
 import { compressHistory, estimateTokens } from "./context.js";
 import { shaShort, emitTrace } from "../trace.js";
+import { familyOf } from "./outcomes.js";
 import { auditDestructive } from "../dispatch.js";
 
 // Prefix that marks tool output as untrusted data, not instructions. Cheap,
@@ -290,6 +291,7 @@ const toolCalls = resp.toolCalls ?? [];
       tokens_saved_estimate: tokensSavedEstimate,
       destructive_used: destructiveUsed,
       outcome_hash: shaShort(typeof outcome === "string" ? outcome : JSON.stringify(outcome ?? "")),
+      family: familyOf(objective),
       ledger: "runs.db",
     },
     steps,

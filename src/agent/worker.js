@@ -8,7 +8,8 @@ import { resolveModel } from "./providers.js";
 import { detectProviders } from "./hostdetect.js";
 import { classifyObjective, selectRoutedModel } from "./router.js";
 import { rankBySimilarity, buildHydrationContext } from "./similarity.js";
-import { getRun, updateRun, appendStep, recentRuns, saveCheckpoint, loadCheckpoint } from "../runs.js";
+import { familyOf } from "./outcomes.js";
+import { getRun, updateRun, appendStep, recentRuns, saveCheckpoint, loadCheckpoint, findDuplicate } from "../runs.js";
 import { adamCall } from "../adam-client.js";
 
 const runId = process.argv[2];
@@ -39,6 +40,35 @@ async function main() {
     process.exit(1);
   }
   if (opts.mockScript) profile.model = { provider: "mock", id: "mock-model" };
+  // Outcome dedup: the same objective completed recently for this organism reuses
+  // the prior receipt instead of burning model cost again. Window from policy
+  // (dedup_window_sec, default 3600, 0 = off). Skipped on resume and mock runs.
+  if (!opts.resume && !opts.mockScript) {
+    const family = familyOf(req.objective);
+    updateRun(runId, { outcome_family: family });
+    const dup = findDuplicate({
+      family,
+      organism_id: req.organism_id ?? "default",
+      windowSec: Number(profile.policy?.dedup_window_sec ?? 3600),
+      excludeRunId: runId,
+    });
+    if (dup) {
+      let priorReceipt = null;
+      try { priorReceipt = JSON.parse(dup.receipt ?? "null"); } catch { /* ignore */ }
+      updateRun(runId, {
+        status: "done",
+        stop_reason: "dedup_reuse",
+        step_count: 0,
+        total_tokens: 0,
+        total_cost: 0,
+        outcome_hash: dup.outcome_hash,
+        receipt: JSON.stringify({ ...(priorReceipt ?? {}), run_id: runId, dedup: { reused: true, prior_run_id: dup.run_id } }).slice(0, 2000),
+        outcome: `reused outcome of ${dup.run_id} (same family, finished ${dup.finished_at})`,
+        finished_at: new Date().toISOString(),
+      });
+      process.exit(0);
+    }
+  }
   // Task-based routing (opt-out via policy.routing: false or explicit provider/model):
   // trivial objectives go local when a local model is detected; otherwise normal
   // resolution. The decision is recorded in the receipt for later judgment.
@@ -95,6 +125,8 @@ async function main() {
     model: result.model_provider + "/" + result.model,
     model_resolution: result.model_resolution,
     unverified: result.unverified ? 1 : 0,
+    outcome_family: result.receipt.family ?? familyOf(req.objective),
+    outcome_hash: result.receipt.outcome_hash ?? null,
     receipt: JSON.stringify({ ...result.receipt, run_id: runId }).slice(0, 2000),
     outcome: typeof result.outcome === "string" ? result.outcome.slice(0, 4000) : JSON.stringify(result.outcome ?? null).slice(0, 4000),
     finished_at: new Date().toISOString(),
