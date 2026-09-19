@@ -93,6 +93,30 @@ loop starts (ranked by text similarity, thresholded — no match means no inject
 This does not depend on the model remembering to call `memory.recall`; the next run
 on a related objective starts with what worked and what failed.
 
+## Outcome dedup
+
+Runs carry a stable **family id** (hash of the normalized objective). When the same
+objective completed recently for the same organism, the worker reuses the prior
+receipt instead of burning model cost again (`stop_reason: dedup_reuse`). Window
+from `policy.dedup_window_sec` (default 3600, 0 = off). Cost-per-outcome and variant
+tracking per family: `ape_agent_family`; mark dead variants: `ape_agent_deprecate`.
+
+## Parallel calls
+
+Independent tool calls issued together in one turn run concurrently (`Promise.all`).
+Only all-known, non-destructive batches fan out (capped by `limits.max_parallel`,
+default 4); mixed batches stay sequential so audit and destructive caps keep their
+order. Opt out with `policy.parallel_calls: false`. Fan-outs are counted in the
+receipt (`parallel_fanouts`) and flagged on steps.
+
+## Drift
+
+Beyond exact-repeat halts, the loop watches trajectory health: same-tool wandering
+(warn, advisory injected, run continues) and consecutive-error spirals (halt as
+`error_spiral`). Configure with `policy.drift: { warn_streak, max_errors }`
+(defaults 6 and 4); `policy.drift: false` opts out. Stats land in the receipt
+(`drift: { max_same_tool_streak, max_consecutive_errors, warnings }`).
+
 ## Checkpoint and resume
 
 The loop checkpoints its state (messages, budget, counters) after every model turn

@@ -114,7 +114,8 @@ async function main() {
     resolvedModel: resolved,
     routing,
     initial: opts.resume ? loadCheckpoint(runId)?.state ?? null : null,
-    initialContext: opts.resume ? null : await hydrateContext(req.objective, req.organism_id ?? "default"),
+    // Mock runs are hermetic replays: no ADAM I/O (also keeps test workers fast).
+    initialContext: (opts.resume || opts.mockScript) ? null : await hydrateContext(req.objective, req.organism_id ?? "default"),
   });
   updateRun(runId, {
     status: result.stop_reason === "model_error" ? "failed" : "done",
@@ -150,7 +151,7 @@ main().catch((e) => {
   process.exit(1);
 });
 
-const FAILURE_REASONS = new Set(["model_error", "no_provider", "worker_crash", "worker_gone", "repetition_detected"]);
+const FAILURE_REASONS = new Set(["model_error", "no_provider", "worker_crash", "worker_gone", "repetition_detected", "error_spiral"]);
 
 async function maybeProposeFromFailures(profileName, organismId) {
   const threshold = Number(process.env.APE_FEEDBACK_THRESHOLD ?? 3);

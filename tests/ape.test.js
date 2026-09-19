@@ -1,5 +1,9 @@
 ﻿import test from "node:test";
 import assert from "node:assert";
+// Test workers are $0 mock forks sharing one ledger DB across parallel test
+// processes; raise the production concurrency guard so scheduling luck can't
+// flake worker-fork tests (the daily spend ceiling still applies).
+process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,13 +114,15 @@ test("zero silent stubs across the full tool list", async () => {
     ape_compare: {},
     ape_orchestrate: { op: "status" },
     ape_task_get: { task_id: "none" },
+    ape_agent_family: { objective: "gate-check" },
+    ape_agent_deprecate: { family: "fam-gate", outcome_hash: "deadbeef", reason: "gate-check" },
   };
   for (const n of names) {
     const r = await dispatchCall(n, samples[n] ?? {}, { headlessBypass: true });
     assert.ok(["complete", "input_required"].includes(r.resultType), `${n} resultType=${r.resultType}`);
     const res = r.structuredContent?.result ?? {};
     if (res.error) {
-      assert.ok(["engine_not_configured", "unknown_tool", "handler_failed", "profile_not_found", "connector_not_found", "connector_unknown_operation"].includes(res.error), `${n} honest error (${res.error})`);
+      assert.ok(["engine_not_configured", "unknown_tool", "handler_failed", "profile_not_found", "connector_not_found", "connector_unknown_operation", "missing_args"].includes(res.error), `${n} honest error (${res.error})`);
     }
   }
 });

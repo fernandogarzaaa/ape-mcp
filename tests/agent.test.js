@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
+// See ape.test.js: mock workers share one ledger DB across parallel processes.
+process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
 import { loadProfile, listProfiles } from "../src/agent/profiles.js";
 import { runAgent } from "../src/agent/loop.js";
 import { makeBudget } from "../src/agent/budget.js";

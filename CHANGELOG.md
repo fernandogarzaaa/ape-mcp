@@ -7,6 +7,24 @@
   (ADAM query + local shingle-cosine ranking, thresholded). No longer depends on the
   model remembering to call `memory.recall`; skipped on resume to avoid duplication.
 
+### Outcome identity + dedup
+- Stable family IDs (hash of normalized objective) on every receipt and ledger row.
+- Same objective completed within `policy.dedup_window_sec` (default 3600s) reuses
+  the prior receipt (`dedup_reuse`) instead of rerunning; skips mocks and resumes.
+- `ape_agent_family`: cost-per-outcome + variant tracking; `ape_agent_deprecate`:
+  mark dead variants with a reason.
+
+### Parallel tool calls
+- All-known, non-destructive multi-call turns fan out concurrently (cap
+  `limits.max_parallel`, default 4); mixed/unknown/destructive batches stay
+  sequential. `policy.parallel_calls: false` opts out. Mock scripts support
+  `{ calls: [...] }` turns; receipt counts `parallel_fanouts`.
+
+### Drift (trajectory health)
+- Same-tool wandering injects a one-per-streak advisory (run continues);
+  consecutive-error spirals halt as `error_spiral` (counts as a failure for the
+  profile-streak proposer). Configurable via `policy.drift`; stats in receipt.
+
 ### Checkpoint and resume (#7)
 - Loop state checkpoints to `runs.db` after every model turn; `ape_agent_resume`
   (`agent/resume`) forks a replacement worker from the last step. Refuses finished

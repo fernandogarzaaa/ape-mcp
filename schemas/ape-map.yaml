@@ -22,6 +22,8 @@ tools:
   - { name: ape_agent_cancel, from: [ape(agent runtime)], args: { run_id }, out: { status, stop_reason } }
   - { name: ape_agent_resume, from: [ape(agent runtime)], args: { run_id }, out: { status, resumed_from_step, resumes } }
   - { name: ape_agent_analyze, from: [ape(harness evolution)], args: { profile, window, record }, out: { findings, suggestions } }
+  - { name: ape_agent_family, from: [ape(outcome ledger)], args: { family, objective }, out: { runs, completed, total_cost_usd, avg_cost_usd, variants } }
+  - { name: ape_agent_deprecate, from: [ape(outcome ledger)], args: { family, outcome_hash, reason }, out: { family, outcome_hash, reason } }
   - { name: ape_connector_list, from: [ape(connectors)], args: {}, out: { connectors: [] } }
   - { name: ape_connector_call, from: [ape(connectors)], args: { connector, operation, input, confirm }, out: { ok, status, body }, destructive_confirm: true }
 resources:

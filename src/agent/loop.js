@@ -10,6 +10,7 @@ import { correlateEvidence } from "./evidence.js";
 import { compressHistory, estimateTokens } from "./context.js";
 import { shaShort, emitTrace } from "../trace.js";
 import { familyOf } from "./outcomes.js";
+import { initDrift, observeDrift, evaluateDrift, driftReceipt } from "./drift.js";
 import { auditDestructive } from "../dispatch.js";
 
 // Prefix that marks tool output as untrusted data, not instructions. Cheap,
@@ -79,7 +80,16 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   let repeatCount = initial?.repeatCount ?? 0;
   let compressions = initial?.compressions ?? 0;
   let tokensSavedEstimate = initial?.tokensSavedEstimate ?? 0;
-  const record = (step) => { steps.push(step); onStep?.(step); };
+  const driftState = initial?.driftState ?? initDrift();
+  const record = (step) => {
+    steps.push(step);
+    onStep?.(step);
+    // Trajectory health folds every recorded tool step into drift state; the
+    // per-turn checks below turn it into advisories (run continues) or halts.
+    if (step.kind === "tool" && step.tool && step.tool !== "finish") {
+      observeDrift(driftState, { tool: step.tool, summary: step.resultSummary ?? "" });
+    }
+  };
 
   if (modelCfg.provider === "mock") mockPlan(convKey, mockScript ?? [], mockCostPerCall);
 
@@ -139,6 +149,11 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     }
     const post = budget.check();
     if (post.exhausted) { stopReason = post.reason; }
+    // Same drift check for fanned-out batches (no break: execParallel returns,
+    // and the while loop's stopReason check below ends the run on halt).
+    const drift = evaluateDrift(profile, driftState);
+    if (drift.advisory) messages.push({ role: "user", content: drift.advisory });
+    if (drift.halt) { stopReason = drift.stopReason; outcome = drift.outcome; }
   }
 
   try {
@@ -298,13 +313,17 @@ const toolCalls = resp.toolCalls ?? [];
         messages.push({ role: "tool", toolCallId: tc.id, content: frameToolOutput(tc.name, JSON.stringify(res).slice(0, 8000)) });
         const post = budget.check();
         if (post.exhausted) { stopReason = post.reason; break; }
+        // Drift check per tool call: advisory continues, error spiral halts.
+        const drift = evaluateDrift(profile, driftState);
+        if (drift.advisory) messages.push({ role: "user", content: drift.advisory });
+        if (drift.halt) { stopReason = drift.stopReason; outcome = drift.outcome; break; }
       }
       if (stopReason) break;
       // Checkpoint: persist loop state so a replacement worker can resume.
       try {
         onCheckpoint?.({
           messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd },
-          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, parallelFanouts,
+          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, parallelFanouts, driftState,
         });
       } catch { /* checkpointing never breaks the loop */ }
     }
@@ -344,6 +363,7 @@ const toolCalls = resp.toolCalls ?? [];
       tokens_saved_estimate: tokensSavedEstimate,
       destructive_used: destructiveUsed,
       parallel_fanouts: parallelFanouts,
+      drift: driftReceipt(driftState),
       outcome_hash: shaShort(typeof outcome === "string" ? outcome : JSON.stringify(outcome ?? "")),
       family: familyOf(objective),
       ledger: "runs.db",
