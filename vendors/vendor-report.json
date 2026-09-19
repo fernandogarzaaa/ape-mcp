@@ -1,32 +1,71 @@
 {
   "jobs": [
     {
-      "dest": "vendors/genesis",
+      "dest": "vendors/eve",
       "status": "ok",
       "copied": [
         "src",
         "bin",
-        "adapters",
-        "benchmarks",
-        "templates",
-        "fixtures",
+        "protocol",
+        "skills",
+        "docs",
         "examples",
         "tests",
-        "docs",
-        "plugins",
-        "tools",
+        "scripts",
         "package.json",
         "package-lock.json",
         "tsconfig.json",
         "tsconfig.build.json",
-        "biome.json",
+        "biome.jsonc",
         "vitest.config.ts",
+        "eve.config.example.yaml",
         "README.md",
         "LICENSE",
+        "ROADMAP.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        ".claude",
+        ".codex",
         ".claude-plugin"
       ],
-      "sha": "d85012a21aa9a6b0ce2637cddb473165fc741efe"
+      "sha": "0b8e8e2f686800b54d6816aa5dc983642c00cb0d"
+    },
+    {
+      "dest": "vendors/adam",
+      "status": "ok",
+      "copied": [
+        "crates",
+        "bin",
+        "protocol",
+        "skills",
+        "scripts",
+        "Cargo.toml",
+        "Cargo.lock",
+        "Dockerfile",
+        "README.md",
+        "ARCHITECTURE.md",
+        "DESIGN.md",
+        "ROADMAP.md",
+        "LICENSE",
+        ".claude-plugin",
+        ".mcp.json"
+      ],
+      "sha": "70b3b9788e5ba8620c2e802b7820e610fb713d65"
+    },
+    {
+      "dest": "vendors/skein",
+      "status": "ok",
+      "copied": [
+        "src",
+        "tests",
+        "docs",
+        "pyproject.toml",
+        "README.md",
+        "CHANGELOG.md",
+        ".github"
+      ],
+      "sha": "13727fd2fe6c34b68e3bfac120601fa5a4c914b3"
     }
   ],
-  "at": "2026-09-17T05:34:59.618Z"
+  "at": "2026-09-19T19:44:19.246Z"
 }
