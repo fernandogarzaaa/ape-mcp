@@ -249,6 +249,16 @@ async function mockChat(convKey, modelId, system, messages, tools) {
   if (!step || step.final !== undefined) {
     return { content: step?.final ?? "Done.", toolCalls: [], stop: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } };
   }
+  // A script entry with calls:[...] emits a multi-call turn (parallel fan-out test path).
+  if (Array.isArray(step.calls)) {
+    return {
+      content: step.content ?? "",
+      toolCalls: step.calls.map((c, i) => ({ id: "mock-" + st.index + "-" + i, name: c.tool, args: c.args ?? {} })),
+      stop: "tool_use",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      mockCost: st.costPerCall,
+    };
+  }
   return {
     content: step.content ?? "",
     toolCalls: [{ id: "mock-" + st.index, name: step.tool, args: step.args ?? {} }],

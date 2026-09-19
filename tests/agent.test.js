@@ -388,3 +388,56 @@ test("agent: agree mode rejects finish on conflicting evidence", async () => {
   assert.notEqual(res.stop_reason, "explicit_final_answer", "finish rejected without agreeing evidence");
   assert.ok(steps.some((s) => String(s.resultSummary).includes("finish:rejected")), "rejection recorded when gate fires");
 });
+
+test("agent: parallel fan-out runs independent calls in one turn", async () => {
+  const steps = [];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off" } },
+    objective: "fanout",
+    mockScript: [
+      { calls: [{ tool: "memory.recall", args: { query: "a" } }, { tool: "memory.recall", args: { query: "b" } }] },
+      { tool: "finish", args: { summary: "fanout done" } },
+    ],
+    onStep: (s) => steps.push(s),
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  const tools = steps.filter((s) => s.kind === "tool" && s.tool === "memory.recall");
+  assert.equal(tools.length, 2, "both calls executed");
+  assert.equal(tools[0].step, tools[1].step, "same turn");
+  assert.ok(tools.every((s) => s.parallel === true), "flagged parallel");
+  assert.equal(res.receipt.parallel_fanouts, 1);
+});
+
+test("agent: parallel_calls:false policy keeps sequential execution", async () => {
+  const steps = [];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off", parallel_calls: false } },
+    objective: "nofanout",
+    mockScript: [
+      { calls: [{ tool: "memory.recall", args: { query: "a" } }, { tool: "memory.recall", args: { query: "b" } }] },
+      { tool: "finish", args: { summary: "done" } },
+    ],
+    onStep: (s) => steps.push(s),
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  const tools = steps.filter((s) => s.kind === "tool" && s.tool === "memory.recall");
+  assert.equal(tools.length, 2);
+  assert.ok(tools.every((s) => s.parallel !== true), "no parallel flags when disabled");
+  assert.equal(res.receipt.parallel_fanouts, 0);
+});
+
+test("agent: mixed batch with unknown tool falls back to sequential", async () => {
+  const steps = [];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off" } },
+    objective: "mixed",
+    mockScript: [
+      { calls: [{ tool: "memory.recall", args: { query: "a" } }, { tool: "not_a_real_tool_xyz", args: {} }] },
+      { tool: "finish", args: { summary: "done" } },
+    ],
+    onStep: (s) => steps.push(s),
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  assert.ok(steps.some((s) => s.resultSummary === "unknown_tool"), "unknown call recorded");
+  assert.ok(!steps.some((s) => s.parallel === true), "no fan-out on mixed batch");
+});
