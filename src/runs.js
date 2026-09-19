@@ -69,15 +69,24 @@ function open() {
     state TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`);
-      // Migration: worker_pid added later; ensure it exists on pre-existing databases.
+      // Migration: columns added over time; ensure each exists. Parallel processes
+      // (tests, server + workers) can race open() on a fresh DB, so a lost race
+      // surfaces as "duplicate column" — absorbed, since the column now exists.
+      // (ADD COLUMN has no IF NOT EXISTS.) Busy errors propagate to the retry loop.
       const cols = handle.prepare("PRAGMA table_info(runs)").all().map((c) => c.name);
-      if (!cols.includes("worker_pid")) handle.exec("ALTER TABLE runs ADD COLUMN worker_pid INTEGER");
-      if (!cols.includes("model_resolution")) handle.exec("ALTER TABLE runs ADD COLUMN model_resolution TEXT");
-      if (!cols.includes("unverified")) handle.exec("ALTER TABLE runs ADD COLUMN unverified INTEGER DEFAULT 0");
-      if (!cols.includes("receipt")) handle.exec("ALTER TABLE runs ADD COLUMN receipt TEXT");
-      if (!cols.includes("resumes")) handle.exec("ALTER TABLE runs ADD COLUMN resumes INTEGER DEFAULT 0");
-      if (!cols.includes("outcome_family")) handle.exec("ALTER TABLE runs ADD COLUMN outcome_family TEXT");
-      if (!cols.includes("outcome_hash")) handle.exec("ALTER TABLE runs ADD COLUMN outcome_hash TEXT");
+      const ensureColumn = (name, ddl) => {
+        if (cols.includes(name)) return;
+        try { handle.exec(`ALTER TABLE runs ADD COLUMN ${ddl}`); }
+        catch (e) { if (!/duplicate column/i.test(String(e?.message ?? e))) throw e; }
+        cols.push(name);
+      };
+      ensureColumn("worker_pid", "worker_pid INTEGER");
+      ensureColumn("model_resolution", "model_resolution TEXT");
+      ensureColumn("unverified", "unverified INTEGER DEFAULT 0");
+      ensureColumn("receipt", "receipt TEXT");
+      ensureColumn("resumes", "resumes INTEGER DEFAULT 0");
+      ensureColumn("outcome_family", "outcome_family TEXT");
+      ensureColumn("outcome_hash", "outcome_hash TEXT");
       handle.exec("CREATE INDEX IF NOT EXISTS idx_runs_family ON runs(outcome_family)");
       // Variant deprecation: marks a family's outcome variant as dead with a reason.
       handle.exec(`CREATE TABLE IF NOT EXISTS deprecated_variants (
