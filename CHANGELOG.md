@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## Unreleased — audit hardening (deep-audit P0/P1)
+
+### Dedup correctness (P0)
+- Reuse now requires a VERIFIED prior success (`explicit_final_answer`,
+  unverified flag clear) — budget/drift-halted and unverified runs never dedup.
+- Added comparability basis: SHA-256 `profileHash` (any profile change
+  invalidates) + `envFingerprint` (connector surface) + resolved model must all
+  match; legacy rows without hashes never match (fail closed).
+- Dedup moved after model resolution so the comparison uses the resolved model.
+
+### Connector egress + auth (P0/P1)
+- Redirects no longer escape the allowlist: manual redirect chain, per-hop
+  `hostAllowed` validation (max 5 hops), `egress_denied_redirect` on escape,
+  `too_many_redirects` on loops.
+- `auth.query` credentials are now actually applied to the request URL.
+- Credential-bearing params are redacted (`***`) in every returned URL.
+- `confirm: true` passes end-to-end through `ape_connector_call` (was checked
+  at the server layer but dropped before the connector layer).
+
+### Model fallback (P1)
+- `resolveChain`: ordered resolution with dead entries skipped; the loop tries
+  entries in order per call and records `fallback_used` + the actual serving
+  provider (`model_provider` now reflects use, fixing a receipt-honesty bug).
+
+### Memory trust (P1)
+- Structural hydration is framed as UNTRUSTED data (same discipline as tool
+  output), never as principal instructions.
+
+### Concurrency
+- DB migrations are race-idempotent under parallel `open()` (absorbs
+  duplicate-column from lost races); verified with a 12-process stress test.
 
 ### Semantic recall (structural, not model-gated)
 - Every run hydrates its context with similar past outcomes before the loop starts

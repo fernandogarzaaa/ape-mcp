@@ -95,11 +95,14 @@ on a related objective starts with what worked and what failed.
 
 ## Outcome dedup
 
-Runs carry a stable **family id** (hash of the normalized objective). When the same
-objective completed recently for the same organism, the worker reuses the prior
-receipt instead of burning model cost again (`stop_reason: dedup_reuse`). Window
-from `policy.dedup_window_sec` (default 3600, 0 = off). Cost-per-outcome and variant
-tracking per family: `ape_agent_family`; mark dead variants: `ape_agent_deprecate`.
+Runs carry a stable **family id** (hash of the normalized objective). A prior run
+is reused only when ALL hold: same family + organism, finished inside
+`policy.dedup_window_sec` (default 3600, 0 = off), terminal state was a **verified
+success** (`explicit_final_answer` with no unverified flag), and profile hash, env
+fingerprint (connector surface), and resolved model all match. Anything else
+reruns — unverified, budget/drift-halted, or reconfigured runs never dedup.
+Cost-per-outcome and variant tracking per family: `ape_agent_family`; mark dead
+variants: `ape_agent_deprecate`.
 
 ## Parallel calls
 
@@ -116,6 +119,20 @@ Beyond exact-repeat halts, the loop watches trajectory health: same-tool wanderi
 `error_spiral`). Configure with `policy.drift: { warn_streak, max_errors }`
 (defaults 6 and 4); `policy.drift: false` opts out. Stats land in the receipt
 (`drift: { max_same_tool_streak, max_consecutive_errors, warnings }`).
+
+## Model fallback
+
+`model.fallback` (object or list) is a live provider chain, not config
+decoration: the worker resolves every entry up front, skipping entries with no
+credential, and the loop tries them in order per model call. The receipt records
+`fallback_used` and the actual serving provider (`model_provider` reflects use,
+not configuration). The analyzer's fallback recommendations now take effect.
+
+## Memory trust
+
+Recalled memory (structural hydration) is **untrusted data**, framed with the
+same banner discipline as tool output. It is injected as context, never as
+principal instructions alongside the objective.
 
 ## Checkpoint and resume
 
