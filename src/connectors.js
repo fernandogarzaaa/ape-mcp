@@ -98,7 +98,7 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
   for (const [k, v] of Object.entries(input ?? {})) {
     if (typeof v === "string") path = path.replaceAll(`{${k}}`, encodeURIComponent(v));
   }
-  const url = conn.base_url.replace(/\/$/, "") + path + (renderQuery(op, input) ?? "");
+  let url = conn.base_url.replace(/\/$/, "") + path + (renderQuery(op, input) ?? "");
   if (!hostAllowed(conn, url)) {
     let host = "?";
     try { host = new URL(url).hostname; } catch { /* ignore */ }
@@ -106,6 +106,24 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
   }
   const auth = resolveAuth(conn);
   if (auth.error) return { error: auth.error, connector: conn.name };
+  // Query auth is part of the request, never of the record: secret param names
+  // are redacted in every returned URL (results, traces, errors).
+  const secretParams = new Set(Object.keys(auth.query ?? {}));
+  if (auth.query) {
+    try {
+      const u = new URL(url);
+      for (const [k, v] of Object.entries(auth.query)) u.searchParams.set(k, v);
+      url = u.toString();
+    } catch { return { error: "connector_bad_url", connector: conn.name }; }
+  }
+  const redactUrl = (u) => {
+    if (!secretParams.size) return u;
+    try {
+      const r = new URL(u);
+      for (const k of secretParams) if (r.searchParams.has(k)) r.searchParams.set(k, "***");
+      return r.toString();
+    } catch { return u; }
+  };
   const body = renderBody(op, input);
   // Hard timeout: engine calls have a 120s cap; connectors must not stall a step
   // indefinitely and defeat max_wall_seconds. Per-operation `timeout_ms`, else 30s.
@@ -119,15 +137,47 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
     signal: ctrl.signal,
   };
   try {
-    const res = await fetch(url, init);
+    // Egress containment must hold for EVERY actual destination, not just the
+    // constructed URL: fetch() follows redirects by default, so a 302 from an
+    // allowed host could otherwise escape the allowlist. Manual redirect chain
+    // with per-hop validation (max 5 hops). Auth query params do NOT forward
+    // to redirect targets — safer, and re-applied only to same-origin hops.
+    const maxHops = 5;
+    let current = url;
+    let finalUrl = url;
+    let res = null;
+    for (let hop = 0; hop <= maxHops; hop++) {
+      const r = await fetch(current, { ...init, redirect: "manual" });
+      const loc = r.headers.get("location");
+      if (r.status >= 300 && r.status < 400 && loc) {
+        let next = null;
+        try { next = new URL(loc, current).toString(); } catch { /* bad Location */ }
+        try { await r.arrayBuffer(); } catch { /* drain best-effort */ }
+        if (!next) { clearTimeout(timer); return { ok: false, error: "connector_bad_redirect", url: redactUrl(current) }; }
+        if (!hostAllowed(conn, next)) {
+          clearTimeout(timer);
+          let host = "?";
+          try { host = new URL(next).hostname; } catch { /* ignore */ }
+          return { error: "egress_denied_redirect", host, egress_allow: conn.egress_allow, url: redactUrl(current), redirect: redactUrl(next) };
+        }
+        if (hop === maxHops) { clearTimeout(timer); return { ok: false, error: "too_many_redirects", url: redactUrl(current) }; }
+        current = next;
+        finalUrl = next;
+        continue;
+      }
+      res = r;
+      finalUrl = current;
+      break;
+    }
+    if (!res) { clearTimeout(timer); return { ok: false, error: "too_many_redirects", url: redactUrl(url) }; }
     clearTimeout(timer);
     const text = await res.text();
     let json = null;
     try { json = JSON.parse(text); } catch { /* non-json body */ }
-    return { ok: res.ok, status: res.status, operation: op.name, url, body: json ?? text.slice(0, 4000) };
+    return { ok: res.ok, status: res.status, operation: op.name, url: redactUrl(finalUrl), body: json ?? text.slice(0, 4000) };
   } catch (e) {
     clearTimeout(timer);
     const timedOut = e?.name === "AbortError";
-    return { ok: false, error: timedOut ? "connector_timeout" : "connector_fetch_failed", message: String(e?.message ?? e).slice(0, 200), url, timeout_ms: timedOut ? timeoutMs : undefined };
+    return { ok: false, error: timedOut ? "connector_timeout" : "connector_fetch_failed", message: String(e?.message ?? e).slice(0, 200), url: redactUrl(url), timeout_ms: timedOut ? timeoutMs : undefined };
   }
 }
