@@ -134,6 +134,14 @@ Recalled memory (structural hydration) is **untrusted data**, framed with the
 same banner discipline as tool output. It is injected as context, never as
 principal instructions alongside the objective.
 
+## Evidence artifacts
+
+Verification gates consume full verifier results (capped 8k, held in-memory
+for the run), never the 300-char ledger summaries. Successful verify-tool
+calls produce artifacts `{evidence_id, tool, step, verdict, digest, excerpt}`
+in `receipt.evidence`; digests pin the exact bytes judged. Artifacts survive
+resume via checkpoint state.
+
 ## Checkpoint and resume
 
 The loop checkpoints its state (messages, budget, counters) after every model turn

@@ -68,12 +68,15 @@ function ledgerSummary(entry) {
     const dir = process.env.APE_DATA_DIR || join(process.cwd(), ".ape");
     mkdirSync(dir, { recursive: true });
     appendFileSync(join(dir, "ledger.jsonl"), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
-  } catch { /* ledger never breaks calls */ }
+    return true;
+  } catch { return false; }
 }
 // Prominent audit stream for agent destructive attempts (allowed or denied) —
 // impossible to miss, separate from per-step records.
+// Returns { persisted }: governance callers must surface audit failure instead
+// of pretending the record exists (fail-open audit is a contradiction).
 export function auditDestructive(entry) {
-  ledgerSummary({ kind: "agent.destructive", ...entry });
+  return { persisted: ledgerSummary({ kind: "agent.destructive", ...entry }) };
 }
 
 export const dispatch = {

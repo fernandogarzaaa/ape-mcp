@@ -96,3 +96,22 @@ test("outcomes: run receipt carries the family id", async () => {
   });
   assert.equal(res.receipt.family, familyOf("Family Receipt Check!"));
 });
+
+test("outcomes: outcome_status separates lifecycle from result", () => {
+  const { outcomeStatus } = runs;
+  assert.equal(outcomeStatus({ status: "running" }), "running");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "explicit_final_answer", unverified: 0 }), "success");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "explicit_final_answer", unverified: 1 }), "unverified");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "dedup_reuse" }), "success");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "max_usd" }), "exhausted");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "error_spiral" }), "failed");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "repetition_detected" }), "failed");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "model_error" }), "failed");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "no_tool_call_in_step" }), "incomplete");
+  assert.equal(outcomeStatus({ status: "stopped", stop_reason: "cancelled" }), "cancelled");
+  // Surfaced on status responses, not just the helper.
+  const id = runs.createRun({ profile: "p", model: "m", objective: "status probe" });
+  runs.updateRun(id, { status: "done", stop_reason: "max_steps", finished_at: new Date().toISOString() });
+  assert.equal(runs.getRun(id).outcome_status, "exhausted");
+  assert.equal(runs.getRun("run-does-not-exist").outcome_status, "not_found");
+});

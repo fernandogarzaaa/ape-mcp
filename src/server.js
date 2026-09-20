@@ -10,7 +10,7 @@ import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
 import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
-import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant } from "./runs.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
@@ -18,6 +18,7 @@ const runningAgents = new Map();
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROTOCOL = "2026-07-28";
+export { PROTOCOL };
 
 export const TOOL_DEFS = [
   { name: "ape_status", description: "APE status: versions, vendored engines, mods", inputSchema: { type: "object", properties: { organism_id: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
@@ -248,9 +249,11 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
       case "ape_agent_run": {
         const profile = loadProfile(a.profile);
         if (!profile) { result = { error: "profile_not_found", profile: a.profile, available: listProfiles() }; break; }
-        const ceiling = checkRunCeilings();
-        if (ceiling) { result = ceiling; break; }
-        const runId = createRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default", outcome_family: familyOf(a.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()) });
+        // Atomic admission (ceilings + insert in one transaction — no overshoot).
+        reconcileRuns();
+        const admitted = admitRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default", outcome_family: familyOf(a.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()), maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4), dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25) });
+        if (admitted.error) { result = admitted; break; }
+        const runId = admitted.run_id;
         const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
         worker.unref();
         updateRun(runId, { worker_pid: worker.pid });
@@ -399,6 +402,17 @@ export function discover() {
   return {
     protocol: PROTOCOL,
     server: { name: "ape-mcp", version: "1.0.0" },
+    // Honest wire contract (dual-era): newline-delimited JSON-RPC over stdio
+    // with the legacy method set (initialize/tools/list/tools/call/...) plus
+    // modern server/discover. Stateless — no session ids. This is NOT a
+    // wire-complete native 2026-07-28 transport; clients must not assume
+    // wire semantics beyond what is declared here.
+    transport: {
+      stdio: "newline-delimited JSON-RPC",
+      handshake: ["initialize", "server/discover"],
+      sessions: "stateless",
+      wire: "legacy-shaped method set + modern discovery (dual-era)",
+    },
     capabilities: {
       tools: {}, resources: {}, prompts: {},
       extensions: {
@@ -419,9 +433,10 @@ export async function agentMethod(method, params = {}) {
     case "agent/run": {
       const profile = loadProfile(params.profile);
       if (!profile) return { error: "profile_not_found", profile: params.profile, available: listProfiles() };
-      const ceiling = checkRunCeilings();
-      if (ceiling) return ceiling;
-      const runId = createRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default", outcome_family: familyOf(params.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()) });
+      reconcileRuns();
+      const admitted = admitRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default", outcome_family: familyOf(params.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()), maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4), dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25) });
+      if (admitted.error) return admitted;
+      const runId = admitted.run_id;
       const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
       worker.unref();
       updateRun(runId, { worker_pid: worker.pid });

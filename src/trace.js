@@ -20,6 +20,9 @@ export function emitTrace(entry) {
     appendFileSync(tracePath(), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
   } catch { /* trace never breaks calls */ }
 }
+// Local index keys only (args hashes, trace args): 32-bit, NOT provenance.
+// Anything identity-grade (outcome families/hashes, profile/env fingerprints,
+// evidence digests) uses SHA-256 from outcomes.js / evidence.js.
 export function shaShort(s) {
   let h = 0;
   const str = String(s ?? "");

@@ -1,14 +1,19 @@
 # Protocol compatibility statement
 
-**Baseline:** MCP 2026-07-28 (stateless core, state in handles, Extensions framework).
+**Position: dual-era.** APE speaks newline-delimited JSON-RPC over stdio with the
+legacy method set (`initialize`, `tools/list`, `tools/call`, `resources/*`,
+`prompts/*`) plus modern `server/discover`. Stateless — no session ids; state
+travels in handles. This is NOT a wire-complete native 2026-07-28 transport; the
+machine-readable scope is `discover().transport`. A native rebuild is tracked
+separately and will be advertised only when the wire actually changes.
 
 ## Version pinning
 
-- The server negotiates `initialize` with the client's requested `protocolVersion` when
-  the client sends one, falling back to `2026-07-28`. All core methods (`tools/list`,
-  `tools/call`, `resources`, `prompts`) are compatible across the supported range.
-- `server/discover` (legacy) reports `protocol: "2026-07-28"` and the server's
-  `capabilities`.
+- The server answers `initialize` with its pinned `protocolVersion`
+  (`2026-07-28`) and current capabilities. It does not echo arbitrary client
+  versions — claiming a wire it cannot speak.
+- `server/discover` reports `protocol`, `capabilities`, and the `transport`
+  descriptor above.
 
 ## What a host can rely on
 

@@ -118,12 +118,71 @@ export function createRun({ profile, model, objective, organism_id = "default", 
   return runId;
 }
 
+// Atomic admission: ceiling checks AND the insert happen in one IMMEDIATE
+// transaction, so concurrent admitters cannot both pass the check and
+// overshoot the caps. Returns { run_id } or an honest { error } with no
+// partial row (rollback). Reconcile BEFORE calling — process signaling must
+// not hold the write lock. A busy ledger returns ledger_busy (retry), never
+// a crash.
+export function admitRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null, maxConcurrent = 4, dailyCapUsd = 25 }) {
+  const d = open();
+  try {
+    d.exec("BEGIN IMMEDIATE");
+  } catch (e) {
+    if (isBusy(e)) return { error: "ledger_busy", hint: "run ledger is locked; retry the run" };
+    throw e;
+  }
+  try {
+    const running = d.prepare("SELECT COUNT(*) AS n FROM runs WHERE status = 'running'").get().n;
+    if (running >= maxConcurrent) {
+      d.exec("ROLLBACK");
+      return { error: "too_many_runs", running, max_concurrent: maxConcurrent, hint: "wait for a run to finish or raise APE_MAX_CONCURRENT_RUNS" };
+    }
+    if (dailyCapUsd > 0) {
+      const spent = d.prepare("SELECT COALESCE(SUM(total_cost), 0) AS s FROM runs WHERE started_at >= ?").get(new Date(Date.now() - 86400000).toISOString()).s;
+      if (spent >= dailyCapUsd) {
+        d.exec("ROLLBACK");
+        return { error: "daily_budget_exceeded", spent_usd: spent, daily_cap_usd: dailyCapUsd, hint: "raise APE_MAX_DAILY_USD or wait for the window to roll" };
+      }
+    }
+    const runId = "run-" + randomUUID().slice(0, 12);
+    d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
+      .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, new Date().toISOString());
+    d.exec("COMMIT");
+    return { run_id: runId };
+  } catch (e) {
+    try { d.exec("ROLLBACK"); } catch { /* ignore */ }
+    throw e;
+  }
+}
+
 export function getRun(runId) {
   const d = open();
   const run = d.prepare("SELECT * FROM runs WHERE run_id = ?").get(runId);
-  if (!run) return { run_id: runId, status: "not_found" };
+  if (!run) return { run_id: runId, status: "not_found", outcome_status: "not_found" };
   const steps = d.prepare("SELECT * FROM steps WHERE run_id = ? ORDER BY step").all(runId);
-  return { ...run, steps };
+  return { ...run, steps, outcome_status: outcomeStatus(run) };
+}
+
+// Lifecycle vs outcome: status says whether the run is over; outcome_status
+// says what that means. Consumers (hosts, A2A) must branch on outcome_status,
+// never infer success from status=done. Computed, not stored — the stop_reason
+// history stays the source of truth.
+export function outcomeStatus({ status, stop_reason, unverified } = {}) {
+  if (status === "running") return "running";
+  if (status === "not_found") return "not_found";
+  if (status === "stopped") return stop_reason === "cancelled" ? "cancelled" : "stopped";
+  switch (stop_reason) {
+    case "explicit_final_answer": return unverified ? "unverified" : "success";
+    case "dedup_reuse": return "success";
+    case "no_tool_call_in_step": return "incomplete";
+    case "max_steps":
+    case "max_tokens":
+    case "max_usd":
+    case "max_wall_seconds":
+      return "exhausted";
+    default: return "failed";
+  }
 }
 
 export function listRuns(limit = 20) {

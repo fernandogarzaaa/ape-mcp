@@ -49,5 +49,8 @@ export function normalizeObjective(objective) {
 }
 
 export function familyOf(objective) {
-  return "fam-" + shaShort(normalizeObjective(objective));
+  // SHA-256 identity (32 hex chars shown; full digest recoverable by re-hash).
+  // NOTE: families created before this migration used 8-hex rolling hashes and
+  // will not group with new IDs — dedup only ever matches same-era values.
+  return "fam-" + sha256hex(normalizeObjective(objective)).slice(0, 32);
 }

@@ -1,6 +1,50 @@
 # Changelog
 
-## Unreleased — audit hardening (deep-audit P0/P1)
+## Unreleased — audit hardening, round 2
+
+### Evidence artifacts (P2)
+- The grounding gate now consumes FULL verifier results (capped 8k, in-memory),
+  never the 300-char ledger summary. A verdict past the truncation point no
+  longer degrades to neutral.
+- Verify-tool successes produce artifacts `{evidence_id, tool, step, verdict,
+  digest, excerpt}` carried in `receipt.evidence` (digests pin the judged
+  bytes); full text is stripped from returned steps so payloads stay bounded.
+- Artifacts persist across resume via checkpoint state.
+
+### Outcome identity → SHA-256 (P1)
+- `familyOf` and receipt `outcome_hash` are SHA-256 (was 32-bit rolling hash).
+  Pre-migration `fam-XXXXXXXX` rows do not group with new IDs (documented;
+  dedup only matches same-era values). `shaShort` remains for local index keys
+  only, marked non-provenance in trace.js.
+
+### Lifecycle/outcome split (§15)
+- Every run status now carries computed `outcome_status`: running / success /
+  unverified / incomplete / exhausted / failed / cancelled / stopped /
+  not_found. Consumers must branch on it, never infer success from
+  `status=done`.
+
+### Atomic admission (P2)
+- `admitRun`: ceilings + insert in one IMMEDIATE transaction — concurrent
+  admitters can no longer overshoot caps; refusals leave no partial row;
+  busy ledger returns honest `ledger_busy`.
+
+### Wire honesty (P0)
+- Dual-era declared: `discover().transport` states the actual wire contract;
+  `initialize` returns the pinned version instead of echoing arbitrary client
+  versions. Protocol doc rewritten to match. Native 2026-07-28 transport is a
+  separate tracked project, not claimed.
+
+### Audit durability (P1)
+- `auditDestructive` returns `{ persisted }`; failed audit writes surface as
+  explicit `audit-degraded` markers on the step and `audit_status: "degraded"`
+  on executed results — never silent.
+
+### Supply chain (§23)
+- `fetch-adam.mjs` verifies SHA-256: `APE_ADAM_SHA256` pin first, then the
+  release `<asset>.sha256` sidecar; mismatch deletes the file and fails
+  closed; `APE_ADAM_REQUIRE_CHECKSUM=1` refuses install with no expectation.
+
+## Unreleased — audit hardening, round 1 (deep-audit P0/P1)
 
 ### Dedup correctness (P0)
 - Reuse now requires a VERIFIED prior success (`explicit_final_answer`,

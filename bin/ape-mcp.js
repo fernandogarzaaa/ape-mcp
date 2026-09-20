@@ -1,5 +1,7 @@
 ﻿#!/usr/bin/env node
-// ape-mcp: stdio JSON-RPC 2.0 (MCP 2026-07-28 compatible surface) + --http Streamable-ish
+// ape-mcp: stdio JSON-RPC 2.0 (dual-era surface: legacy method set + modern
+// server/discover; see discover().transport for the honest wire contract)
+// + --http endpoint, plus the operator CLI (serve/run/doctor/mods/trace).
 // endpoint, plus the operator CLI (serve/run/doctor/mods/trace) under one bin entry.
 // Stateless protocol: state travels in handles (organism_id, node, task_id, run_id).
 import { createServer } from "node:http";
@@ -7,7 +9,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dispatchCall, toolsList, discover, agentMethod, resourcesList, promptsList, readResource, getPrompt } from "../src/server.js";
+import { dispatchCall, toolsList, discover, agentMethod, resourcesList, promptsList, readResource, getPrompt, PROTOCOL } from "../src/server.js";
 import { agentCard, handleA2A } from "../src/agent/a2a.js";
 import { taskGet } from "../src/tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "../src/auth.js";
@@ -172,10 +174,10 @@ if (args.includes("--http")) {
         try {
           let result;
           if (method === "initialize") {
-            const requested = typeof params?.protocolVersion === "string" ? params.protocolVersion : null;
-            // Negotiate: accept any protocol version the client speaks (methods are
-            // compatible), fall back to our pin when unspecified.
-            result = { protocolVersion: requested ?? "2026-07-28", capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
+            // Honest negotiation: the server speaks its pinned version with the
+            // dual-era wire declared in discover().transport. It does NOT echo
+            // arbitrary client versions (claiming a wire it cannot speak).
+            result = { protocolVersion: PROTOCOL, capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
           } else if (method === "ping") {
             result = {};
           } else if (method === "server/discover") result = discover();
