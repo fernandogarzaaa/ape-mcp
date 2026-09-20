@@ -9,7 +9,7 @@ import { loadMods } from "./mods.js";
 import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
-import { familyOf } from "./agent/outcomes.js";
+import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
 import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
@@ -250,7 +250,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         if (!profile) { result = { error: "profile_not_found", profile: a.profile, available: listProfiles() }; break; }
         const ceiling = checkRunCeilings();
         if (ceiling) { result = ceiling; break; }
-        const runId = createRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default", outcome_family: familyOf(a.objective) });
+        const runId = createRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default", outcome_family: familyOf(a.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()) });
         const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
         worker.unref();
         updateRun(runId, { worker_pid: worker.pid });
@@ -314,7 +314,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
           emitTrace({ traceId, tool: name, resultSummary: "input_required:connector-confirm" });
           return { resultType: "input_required", traceId, inputRequests: [{ id: "confirm-connector", type: "elicitation", message: `Connector ${a.connector} operation ${a.operation} is destructive. Confirm?`, schema: { confirm: "boolean" } }], requestState: shaShort(traceId + name) };
         }
-        result = await (await import("./connectors.js")).runConnectorOperation(conn, op, a.input ?? {}, ctx);
+        result = await (await import("./connectors.js")).runConnectorOperation(conn, op, a.input ?? {}, { ...ctx, confirm: a.confirm === true });
         break;
       }
       default: result = { error: "unknown_tool", name };
@@ -421,7 +421,7 @@ export async function agentMethod(method, params = {}) {
       if (!profile) return { error: "profile_not_found", profile: params.profile, available: listProfiles() };
       const ceiling = checkRunCeilings();
       if (ceiling) return ceiling;
-      const runId = createRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default", outcome_family: familyOf(params.objective) });
+      const runId = createRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default", outcome_family: familyOf(params.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()) });
       const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
       worker.unref();
       updateRun(runId, { worker_pid: worker.pid });

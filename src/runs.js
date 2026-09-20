@@ -87,6 +87,8 @@ function open() {
       ensureColumn("resumes", "resumes INTEGER DEFAULT 0");
       ensureColumn("outcome_family", "outcome_family TEXT");
       ensureColumn("outcome_hash", "outcome_hash TEXT");
+      ensureColumn("profile_hash", "profile_hash TEXT");
+      ensureColumn("env_hash", "env_hash TEXT");
       handle.exec("CREATE INDEX IF NOT EXISTS idx_runs_family ON runs(outcome_family)");
       // Variant deprecation: marks a family's outcome variant as dead with a reason.
       handle.exec(`CREATE TABLE IF NOT EXISTS deprecated_variants (
@@ -108,11 +110,11 @@ function open() {
   throw lastErr;
 }
 
-export function createRun({ profile, model, objective, organism_id = "default", outcome_family = null }) {
+export function createRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null }) {
   const d = open();
   const runId = "run-" + randomUUID().slice(0, 12);
-  d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, status, started_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)")
-    .run(runId, profile, model, objective, organism_id, outcome_family, new Date().toISOString());
+  d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
+    .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, new Date().toISOString());
   return runId;
 }
 
@@ -150,16 +152,22 @@ export function updateRun(runId, patch) {
   d.prepare(`UPDATE runs SET ${cols} WHERE run_id = ?`).run(...keys.map((k) => patch[k]), runId);
 }
 
-// Dedup lookup: latest successfully finished run of the same outcome family for
-// this organism inside the window. Lets the worker skip redundant reruns.
-export function findDuplicate({ family, organism_id = "default", windowSec = 3600, excludeRunId = null }) {
-  if (!family || !(windowSec > 0)) return null;
+// Dedup lookup, fail-closed: a prior run is reusable ONLY when ALL hold —
+// same family + organism, finished inside the window, terminal state was a
+// VERIFIED success (explicit_final_answer, not unverified, not budget/drift
+// halted), identical profile hash, identical env fingerprint, identical
+// resolved model. Legacy rows (NULL hashes) never match. Any missing
+// requirement returns null: when in doubt, rerun.
+export function findDuplicate({ family, organism_id = "default", windowSec = 3600, excludeRunId = null, profileHash = null, envHash = null, model = null }) {
+  if (!family || !(windowSec > 0) || !profileHash || !envHash || !model) return null;
   const d = open();
   const since = new Date(Date.now() - windowSec * 1000).toISOString();
   return d.prepare(`SELECT run_id, status, stop_reason, step_count, total_cost, total_tokens, outcome_hash, receipt, finished_at
     FROM runs WHERE outcome_family = ? AND organism_id = ? AND status = 'done'
+    AND stop_reason = 'explicit_final_answer' AND (unverified IS NULL OR unverified = 0)
+    AND profile_hash = ? AND env_hash = ? AND model = ?
     AND finished_at >= ? AND run_id != COALESCE(?, '')
-    ORDER BY finished_at DESC LIMIT 1`).get(family, organism_id, since, excludeRunId) ?? null;
+    ORDER BY finished_at DESC LIMIT 1`).get(family, organism_id, profileHash, envHash, model, since, excludeRunId) ?? null;
 }
 
 // Cost-per-outcome + variant tracking for one family: how many runs, what they

@@ -7,9 +7,18 @@ import { tmpdir } from "node:os";
 
 process.env.APE_DATA_DIR = mkdtempSync(join(tmpdir(), "ape-outcomes-"));
 
-const { familyOf, normalizeObjective } = await import("../src/agent/outcomes.js");
+const { familyOf, normalizeObjective, profileHash, envFingerprint } = await import("../src/agent/outcomes.js");
 const runs = await import("../src/runs.js");
 const { runAgent } = await import("../src/agent/loop.js");
+
+function finishRun({ objective, family, stop = "explicit_final_answer", unverified = 0, ph = "ph-a", eh = "env-a", model = "mock/mock-model", cost = 0.01, hash = "abc123" }) {
+  const id = runs.createRun({ profile: "p", model: "m", objective, outcome_family: family, profile_hash: ph, env_hash: eh });
+  runs.updateRun(id, { status: "done", stop_reason: stop, unverified, outcome_hash: hash, total_cost: cost, model, finished_at: new Date().toISOString() });
+  return id;
+}
+const dupReq = (family, over = {}) => ({
+  family, windowSec: 3600, profileHash: "ph-a", envHash: "env-a", model: "mock/mock-model", ...over,
+});
 
 test("outcomes: family is stable across case/punctuation, distinct across tasks", () => {
   assert.equal(familyOf("Triage flaky Windows tests!"), familyOf("triage flaky windows tests"));
@@ -18,16 +27,42 @@ test("outcomes: family is stable across case/punctuation, distinct across tasks"
   assert.equal(normalizeObjective("Resume run-id run-abc123def456 now"), "resume now");
 });
 
-test("outcomes: dedup finds recent same-family completions only", () => {
+test("outcomes: dedup reuses only verified successes with matching basis", () => {
   const fam = familyOf("dedup probe objective");
-  const id = runs.createRun({ profile: "p", model: "m", objective: "dedup probe objective", outcome_family: fam });
-  runs.updateRun(id, { status: "done", stop_reason: "explicit_final_answer", outcome_hash: "abc123", total_cost: 0.01, finished_at: new Date().toISOString() });
-  const hit = runs.findDuplicate({ family: fam, windowSec: 3600 });
-  assert.equal(hit?.run_id, id);
-  assert.equal(runs.findDuplicate({ family: fam, windowSec: 0 }), null, "window 0 disables");
-  assert.equal(runs.findDuplicate({ family: fam, organism_id: "other", windowSec: 3600 }), null, "organism scoped");
-  assert.equal(runs.findDuplicate({ family: fam, windowSec: 3600, excludeRunId: id }), null, "self excluded");
-  assert.equal(runs.findDuplicate({ family: "fam-nonexistent", windowSec: 3600 }), null, "unknown family");
+  const id = finishRun({ objective: "dedup probe objective", family: fam });
+  assert.equal(runs.findDuplicate(dupReq(fam))?.run_id, id, "verified success reuses");
+  assert.equal(runs.findDuplicate(dupReq(fam, { windowSec: 0 })), null, "window 0 disables");
+  assert.equal(runs.findDuplicate(dupReq(fam, { organism_id: "other" })), null, "organism scoped");
+  assert.equal(runs.findDuplicate(dupReq(fam, { excludeRunId: id })), null, "self excluded");
+  assert.equal(runs.findDuplicate(dupReq("fam-nonexistent")), null, "unknown family");
+  assert.equal(runs.findDuplicate(dupReq(fam, { profileHash: "ph-b" })), null, "profile change blocks reuse");
+  assert.equal(runs.findDuplicate(dupReq(fam, { envHash: "env-b" })), null, "env change blocks reuse");
+  assert.equal(runs.findDuplicate(dupReq(fam, { model: "other/model" })), null, "model change blocks reuse");
+  assert.equal(runs.findDuplicate(dupReq(fam, { profileHash: null })), null, "missing basis fails closed");
+});
+
+test("outcomes: unverified / failed / halted priors never dedup", () => {
+  const cases = [
+    ["unverified finish", { unverified: 1 }],
+    ["budget halt", { stop: "max_steps" }],
+    ["drift halt", { stop: "error_spiral" }],
+    ["repetition halt", { stop: "repetition_detected" }],
+  ];
+  for (const [name, attrs] of cases) {
+    const fam = familyOf("dedup prior " + name);
+    finishRun({ objective: "dedup prior " + name, family: fam, ...attrs });
+    assert.equal(runs.findDuplicate(dupReq(fam)), null, `${name} must not dedup`);
+  }
+});
+
+test("outcomes: profile/env fingerprints are stable and sensitive", () => {
+  const p = { name: "x", tools: ["a"], policy: { destructive: "deny" } };
+  assert.equal(profileHash(p), profileHash(structuredClone(p)), "stable");
+  assert.notEqual(profileHash(p), profileHash({ ...p, policy: { destructive: "allow" } }), "policy change alters hash");
+  assert.ok(profileHash(p).startsWith("ph-"));
+  const conns = [{ name: "c", base_url: "https://a.example", operations: [{ name: "get" }] }];
+  assert.equal(envFingerprint(conns), envFingerprint(structuredClone(conns)), "stable");
+  assert.notEqual(envFingerprint(conns), envFingerprint([]), "surface change alters fingerprint");
 });
 
 test("outcomes: familyStats aggregates cost-per-outcome + variants + deprecation", () => {

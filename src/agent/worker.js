@@ -4,11 +4,12 @@
 // memory (so future runs can recall it without the model having to store one), exits.
 import { loadProfile } from "./profiles.js";
 import { runAgent } from "./loop.js";
-import { resolveModel } from "./providers.js";
+import { resolveModel, resolveChain } from "./providers.js";
 import { detectProviders } from "./hostdetect.js";
 import { classifyObjective, selectRoutedModel } from "./router.js";
 import { rankBySimilarity, buildHydrationContext } from "./similarity.js";
-import { familyOf } from "./outcomes.js";
+import { familyOf, profileHash, envFingerprint } from "./outcomes.js";
+import { connectorList } from "../connectors.js";
 import { getRun, updateRun, appendStep, recentRuns, saveCheckpoint, loadCheckpoint, findDuplicate } from "../runs.js";
 import { adamCall } from "../adam-client.js";
 
@@ -40,35 +41,6 @@ async function main() {
     process.exit(1);
   }
   if (opts.mockScript) profile.model = { provider: "mock", id: "mock-model" };
-  // Outcome dedup: the same objective completed recently for this organism reuses
-  // the prior receipt instead of burning model cost again. Window from policy
-  // (dedup_window_sec, default 3600, 0 = off). Skipped on resume and mock runs.
-  if (!opts.resume && !opts.mockScript) {
-    const family = familyOf(req.objective);
-    updateRun(runId, { outcome_family: family });
-    const dup = findDuplicate({
-      family,
-      organism_id: req.organism_id ?? "default",
-      windowSec: Number(profile.policy?.dedup_window_sec ?? 3600),
-      excludeRunId: runId,
-    });
-    if (dup) {
-      let priorReceipt = null;
-      try { priorReceipt = JSON.parse(dup.receipt ?? "null"); } catch { /* ignore */ }
-      updateRun(runId, {
-        status: "done",
-        stop_reason: "dedup_reuse",
-        step_count: 0,
-        total_tokens: 0,
-        total_cost: 0,
-        outcome_hash: dup.outcome_hash,
-        receipt: JSON.stringify({ ...(priorReceipt ?? {}), run_id: runId, dedup: { reused: true, prior_run_id: dup.run_id } }).slice(0, 2000),
-        outcome: `reused outcome of ${dup.run_id} (same family, finished ${dup.finished_at})`,
-        finished_at: new Date().toISOString(),
-      });
-      process.exit(0);
-    }
-  }
   // Task-based routing (opt-out via policy.routing: false or explicit provider/model):
   // trivial objectives go local when a local model is detected; otherwise normal
   // resolution. The decision is recorded in the receipt for later judgment.
@@ -90,18 +62,71 @@ async function main() {
       }
     }
   }
-  if (!resolved) {
-    // Resolve the model once at run start (explicit override → provider:auto detection).
-    resolved = await resolveModel(profile.model, { provider: opts.provider, model: opts.model });
+  // Provider chain: primary first, then profile fallbacks. Entries that cannot
+  // be resolved (no credential) are skipped — a dead primary with a live
+  // fallback still runs. A task-routed primary keeps its place at the head.
+  let chain = [];
+  let chainErrors = [];
+  if (resolved) {
+    const rc = await resolveChain(profile.model, {}, { skipPrimary: true });
+    chain = [resolved, ...rc.chain];
+    chainErrors = rc.errors;
+  } else {
+    // Resolve the chain once at run start (explicit override → provider:auto detection → fallbacks).
+    const rc = await resolveChain(profile.model, { provider: opts.provider, model: opts.model });
+    chain = rc.chain;
+    chainErrors = rc.errors;
+    resolved = chain[0] ?? null;
   }
-  if (resolved.error) {
+  if (!resolved) {
     updateRun(runId, {
       status: "failed",
       stop_reason: "no_provider",
-      outcome: `provider resolution failed: ${resolved.error} (${(resolved.hint ?? "").slice(0, 200)})`,
+      outcome: `provider resolution failed: ${chainErrors.map((e) => `${e.provider ?? "?"}:${e.error}`).join("; ").slice(0, 300) || "no resolvable provider"}`,
       finished_at: new Date().toISOString(),
     });
     process.exit(1);
+  }
+  // Outcome dedup, fail-closed: reuse ONLY a VERIFIED prior success
+  // (explicit_final_answer, not unverified) with identical family, profile
+  // hash, env fingerprint, and resolved model, inside the policy window
+  // (dedup_window_sec, default 3600, 0 = off). Anything else reruns.
+  // Skipped on resume and mock runs. Runs AFTER resolution so the resolved
+  // model string is comparable — not the configured one.
+  if (!opts.resume && !opts.mockScript) {
+    const family = familyOf(req.objective);
+    const ph = profileHash(profile);
+    const eh = envFingerprint(connectorList());
+    updateRun(runId, { outcome_family: family, profile_hash: ph, env_hash: eh });
+    const dup = findDuplicate({
+      family,
+      organism_id: req.organism_id ?? "default",
+      windowSec: Number(profile.policy?.dedup_window_sec ?? 3600),
+      excludeRunId: runId,
+      profileHash: req.profile_hash ?? ph,
+      envHash: req.env_hash ?? eh,
+      model: `${resolved.provider}/${resolved.id}`,
+    });
+    if (dup) {
+      let priorReceipt = null;
+      try { priorReceipt = JSON.parse(dup.receipt ?? "null"); } catch { /* ignore */ }
+      updateRun(runId, {
+        status: "done",
+        stop_reason: "dedup_reuse",
+        step_count: 0,
+        total_tokens: 0,
+        total_cost: 0,
+        outcome_hash: dup.outcome_hash,
+        receipt: JSON.stringify({
+          ...(priorReceipt ?? {}),
+          run_id: runId,
+          dedup: { reused: true, prior_run_id: dup.run_id, verified_basis: "explicit_final_answer+unverified=0+profile+env+model match" },
+        }).slice(0, 2000),
+        outcome: `reused verified outcome of ${dup.run_id} (same family+profile+env+model, finished ${dup.finished_at})`,
+        finished_at: new Date().toISOString(),
+      });
+      process.exit(0);
+    }
   }
   const result = await runAgent({
     profile,
@@ -112,6 +137,7 @@ async function main() {
     mockScript: opts.mockScript,
     mockCostPerCall: opts.mockCostPerCall,
     resolvedModel: resolved,
+    resolvedChain: chain,
     routing,
     initial: opts.resume ? loadCheckpoint(runId)?.state ?? null : null,
     // Mock runs are hermetic replays: no ADAM I/O (also keeps test workers fast).
