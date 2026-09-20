@@ -84,6 +84,8 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   let fallbackUsed = initial?.fallbackUsed ?? false;
   let destructiveUsed = initial?.destructiveUsed ?? 0;
   let parallelFanouts = initial?.parallelFanouts ?? 0;
+  const spendByProvider = initial?.spendByProvider ?? {};
+  const spendCaps = profile.policy?.credential_policy?.max_spend_usd ?? null;
   let lastCallKey = initial?.lastCallKey ?? null;
   let repeatCount = initial?.repeatCount ?? 0;
   let compressions = initial?.compressions ?? 0;
@@ -195,11 +197,17 @@ export async function runAgent({ profile, objective, organism_id = "default", on
         }
       }
 
-      // Model call with provider fallback chain.
+      // Model call with provider fallback chain. Spend caps (credential policy)
+      // are enforced per turn with live attribution: capped entries are
+      // skipped, spend shifts to the next entry, and full exhaustion halts the
+      // run instead of spending past the cap.
       let resp = null;
       let lastErr = null;
+      let cappedSkips = 0;
       const modelT0 = Date.now();
       for (const [pi, p] of providerCfgs.entries()) {
+        const cap = spendCaps?.[p.provider];
+        if (cap != null && (spendByProvider[p.provider] ?? 0) >= cap) { cappedSkips++; continue; }
         try {
           resp = await chat({ provider: p.provider, id: p.id, key: p.key, baseUrl: p.baseUrl, convKey }, { system, messages, tools: schemas });
           usedModel = p.id;
@@ -211,6 +219,12 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       }
       const modelDur = Date.now() - modelT0;
       if (!resp) {
+        if (providerCfgs.length > 0 && cappedSkips === providerCfgs.length) {
+          stopReason = "spend_capped";
+          outcome = `halted: provider spend caps reached (${Object.entries(spendByProvider).map(([k, v]) => `${k}=$${Number(v).toFixed(4)}`).join(", ") || "no spend yet"})`;
+          record({ step: budget.steps + 1, kind: "model", tool: null, durationMs: 0, tokens: 0, cost: 0, resultSummary: outcome });
+          break;
+        }
         stopReason = "model_error";
         outcome = { error: String(lastErr?.message ?? lastErr ?? "model call failed").slice(0, 400) };
         record({ step: budget.steps + 1, kind: "model", tool: null, durationMs: 0, tokens: 0, cost: 0, resultSummary: outcome.error });
@@ -221,6 +235,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       const tokens = resp.usage.inputTokens + resp.usage.outputTokens;
       const cost = resp.mockCost ?? estimateCost(usedModel, resp.usage);
       budget.spend({ tokens, cost });
+      spendByProvider[usedProvider] = Number(((spendByProvider[usedProvider] ?? 0) + cost).toFixed(6));
       record({ step: budget.steps, kind: "model", tool: null, durationMs: modelDur, tokens, cost, resultSummary: (resp.content ?? "").slice(0, 200) });
 
 const toolCalls = resp.toolCalls ?? [];
@@ -353,7 +368,7 @@ const toolCalls = resp.toolCalls ?? [];
       try {
         onCheckpoint?.({
           messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd },
-          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences,
+          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider,
         });
       } catch { /* checkpointing never breaks the loop */ }
     }
@@ -393,6 +408,7 @@ const toolCalls = resp.toolCalls ?? [];
       steps: budget.steps,
       tokens: budget.tokens,
       cost_usd: Number(budget.usd.toFixed(6)),
+      spend_by_provider: spendByProvider,
       duration_ms: Date.now() - startedAt,
       compressions,
       tokens_saved_estimate: tokensSavedEstimate,

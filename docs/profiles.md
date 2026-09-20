@@ -134,6 +134,26 @@ Recalled memory (structural hydration) is **untrusted data**, framed with the
 same banner discipline as tool output. It is injected as context, never as
 principal instructions alongside the objective.
 
+## Credential policy
+
+`provider: auto` reuses ambient host credentials — convenient and a privilege
+boundary. Profiles opt into explicit scoping:
+
+```yaml
+policy:
+  credential_policy:
+    allow: [local, anthropic]        # resolved chain is filtered; others never serve
+    max_spend_usd: { anthropic: 1.0 } # per-provider, per-run spend caps
+```
+
+- `allow` filters the resolved chain in the worker (routed local models
+  included); an empty result fails honestly with `no_provider`. Policy wins
+  over explicit provider overrides. Absent `allow` = current behavior.
+- `max_spend_usd` is enforced per model turn with live attribution: capped
+  entries are skipped, spend shifts down the fallback chain, and full
+  exhaustion halts as `spend_capped` (outcome: `exhausted`). Spend by provider
+  is in every receipt (`spend_by_provider`) and survives resume.
+
 ## Evidence artifacts
 
 Verification gates consume full verifier results (capped 8k, held in-memory

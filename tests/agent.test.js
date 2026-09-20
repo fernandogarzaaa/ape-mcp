@@ -580,3 +580,56 @@ test("agent: exhausted chain ends as model_error", async () => {
   assert.equal(res.stop_reason, "model_error");
   assert.equal(res.receipt.fallback_used, false);
 });
+
+test("agent: credential allow-list filters chains, absent policy passes through", async () => {
+  const { applyCredentialPolicy } = await import("../src/agent/providers.js");
+  const chain = [{ provider: "a" }, { provider: "b" }];
+  assert.deepEqual(applyCredentialPolicy(chain, {}).chain, chain, "no policy means no filtering");
+  assert.deepEqual(applyCredentialPolicy(chain, { credential_policy: {} }).chain, chain);
+  const f = applyCredentialPolicy(chain, { credential_policy: { allow: ["b"] } });
+  assert.deepEqual(f.chain, [{ provider: "b" }], "disallowed never serves");
+  assert.deepEqual(f.filtered, ["a"], "filtered recorded");
+});
+
+test("agent: per-provider spend caps halt instead of overspending", async () => {
+  const capped = {
+    ...baseProfile,
+    policy: { verify_before_finish: "off", credential_policy: { max_spend_usd: { mock: 0.05 } } },
+  };
+  const res = await runAgent({
+    profile: capped,
+    objective: "spend cap",
+    mockScript: [
+      { tool: "memory.recall", args: { query: "a" } },
+      { tool: "memory.recall", args: { query: "b" } },
+      { tool: "finish", args: { summary: "never" } },
+    ],
+    mockCostPerCall: 0.05,
+  });
+  assert.equal(res.stop_reason, "spend_capped");
+  assert.equal(res.receipt.spend_by_provider.mock, 0.05, "one turn served, second refused");
+  const zero = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off", credential_policy: { max_spend_usd: { mock: 0 } } } },
+    objective: "zero cap",
+    mockScript: [{ tool: "finish", args: { summary: "never" } }],
+    mockCostPerCall: 0.01,
+  });
+  assert.equal(zero.stop_reason, "spend_capped", "zero cap serves nothing");
+  assert.deepEqual(zero.receipt.spend_by_provider, {}, "no spend attributed");
+});
+
+test("agent: spend caps skip to fallback instead of dying", async () => {
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off", credential_policy: { max_spend_usd: { "bogus-nope": 0 } } } },
+    objective: "cap fallback",
+    mockScript: [{ tool: "finish", args: { summary: "via mock" } }],
+    resolvedModel: { provider: "bogus-nope", id: "x", resolution: "explicit" },
+    resolvedChain: [
+      { provider: "bogus-nope", id: "x", resolution: "explicit" },
+      { provider: "mock", id: "mock-model", resolution: "explicit" },
+    ],
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  assert.equal(res.receipt.fallback_used, true);
+  assert.deepEqual(Object.keys(res.receipt.spend_by_provider), ["mock"], "spend attributed to the serving provider only");
+});

@@ -4,7 +4,7 @@
 // memory (so future runs can recall it without the model having to store one), exits.
 import { loadProfile } from "./profiles.js";
 import { runAgent } from "./loop.js";
-import { resolveModel, resolveChain } from "./providers.js";
+import { resolveModel, resolveChain, applyCredentialPolicy } from "./providers.js";
 import { detectProviders } from "./hostdetect.js";
 import { classifyObjective, selectRoutedModel } from "./router.js";
 import { rankBySimilarity, buildHydrationContext } from "./similarity.js";
@@ -46,7 +46,10 @@ async function main() {
   // resolution. The decision is recorded in the receipt for later judgment.
   let routing = { routed: false, category: "general", confidence: 0, reason: "routing skipped" };
   let resolved = null;
-  const routingOn = (profile.policy?.routing ?? true) && profile.model.provider === "auto" && !opts.provider && !opts.model && !opts.mockScript;
+  // Credential allow-lists gate routing too: no point routing to local when
+  // local spend is disallowed for this profile.
+  const credAllow = profile.policy?.credential_policy?.allow;
+  const routingOn = (profile.policy?.routing ?? true) && profile.model.provider === "auto" && !opts.provider && !opts.model && !opts.mockScript && (!credAllow?.length || credAllow.includes("local"));
   if (routingOn) {
     const cls = classifyObjective(req.objective);
     routing = { routed: false, category: cls.category, confidence: cls.confidence, reason: cls.reasons.join("; ") };
@@ -83,6 +86,25 @@ async function main() {
       status: "failed",
       stop_reason: "no_provider",
       outcome: `provider resolution failed: ${chainErrors.map((e) => `${e.provider ?? "?"}:${e.error}`).join("; ").slice(0, 300) || "no resolvable provider"}`,
+      finished_at: new Date().toISOString(),
+    });
+    process.exit(1);
+  }
+  // Credential policy: explicit privilege boundary over ambient host
+  // credentials. Disallowed providers never serve the run — the chain is
+  // filtered here, and per-turn spend caps are enforced in the loop. Policy
+  // wins over explicit overrides: a disallowed provider fails honestly.
+  const credFilter = applyCredentialPolicy(chain, profile.policy);
+  if (credFilter.filtered.length) {
+    routing = { ...routing, credential_filtered: credFilter.filtered };
+    chain = credFilter.chain;
+    resolved = chain[0] ?? null;
+  }
+  if (!resolved) {
+    updateRun(runId, {
+      status: "failed",
+      stop_reason: "no_provider",
+      outcome: `credential policy allows none of the resolved providers (filtered: ${credFilter.filtered.join(", ")})`,
       finished_at: new Date().toISOString(),
     });
     process.exit(1);

@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased — audit hardening, round 4: causal analyzer (§21)
+## Unreleased — audit hardening, round 5: credential policy (§18)
+
+### Credential policy (§18)
+- `policy.credential_policy.allow` filters the resolved provider chain in the
+  worker — disallowed providers never serve, including task-routed models;
+  policy wins over explicit overrides; empty results fail honestly.
+- `policy.credential_policy.max_spend_usd` enforces per-provider per-run caps
+  per model turn with live attribution: capped entries are skipped, spend
+  shifts to fallback, full exhaustion halts as `spend_capped` (→ `exhausted`).
+- Every receipt carries `spend_by_provider`; attribution survives resume via
+  checkpoint state. Absent policy = previous behavior.
 
 ### Analyzer causality (§21)
 - Suggestions are now symptom → ranked hypotheses → intervention: every

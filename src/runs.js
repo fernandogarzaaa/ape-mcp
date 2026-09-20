@@ -180,6 +180,7 @@ export function outcomeStatus({ status, stop_reason, unverified } = {}) {
     case "max_tokens":
     case "max_usd":
     case "max_wall_seconds":
+    case "spend_capped":
       return "exhausted";
     default: return "failed";
   }

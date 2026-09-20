@@ -104,6 +104,7 @@ test("outcomes: outcome_status separates lifecycle from result", () => {
   assert.equal(outcomeStatus({ status: "done", stop_reason: "explicit_final_answer", unverified: 1 }), "unverified");
   assert.equal(outcomeStatus({ status: "done", stop_reason: "dedup_reuse" }), "success");
   assert.equal(outcomeStatus({ status: "done", stop_reason: "max_usd" }), "exhausted");
+  assert.equal(outcomeStatus({ status: "done", stop_reason: "spend_capped" }), "exhausted");
   assert.equal(outcomeStatus({ status: "done", stop_reason: "error_spiral" }), "failed");
   assert.equal(outcomeStatus({ status: "done", stop_reason: "repetition_detected" }), "failed");
   assert.equal(outcomeStatus({ status: "done", stop_reason: "model_error" }), "failed");

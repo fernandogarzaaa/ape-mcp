@@ -157,6 +157,24 @@ export async function resolveChain(modelCfg, overrides = {}, options = {}) {
   return { chain, errors };
 }
 
+// Credential policy: explicit privilege boundary over ambient host credentials
+// (provider:auto reuses whatever the host already holds). policy.
+// credential_policy.allow, when set, filters the resolved chain — disallowed
+// providers never serve the run, even if a key exists. Absent allow = current
+// behavior (everything resolvable may serve). Pure; the worker applies it,
+// the loop enforces per-turn spend caps from max_spend_usd separately.
+export function applyCredentialPolicy(chain, policy) {
+  const allow = policy?.credential_policy?.allow;
+  if (!allow?.length) return { chain: chain ?? [], filtered: [] };
+  const kept = [];
+  const filtered = [];
+  for (const e of chain ?? []) {
+    if (allow.includes(e.provider)) kept.push(e);
+    else filtered.push(e.provider);
+  }
+  return { chain: kept, filtered };
+}
+
 // --- Anthropic ---
 async function anthropicChat(cfg, system, messages, tools) {
   const wire = [];
