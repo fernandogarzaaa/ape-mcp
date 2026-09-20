@@ -190,11 +190,12 @@ export function listRuns(limit = 20) {
   return d.prepare("SELECT run_id, profile, model, status, stop_reason, step_count, total_cost, total_tokens, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT ?").all(limit);
 }
 
-// Recent runs for one profile, newest first — used by the failure-feedback loop
-// and the harness analyzer. Includes cost/steps/flags for metric computation.
+// Recent runs for one profile, newest first — used by the failure-feedback loop,
+// the harness analyzer, and cost-per-outcome views. Includes the receipt JSON so
+// consumers can read trajectory signals (drift, evidence, fan-out) per run.
 export function recentRuns(profile, limit = 10) {
   const d = open();
-  return d.prepare("SELECT run_id, status, stop_reason, model, total_cost, total_tokens, step_count, unverified, started_at FROM runs WHERE profile = ? ORDER BY started_at DESC LIMIT ?").all(profile, limit);
+  return d.prepare("SELECT run_id, status, stop_reason, model, total_cost, total_tokens, step_count, unverified, receipt, started_at FROM runs WHERE profile = ? ORDER BY started_at DESC LIMIT ?").all(profile, limit);
 }
 
 export function appendStep(runId, step) {

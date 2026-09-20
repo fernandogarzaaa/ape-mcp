@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased — audit hardening, round 3: durable tasks (P2)
+## Unreleased — audit hardening, round 4: causal analyzer (§21)
+
+### Analyzer causality (§21)
+- Suggestions are now symptom → ranked hypotheses → intervention: every
+  suggestion carries `symptom`, `hypotheses: [{cause, confidence, evidence}]`,
+  `patch`, `rationale`, and overall `confidence` (shape is backward
+  compatible — `finding`/`patch`/`rationale` kept).
+- Chronic `max_steps` no longer blindly raises the ceiling: receipts are read
+  for trajectory signals (drift warnings/streaks, stuck stops, evidence,
+  tool variety). Stuck trajectories get a no-patch fix-prompt/tools
+  intervention; only healthy trajectories earn a raise; receipt-less history
+  raises at LOW confidence with the uncertainty stated.
+- Fallback advice is credential-aware (sync env check): recommends only a
+  provider the operator can serve, or no patch with setup instructions.
+  Latency/cost/jurisdiction limits are stated, not assumed.
+- `recentRuns` now includes the receipt JSON for per-run trajectory linkage.
 
 ### SQLite-backed tasks (P2)
 - `tasks.json` read-modify-write is gone: `tasks.db` (WAL) with per-row
