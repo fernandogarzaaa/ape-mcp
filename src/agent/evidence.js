@@ -11,6 +11,30 @@
 //   agree        — >=1 positive, zero negatives
 //   conflict     — >=1 positive AND >=1 negative, or a lone negative
 //   insufficient — zero sources, or neutrals only
+import { sha256hex } from "./outcomes.js";
+
+// Full verifier results are capped for memory (matches the tool-message cap).
+export const EVIDENCE_FULL_CAP = 8000;
+
+// Evidence artifact: the gate consumes the FULL verifier result, never the
+// 300-char ledger summary. A verdict past the truncation point must not
+// silently degrade to "neutral". The digest pins the exact bytes judged.
+export function buildEvidence({ tool, fullText, step, eveThreshold = 50 }) {
+  const full = String(fullText ?? "").slice(0, EVIDENCE_FULL_CAP);
+  const v = extractVerdict(tool, full);
+  let verdict = v.verdict;
+  if (verdict === "__SCORE__") verdict = (v.score ?? 0) >= eveThreshold ? "positive" : "negative";
+  return {
+    evidence_id: "ev-" + sha256hex(tool + "\n" + full).slice(0, 16),
+    tool,
+    step,
+    verdict,
+    detail: v.detail,
+    score: v.score ?? null,
+    digest: "sha256:" + sha256hex(full),
+    excerpt: full.slice(0, 300),
+  };
+}
 export function extractVerdict(tool, resultSummary) {
   const text = String(resultSummary ?? "");
   let parsed = null;
@@ -48,9 +72,12 @@ export function correlateEvidence(steps, { verifyTools = [], eveThreshold = 50 }
   const sources = [];
   for (const s of steps ?? []) {
     if (s.kind !== "tool" || !verifyTools.includes(s.tool)) continue;
+    // Prefer the full verifier result carried in-memory; fall back to the
+    // truncated ledger summary (e.g. post-resume steps that predate artifacts).
+    const text = s.fullResult ?? s.resultSummary;
     // Skip failed calls — an error is not evidence for or against the claim.
-    if (String(s.resultSummary ?? "").includes('"error"')) continue;
-    const v = extractVerdict(s.tool, s.resultSummary);
+    if (String(text ?? "").includes('"error"')) continue;
+    const v = extractVerdict(s.tool, text);
     let verdict = v.verdict;
     if (verdict === "__SCORE__") verdict = (v.score ?? 0) >= eveThreshold ? "positive" : "negative";
     sources.push({ tool: s.tool, verdict, detail: v.detail, score: v.score ?? null });

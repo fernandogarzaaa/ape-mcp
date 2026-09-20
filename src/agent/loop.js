@@ -6,10 +6,10 @@ import { chat, estimateCost, toolSchemas, mockPlan, clearMock } from "./provider
 import { internalTools, invokeTool, isDestructiveCall } from "./registry.js";
 import { isRetryable, fingerprint, lookupImmunity, recordImmunity } from "./recovery.js";
 import { DEFAULT_VERIFY_TOOLS } from "./profiles.js";
-import { correlateEvidence } from "./evidence.js";
+import { correlateEvidence, buildEvidence } from "./evidence.js";
 import { compressHistory, estimateTokens } from "./context.js";
 import { shaShort, emitTrace } from "../trace.js";
-import { familyOf } from "./outcomes.js";
+import { familyOf, sha256hex } from "./outcomes.js";
 import { frameHydration } from "./similarity.js";
 import { initDrift, observeDrift, evaluateDrift, driftReceipt } from "./drift.js";
 import { auditDestructive } from "../dispatch.js";
@@ -89,6 +89,18 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   let compressions = initial?.compressions ?? 0;
   let tokensSavedEstimate = initial?.tokensSavedEstimate ?? 0;
   const driftState = initial?.driftState ?? initDrift();
+  // Evidence artifacts: full verifier results for the grounding gate (the gate
+  // consumes these, never the truncated ledger summaries). Restored on resume
+  // so a replacement worker keeps the evidence gathered so far.
+  const evidences = initial?.evidences ?? [];
+  const verifyTools = (profile.policy?.verify_tools?.length ? profile.policy.verify_tools : DEFAULT_VERIFY_TOOLS);
+  const collectEvidence = (stepObj, res) => {
+    if (res?.error) return;
+    if (!verifyTools.includes(stepObj.tool)) return;
+    const full = JSON.stringify(res).slice(0, 8000);
+    stepObj.fullResult = full;
+    evidences.push(buildEvidence({ tool: stepObj.tool, fullText: full, step: stepObj.step, eveThreshold: Number(profile.policy?.eve_threshold ?? 50) }));
+  };
   const record = (step) => {
     steps.push(step);
     onStep?.(step);
@@ -152,7 +164,9 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     // Record in call order so the ledger stays deterministic under concurrency.
     for (const { tc, res, attempts, durationMs } of results) {
       const prefix = attempts > 1 ? `retry:${attempts}:` : "";
-      record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs, tokens: 0, cost: 0, parallel: true, resultSummary: prefix + JSON.stringify(res).slice(0, 200) });
+      const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs, tokens: 0, cost: 0, parallel: true, resultSummary: prefix + JSON.stringify(res).slice(0, 200) };
+      collectEvidence(toolStep, res);
+      record(toolStep);
       messages.push({ role: "tool", toolCallId: tc.id, content: frameToolOutput(tc.name, JSON.stringify(res).slice(0, 8000)) });
     }
     const post = budget.check();
@@ -295,22 +309,25 @@ const toolCalls = resp.toolCalls ?? [];
           const auditEntry = { tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args ?? {})), policy: profile.policy?.destructive ?? "deny", destructiveUsed };
           if (!allowed) {
             res = { error: "destructive_not_allowed", tool: tc.name, hint: "this profile denies unattended destructive calls; finish with a proposal for the user to confirm instead" };
-            auditDestructive({ ...auditEntry, verdict: "denied" });
+            const audit = auditDestructive({ ...auditEntry, verdict: "denied" });
             emitTrace({ tool: "agent.destructive", argsHash: auditEntry.argsHash, resultSummary: `denied:${tc.name}` });
-            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:denied" });
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:denied" + (audit.persisted ? "" : ":audit-degraded") });
           } else if (destructiveUsed >= maxD) {
             res = { error: "destructive_cap_reached", tool: tc.name, hint: `this run already used ${destructiveUsed}/${maxD} destructive calls` };
-            auditDestructive({ ...auditEntry, verdict: "cap-reached" });
+            const audit = auditDestructive({ ...auditEntry, verdict: "cap-reached" });
             emitTrace({ tool: "agent.destructive", argsHash: auditEntry.argsHash, resultSummary: `cap-reached:${tc.name}` });
-            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:cap-reached" });
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:cap-reached" + (audit.persisted ? "" : ":audit-degraded") });
           } else {
             destructiveUsed++;
-            auditDestructive({ ...auditEntry, verdict: "executed", destructiveUsed });
+            const audit = auditDestructive({ ...auditEntry, verdict: "executed", destructiveUsed });
             emitTrace({ tool: "agent.destructive", argsHash: auditEntry.argsHash, resultSummary: `executed:${tc.name}#${destructiveUsed}` });
             try { res = await invokeTool(tool, tc.args ?? {}, { organism_id }); }
             catch (e) { res = { error: "handler_failed", message: String(e).slice(0, 200) }; }
+            // A destroyed-but-unrecorded operation must not look governed: when
+            // the audit write fails, the result says so explicitly.
+            if (!audit.persisted && res && typeof res === "object") res.audit_status = "degraded";
             const dur = Date.now() - t0;
-            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: dur, tokens: 0, cost: 0, resultSummary: "destructive:executed:" + JSON.stringify(res).slice(0, 160) });
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: dur, tokens: 0, cost: 0, resultSummary: "destructive:executed:" + (audit.persisted ? "" : "audit-degraded:") + JSON.stringify(res).slice(0, 160) });
           }
         } else {
           // Shared with parallel fan-out (runSimpleCall above): bounded recovery
@@ -318,7 +335,9 @@ const toolCalls = resp.toolCalls ?? [];
           const simple = await runSimpleCall(tool, tc, t0);
           res = simple.res;
           const prefix = simple.attempts > 1 ? `retry:${simple.attempts}:` : "";
-          record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: simple.durationMs, tokens: 0, cost: 0, resultSummary: prefix + JSON.stringify(res).slice(0, 200) });
+          const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: simple.durationMs, tokens: 0, cost: 0, resultSummary: prefix + JSON.stringify(res).slice(0, 200) };
+          collectEvidence(toolStep, res);
+          record(toolStep);
         }
         // Frame tool output as untrusted data before it re-enters the model.
         messages.push({ role: "tool", toolCallId: tc.id, content: frameToolOutput(tc.name, JSON.stringify(res).slice(0, 8000)) });
@@ -334,7 +353,7 @@ const toolCalls = resp.toolCalls ?? [];
       try {
         onCheckpoint?.({
           messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd },
-          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState,
+          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences,
         });
       } catch { /* checkpointing never breaks the loop */ }
     }
@@ -342,6 +361,10 @@ const toolCalls = resp.toolCalls ?? [];
     if (chainHasMock) clearMock(convKey);
   }
 
+  // Full verifier results ride in-memory only: strip them before returning so
+  // status payloads and the ledger keep their bounded shape. The receipt below
+  // carries the evidence artifacts (verdict + digest), not the full text.
+  for (const s of steps) delete s.fullResult;
   return {
     profile: profile.name,
     model: usedModel,
@@ -377,7 +400,8 @@ const toolCalls = resp.toolCalls ?? [];
       parallel_fanouts: parallelFanouts,
       fallback_used: fallbackUsed,
       drift: driftReceipt(driftState),
-      outcome_hash: shaShort(typeof outcome === "string" ? outcome : JSON.stringify(outcome ?? "")),
+      evidence: evidences,
+      outcome_hash: sha256hex(typeof outcome === "string" ? outcome : JSON.stringify(outcome ?? "")),
       family: familyOf(objective),
       ledger: "runs.db",
     },

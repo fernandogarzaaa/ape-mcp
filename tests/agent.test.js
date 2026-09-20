@@ -355,6 +355,79 @@ test("agent: initialContext is injected ahead of the objective", async () => {
   assert.equal(res.stop_reason, "explicit_final_answer");
 });
 
+test("agent: gate consumes full verifier text, not the truncated summary", async () => {
+  const { correlateEvidence, buildEvidence } = await import("../src/agent/evidence.js");
+  // The audit's exact failure mode: verdict past the 300-char truncation point.
+  const full = JSON.stringify({ padding: "x".repeat(500), verdict: "SOUND" });
+  const truncated = full.slice(0, 300); // verdict cut off → neutral on summary alone
+  const { extractVerdict } = await import("../src/agent/evidence.js");
+  assert.equal(extractVerdict("genesis.audit_claim", truncated).verdict, "neutral", "summary alone loses the verdict");
+  const judged = correlateEvidence(
+    [{ kind: "tool", tool: "genesis.audit_claim", resultSummary: truncated, fullResult: full }],
+    { verifyTools: ["genesis.audit_claim"] }
+  );
+  assert.equal(judged.status, "agree", "full text restores the verdict");
+  const art = buildEvidence({ tool: "genesis.audit_claim", fullText: full, step: 3 });
+  assert.ok(art.evidence_id.startsWith("ev-"), "artifact id");
+  assert.ok(art.digest.startsWith("sha256:"), "digest pins judged bytes");
+  assert.equal(art.verdict, "positive");
+  assert.equal(art.step, 3);
+});
+
+test("agent: verify-tool calls leave evidence artifacts in the receipt", async () => {
+  const steps = [];
+  const res = await runAgent({
+    profile: { ...baseProfile, policy: { verify_before_finish: "off" } },
+    objective: "evidence pipe",
+    mockScript: [
+      { tool: "genesis.audit_claim", args: {} },
+      { tool: "finish", args: { summary: "done" } },
+    ],
+    onStep: (s) => steps.push(s),
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  assert.equal(res.receipt.evidence.length, 1, "one artifact recorded");
+  assert.equal(res.receipt.evidence[0].tool, "genesis.audit_claim");
+  assert.ok(res.receipt.evidence[0].digest.startsWith("sha256:"));
+  assert.ok(!("fullResult" in res.steps.find((s) => s.tool === "genesis.audit_claim")), "full text stripped from returned steps, not persisted");
+});
+
+test("agent: audit failure is explicit degraded, never silent", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { auditDestructive } = await import("../src/dispatch.js");
+  const prev = process.env.APE_DATA_DIR;
+  assert.equal(auditDestructive({ tool: "probe" }).persisted, true, "writable ledger persists");
+  const blocker = join(mkdtempSync(join(tmpdir(), "ape-audit-")), "file-not-dir");
+  writeFileSync(blocker, "x");
+  process.env.APE_DATA_DIR = blocker;
+  try {
+    assert.equal(auditDestructive({ tool: "probe" }).persisted, false, "unwritable ledger reports failure");
+    // Loop plumbing: a denied destructive call under a dead ledger says so.
+    const steps = [];
+    const res = await runAgent({
+      profile: {
+        ...baseProfile,
+        tools: [{ engine: "adam.evolve" }, { builtin: "finish" }],
+        policy: { destructive: "deny", verify_before_finish: "off" },
+        limits: { max_steps: 5, max_tokens: 100000, max_wall_seconds: 60, max_usd: 1.0 },
+      },
+      objective: "audit degraded",
+      mockScript: [
+        { tool: "adam.evolve", args: { action: "accept", proposal_id: "x" } },
+        { tool: "finish", args: { summary: "done" } },
+      ],
+      onStep: (s) => steps.push(s),
+    });
+    assert.equal(res.stop_reason, "explicit_final_answer");
+    assert.ok(steps.some((s) => String(s.resultSummary).includes("destructive:denied:audit-degraded")), "degraded audit is recorded on the step");
+  } finally {
+    if (prev === undefined) delete process.env.APE_DATA_DIR;
+    else process.env.APE_DATA_DIR = prev;
+  }
+});
+
 test("agent: evidence correlation agree/conflict/insufficient", async () => {
   const { correlateEvidence, extractVerdict } = await import("../src/agent/evidence.js");
   assert.equal(extractVerdict("genesis.audit_claim", JSON.stringify({ verdict: "SOUND" })).verdict, "positive");
