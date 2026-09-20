@@ -133,6 +133,30 @@ export async function resolveModel(modelCfg, overrides = {}) {
   return { error: "no_provider_detected", detected: stored, hint: "set APE_PROVIDER or a provider key, or run a local model" };
 }
 
+// Ordered resolved provider chain: primary first, then profile fallbacks.
+// Entries that cannot be resolved (no credential) are recorded in errors and
+// skipped — a dead primary with a live fallback still runs. Overrides apply
+// to the primary only. options.skipPrimary reuses an already-resolved primary
+// (e.g. task-routed) and resolves just the fallbacks.
+export async function resolveChain(modelCfg, overrides = {}, options = {}) {
+  const chain = [];
+  const errors = [];
+  const push = async (cfg) => {
+    const r = await resolveModel(cfg, {});
+    if (r.error) errors.push({ provider: cfg?.provider ?? null, id: cfg?.id ?? null, error: r.error });
+    else chain.push(r);
+  };
+  if (!options.skipPrimary) {
+    const primary = await resolveModel(modelCfg, overrides);
+    if (primary.error) errors.push({ provider: modelCfg?.provider ?? null, id: modelCfg?.id ?? null, error: primary.error });
+    else chain.push(primary);
+  }
+  const fb = modelCfg?.fallback;
+  const list = Array.isArray(fb) ? fb : (fb ? [fb] : []);
+  for (const f of list) await push(f);
+  return { chain, errors };
+}
+
 // --- Anthropic ---
 async function anthropicChat(cfg, system, messages, tools) {
   const wire = [];
