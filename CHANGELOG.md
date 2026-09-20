@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased — audit hardening, round 2
+## Unreleased — audit hardening, round 3: durable tasks (P2)
+
+### SQLite-backed tasks (P2)
+- `tasks.json` read-modify-write is gone: `tasks.db` (WAL) with per-row
+  mutations — concurrent writers cannot lose tasks, commits are atomic (no
+  torn writes). Same `taskCreate/taskGet/taskList/taskFinish` surface
+  (`taskList` gains an optional limit).
+- Stale `running` rows reconcile to `expired` with an honest reason (dead
+  owner, or ownerless + untouched past grace). Live owners never expire by
+  age — long tasks keep their results. Runs opportunistically on create.
+- TTL pruning for terminal rows (default 7d, `APE_TASK_TTL_MS`, 0 disables).
+- One-time migration imports legacy `tasks.json`, then retires it as
+  `tasks.json.migrated`.
+- Tested the audit's cases: 4-process × 5-task burst with zero loss and no
+  cross-talk; SIGKILL mid-burst → `integrity_check` ok, orphans expire.
 
 ### Evidence artifacts (P2)
 - The grounding gate now consumes FULL verifier results (capped 8k, in-memory),
