@@ -373,9 +373,10 @@ export async function compareBuilds(input) {
     return { markdown, structured: { ...report } };
 }
 /**
- * Run a population, then predict the UX the wider user base will experience —
- * confusion, abandonment, onboarding failure, support contacts, and
- * accessibility barriers, each with a confidence interval.
+ * Run a population, then produce heuristic simulation estimates (NOT
+ * population inference) — confusion/abandonment simulation ranges,
+ * onboarding/accessibility estimates, and a heuristic support-contact
+ * scenario score, each with explicit provenance and calibration status.
  */
 export async function runPredictUX(input) {
     const study = await simulatePopulation(toPopulationOptions(input));
@@ -718,7 +719,7 @@ export async function runEveBenchTool(input) {
     const report = await runEveBench({ seed: input.seed, maxSteps: input.max_steps });
     return { markdown: truncate(renderEveBenchMarkdown(report)), structured: { ...report } };
 }
-/** Validate EVE against the known-quality benchmark apps (construct validity). */
+/** Validate EVE against the known-quality benchmark apps (internal discrimination regression — NOT human validation). */
 export async function runBenchmark(input) {
     const validation = await validateBenchmarks({ cognitive: input.cognitive });
     const structured = {
@@ -727,7 +728,7 @@ export async function runBenchmark(input) {
         results: validation.results.map((r) => ({ tier: r.tier, meanScore: r.meanScore })),
     };
     const markdown = [
-        "# EVE benchmark (construct validity)",
+        "# EVE benchmark (construct-discrimination regression — internal, not human validation)",
         "",
         ...validation.results.map((r) => `- **${r.tier}** — mean score ${r.meanScore}/100`),
         "",
