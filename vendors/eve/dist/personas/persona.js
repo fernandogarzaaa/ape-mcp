@@ -17,6 +17,7 @@ export const DEFAULT_ACCESSIBILITY = {
 const TRAIT_KEYS = [
     "readingSpeedWpm",
     "clickAccuracy",
+    "typingAccuracy",
     "motorSpeed",
     "memoryRetention",
     "riskTolerance",
@@ -36,6 +37,7 @@ const TRAIT_KEYS = [
 export const BASELINE_TRAITS = {
     readingSpeedWpm: 240,
     clickAccuracy: 0.85,
+    typingAccuracy: 0.85,
     motorSpeed: 0.6,
     memoryRetention: 0.65,
     riskTolerance: 0.45,
@@ -53,7 +55,13 @@ export const BASELINE_TRAITS = {
 };
 /** Build a complete persona from a partial spec, validating trait ranges. */
 export function definePersona(spec) {
-    const traits = { ...BASELINE_TRAITS, ...spec.traits };
+    // Backwards compat (P1.2): specs authored before `typingAccuracy` existed
+    // inherit it from pointer precision unless explicitly overridden.
+    const traits = {
+        ...BASELINE_TRAITS,
+        ...spec.traits,
+        typingAccuracy: spec.traits?.typingAccuracy ?? spec.traits?.clickAccuracy ?? BASELINE_TRAITS.typingAccuracy,
+    };
     for (const key of TRAIT_KEYS) {
         const value = traits[key];
         if (typeof value !== "number" || Number.isNaN(value)) {

@@ -49,6 +49,7 @@ export interface ConversationAdapterOptions {
 export declare class ConversationAdapter implements BrowserAdapter, KernelSurface {
     private readonly options;
     readonly name = "conversation";
+    readonly version = "0.5.0";
     readonly capabilities: {
         spatial: boolean;
         modality: import("../core/registry.js").Modality;
