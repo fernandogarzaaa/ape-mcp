@@ -45,6 +45,11 @@ function summarizeHuman(study) {
     const n = traces.length || 1;
     const abandoned = (t) => t.abandoned ?? !t.completed;
     const steps = traces.map((t) => t.steps ?? t.path.length);
+    // P1.10: use observed durations when traces carry them; steps stay a
+    // separate metric and must never be labeled timing.
+    const durations = traces
+        .map((t) => t.durationMs)
+        .filter((v) => typeof v === "number" && Number.isFinite(v) && v >= 0);
     const perScreenAbandon = new Map();
     for (const t of traces) {
         if (!abandoned(t))
@@ -63,6 +68,7 @@ function summarizeHuman(study) {
         completionRate: traces.filter((t) => t.completed).length / n,
         abandonmentRate: traces.filter(abandoned).length / n,
         medianSteps: quantile(steps, 0.5),
+        medianDurationMs: durations.length ? quantile(durations, 0.5) : null,
         transitions: transitionsFromPaths(traces.map((t) => t.path)),
         perScreenAbandon,
         meanFrustration: frustrations.length
@@ -85,6 +91,9 @@ function summarizeEve(study) {
         completionRate: study.successRate,
         abandonmentRate: study.dropoffRate,
         medianSteps: quantile(ops.map((o) => o.steps), 0.5),
+        // Population operators do not report wall durations; step counts are a
+        // separate efficiency metric, never timing (P1.10).
+        medianDurationMs: null,
         transitions: transitionsFromPaths(ops.map((o) => o.path)),
         perScreenAbandon,
         meanFrustration: study.frustration.mean,
@@ -114,8 +123,24 @@ export function calibrate(human, eve) {
             (Math.abs(e.completionRate - h.completionRate) +
                 Math.abs(e.abandonmentRate - h.abandonmentRate)));
     const navigationSimilarity = clamp01(cosine(e.transitions, h.transitions));
+    // P1.10: duration similarity uses observed durations on BOTH sides when
+    // available. EVE population operators carry no wall durations, so when
+    // human durations exist we report step-count similarity honestly as
+    // stepSimilarity and mark timing as unknown; when neither side has
+    // durations, timingSimilarity is omitted (null) rather than mislabeled.
     const stepScale = Math.max(e.medianSteps, h.medianSteps, 1);
-    const timingSimilarity = clamp01(1 - Math.abs(e.medianSteps - h.medianSteps) / stepScale);
+    const stepSimilarity = clamp01(1 - Math.abs(e.medianSteps - h.medianSteps) / stepScale);
+    let timingSimilarity = null;
+    if (h.medianDurationMs !== null && e.medianDurationMs !== null) {
+        const dScale = Math.max(e.medianDurationMs, h.medianDurationMs, 1);
+        timingSimilarity = clamp01(1 - Math.abs(e.medianDurationMs - h.medianDurationMs) / dScale);
+    }
+    else if (h.medianDurationMs !== null) {
+        notes.push("Human traces report durationMs but EVE population operators do not carry wall durations — timing similarity omitted; step-count similarity reported separately.");
+    }
+    else {
+        notes.push("No duration data on either side — timing similarity omitted; see step-count similarity.");
+    }
     const { xs, ys } = pairShared(e.perScreenAbandon, h.perScreenAbandon);
     const frictionCorrelation = xs.length >= 2 ? pearson(xs, ys) : null;
     if (frictionCorrelation === null)
@@ -135,7 +160,7 @@ export function calibrate(human, eve) {
     const components = [
         { value: behaviorSimilarity, weight: 0.35 },
         { value: navigationSimilarity, weight: 0.3 },
-        { value: timingSimilarity, weight: 0.2 },
+        { value: stepSimilarity, weight: 0.2 },
     ];
     if (frictionCorrelation !== null)
         components.push({ value: (frictionCorrelation + 1) / 2, weight: 0.15 });
@@ -151,7 +176,9 @@ export function calibrate(human, eve) {
         eveSampleSize: eve.size,
         behaviorSimilarity: round(behaviorSimilarity),
         navigationSimilarity: round(navigationSimilarity),
-        timingSimilarity: round(timingSimilarity),
+        timingSimilarity: timingSimilarity === null ? null : round(timingSimilarity),
+        stepSimilarity: round(stepSimilarity),
+        trajectorySimilarity: null,
         frictionCorrelation: frictionCorrelation === null ? null : round(frictionCorrelation),
         frustrationAlignment: frustrationAlignment === null ? null : round(frustrationAlignment),
         confidenceAlignment: confidenceAlignment === null ? null : round(confidenceAlignment),
