@@ -27,6 +27,7 @@
  * `docs/projection-debt-ledger.md` (items 1–6); the web view is kept for
  * compatibility, warts included.
  */
+import { ADAPTER_VERSION } from "../core/versions.js";
 import { TEXTUAL_SURFACE } from "./capabilities.js";
 import { connectMcpServer } from "./mcpClient.js";
 import { LINE_HEIGHT, layoutTextFrame } from "./textFrame.js";
@@ -42,6 +43,7 @@ const MAX_RESULT_LINES = 12;
 const MCP_ACTION_VERBS = ["mcp.invoke", "read", "wait"];
 export class McpAdapter {
     name = "mcp";
+    version = ADAPTER_VERSION;
     capabilities = { ...TEXTUAL_SURFACE, actionVerbs: MCP_ACTION_VERBS };
     connector;
     windowRows;
