@@ -50,9 +50,10 @@ export declare function runProductReport(input: RunUsabilityStudyInput): Promise
  */
 export declare function compareBuilds(input: CompareBuildsInput): Promise<ToolOutput>;
 /**
- * Run a population, then predict the UX the wider user base will experience —
- * confusion, abandonment, onboarding failure, support contacts, and
- * accessibility barriers, each with a confidence interval.
+ * Run a population, then produce heuristic simulation estimates (NOT
+ * population inference) — confusion/abandonment simulation ranges,
+ * onboarding/accessibility estimates, and a heuristic support-contact
+ * scenario score, each with explicit provenance and calibration status.
  */
 export declare function runPredictUX(input: RunUsabilityStudyInput): Promise<ToolOutput>;
 /**
@@ -97,7 +98,7 @@ export declare function listProfessionsTool(): ToolOutput;
 export declare function listCulturesTool(): ToolOutput;
 /** Run the formal EVE Bench multi-dimensional benchmark platform. */
 export declare function runEveBenchTool(input: EveBenchInput): Promise<ToolOutput>;
-/** Validate EVE against the known-quality benchmark apps (construct validity). */
+/** Validate EVE against the known-quality benchmark apps (internal discrimination regression — NOT human validation). */
 export declare function runBenchmark(input: BenchmarkInput): Promise<ToolOutput>;
 /** Read a previously written report back from disk. */
 export declare function getReport(input: GetReportInput): Promise<ToolOutput>;

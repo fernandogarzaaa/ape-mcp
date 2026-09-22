@@ -31,7 +31,7 @@ export type { Rng } from "./core/random.js";
 export { createRng, seedFromString } from "./core/random.js";
 export type { ActionVerbEntry, EveRegistries, FindingCategoryEntry, Modality, RegistryEntry, ScoreDimensionEntry, } from "./core/registry.js";
 export { ALL_MODALITIES, EveRegistry } from "./core/registry.js";
-export type { Action, BoundingBox, Finding, FindingCategory, FindingSeverity, LoopIteration, PerceivedRole, Percept, Point, Prediction, PredictionOutcome, Score, ScoreDimension, SessionUsage, Viewport, VisibleDialog, VisibleElement, } from "./core/types.js";
+export type { Action, BoundingBox, EvidenceProvenance, Finding, FindingCategory, FindingSeverity, LatencyEvidence, LoopIteration, ObservationSource, PerceivedRole, Percept, Point, Prediction, PredictionOutcome, Score, ScoreDimension, SessionUsage, Viewport, VisibleDialog, VisibleElement, } from "./core/types.js";
 export { describeAction, FINDING_CATEGORIES, SCORE_DIMENSIONS } from "./core/types.js";
 export * from "./emotion/index.js";
 export type { CognitiveConfig, CognitiveLoadTimeline } from "./engine/cognitiveSuite.js";

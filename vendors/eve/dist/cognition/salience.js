@@ -1,4 +1,5 @@
-import { screenSignature } from "../memory/memory.js";
+import { isAffordanceAvailable } from "../memory/memory.js";
+import { stableIdentityKey } from "../memory/surfaceIdentity.js";
 import { tokenize } from "./mentalModel.js";
 const DESTRUCTIVE_RE = /\b(delete|remove|discard|reset|erase|clear all|deactivate|cancel account|unsubscribe)\b/i;
 const COMMITTING_RE = /\b(submit|pay|purchase|buy|confirm|send|publish|order)\b/i;
@@ -55,7 +56,7 @@ export function goalRelevanceOf(element, goalKeywords) {
  */
 export function scoreAffordances(ctx, goalKeywords) {
     const { percept, persona, memory, emotion } = ctx;
-    const sig = screenSignature(percept);
+    const sig = stableIdentityKey(percept);
     const node = memory.knownScreens().find((s) => s.signature === sig);
     const scores = [];
     for (const element of percept.elements) {
@@ -65,7 +66,14 @@ export function scoreAffordances(ctx, goalKeywords) {
             continue;
         const goalRelevance = goalRelevanceOf(element, goalKeywords);
         const prominence = prominenceOf(element, percept);
-        const tried = node?.triedAffordances.has(element.text.trim().toLowerCase()) ?? false;
+        // Availability rule (memory.isAffordanceAvailable): a tried-mark from
+        // the stable key counts only when the label is available RIGHT NOW.
+        // (For elements of the current percept this holds by construction —
+        // the loop already skipped disabled ones — which is exactly the point:
+        // the check is structural, not situational.)
+        const tried = (node?.triedAffordances.has(element.text.trim().toLowerCase()) &&
+            isAffordanceAvailable(percept, element.text)) ??
+            false;
         const novelty = tried ? 0 : 1;
         const risk = riskOf(element);
         const t = persona.traits;

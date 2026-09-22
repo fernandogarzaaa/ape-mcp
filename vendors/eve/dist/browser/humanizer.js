@@ -1,6 +1,22 @@
 import { clamp01 } from "../core/random.js";
 import { clickScatterPx, motorActionMs, typingIntervalMs, } from "../personas/persona.js";
-export function planClick(target, persona, rng) {
+export const CLICK_MISCLICK_POLICY = {
+    nearMissThresholdPx: 10,
+    scatterMultiple: 1.5,
+};
+export const TAP_MISCLICK_POLICY = {
+    nearMissThresholdPx: 12,
+    scatterMultiple: 1.5,
+};
+/** Near-edge slip (corrected) vs far stray, without consuming extra RNG. */
+function missDisposition(missDistancePx, scatter, policy) {
+    if (missDistancePx <= 0)
+        return "hit";
+    return missDistancePx <= Math.max(policy.nearMissThresholdPx, scatter * policy.scatterMultiple)
+        ? "corrected"
+        : "stray";
+}
+export function planClick(target, persona, rng, policy = CLICK_MISCLICK_POLICY) {
     const cx = target.box.x + target.box.width / 2;
     const cy = target.box.y + target.box.height / 2;
     const scatter = clickScatterPx(persona);
@@ -10,12 +26,29 @@ export function planClick(target, persona, rng) {
         x > target.box.x + target.box.width ||
         y < target.box.y ||
         y > target.box.y + target.box.height;
-    // A miss on a tiny target: humans notice and correct, which costs time —
-    // the actuator re-aims at the center, but we keep `missed` as a signal.
-    const point = missed ? { x: cx, y: cy } : { x, y };
+    // P1.1: a miss is either corrected (mis-aim + time cost, environment sees
+    // the target) or a true stray (the scattered point actually lands and the
+    // environment receives the wrong interaction). Decided WITHOUT consuming
+    // extra RNG — by how far outside the target the scatter landed — so the
+    // random stream (and hence seeded trajectories) is unchanged.
+    const outsideX = Math.max(target.box.x - x, 0, x - (target.box.x + target.box.width));
+    const outsideY = Math.max(target.box.y - y, 0, y - (target.box.y + target.box.height));
+    const missDistancePx = Math.hypot(outsideX, outsideY);
+    let disposition = "hit";
+    let point = { x, y };
+    if (missed) {
+        disposition = missDisposition(missDistancePx, scatter, policy);
+        if (disposition === "corrected")
+            point = { x: cx, y: cy };
+    }
     const durationMs = Math.max(120, rng.gaussian(motorActionMs(persona), motorActionMs(persona) * 0.2)) +
         (missed ? motorActionMs(persona) * 0.6 : 0);
-    return { point: { x: Math.round(point.x), y: Math.round(point.y) }, missed, durationMs };
+    return {
+        point: { x: Math.round(point.x), y: Math.round(point.y) },
+        missed,
+        disposition,
+        durationMs,
+    };
 }
 /**
  * Touch equivalent of {@link planClick}: a tap.
@@ -31,7 +64,7 @@ export function planClick(target, persona, rng) {
 const TOUCH_SCATTER_MULTIPLIER = 2.2;
 /** Approximate radius of a fingertip contact patch, in CSS px. */
 const CONTACT_PATCH_RADIUS_PX = 5;
-export function planTap(target, persona, rng, viewport) {
+export function planTap(target, persona, rng, viewport, policy = TAP_MISCLICK_POLICY) {
     const cx = target.box.x + target.box.width / 2;
     const cy = target.box.y + target.box.height / 2;
     const reach = thumbReachCost(cx, cy, viewport);
@@ -42,11 +75,26 @@ export function planTap(target, persona, rng, viewport) {
         x > target.box.x + target.box.width ||
         y < target.box.y ||
         y > target.box.y + target.box.height;
-    const point = missed ? { x: cx, y: cy } : { x, y };
+    let disposition = "hit";
+    let point = { x, y };
+    if (missed) {
+        // Same RNG-neutral rule as planClick with the touch policy:
+        // reach-inflated scatter makes far strays likelier one-handed.
+        const tOutsideX = Math.max(target.box.x - x, 0, x - (target.box.x + target.box.width));
+        const tOutsideY = Math.max(target.box.y - y, 0, y - (target.box.y + target.box.height));
+        disposition = missDisposition(Math.hypot(tOutsideX, tOutsideY), scatter, policy);
+        if (disposition === "corrected")
+            point = { x: cx, y: cy };
+    }
     const baseDuration = motorActionMs(persona) * (1 + reach * 0.5);
     const durationMs = Math.max(120, rng.gaussian(baseDuration, baseDuration * 0.2)) +
         (missed ? motorActionMs(persona) * 0.6 : 0);
-    return { point: { x: Math.round(point.x), y: Math.round(point.y) }, missed, durationMs };
+    return {
+        point: { x: Math.round(point.x), y: Math.round(point.y) },
+        missed,
+        disposition,
+        durationMs,
+    };
 }
 /**
  * Cost, 0 (cheap) to ~1 (expensive), of a one-handed thumb reaching (x, y).
@@ -88,8 +136,9 @@ const NEIGHBOR_KEYS = {
 };
 export function planTyping(text, persona, rng) {
     const interval = typingIntervalMs(persona);
-    // Typo probability scales with speed and inverse accuracy.
-    const typoP = 0.02 + (1 - persona.traits.clickAccuracy) * 0.05;
+    // P1.2: typo probability comes from TYPING accuracy, never pointer precision.
+    const typingAccuracy = persona.traits.typingAccuracy ?? persona.traits.clickAccuracy;
+    const typoP = 0.02 + (1 - typingAccuracy) * 0.05;
     return buildTypingPlan(text, interval, typoP, rng);
 }
 /** Multiplier on typed-character cadence when typing on a soft keyboard. */
@@ -105,7 +154,8 @@ const SOFT_KEYBOARD_TYPO_MULTIPLIER = 1.8;
  */
 export function planSoftKeyType(text, persona, rng) {
     const interval = typingIntervalMs(persona) * SOFT_KEYBOARD_SLOWDOWN;
-    const typoP = (0.02 + (1 - persona.traits.clickAccuracy) * 0.05) * SOFT_KEYBOARD_TYPO_MULTIPLIER;
+    const typingAccuracy = persona.traits.typingAccuracy ?? persona.traits.clickAccuracy;
+    const typoP = (0.02 + (1 - typingAccuracy) * 0.05) * SOFT_KEYBOARD_TYPO_MULTIPLIER;
     return buildTypingPlan(text, interval, typoP, rng);
 }
 function buildTypingPlan(text, interval, typoP, rng) {

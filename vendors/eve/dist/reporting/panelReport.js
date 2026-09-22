@@ -58,16 +58,16 @@ export function renderPanelMarkdown(panel) {
     push(forecast.summary);
     push();
     if (forecast.struggles.length > 0) {
-        push("**Predicted struggle points:**");
+        push("**Heuristic struggle indices (scenario scores, not probabilities):**");
         for (const s of forecast.struggles.slice(0, 6)) {
-            push(`- ${s.location} — ${Math.round(s.struggleProbability * 100)}% risk (${s.signals.join(", ")})`);
+            push(`- ${s.location} — struggle index ${s.struggleIndex.toFixed(2)} (${s.signals.join(", ")})`);
         }
         push();
     }
     if (forecast.recommendedChanges.length > 0) {
-        push("**Highest-leverage changes:**");
+        push("**Highest-leverage changes (heuristic lift indices, not causal estimates):**");
         for (const c of forecast.recommendedChanges) {
-            push(`- ${c.change} — est. +${Math.round(c.estimatedLift * 100)}% completion. ${c.rationale}`);
+            push(`- ${c.change} — heuristic lift index +${Math.round(c.estimatedLift * 100)}%. ${c.rationale}`);
         }
         push();
     }
