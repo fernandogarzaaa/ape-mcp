@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased — audit hardening, round 5: credential policy (§18)
+## Unreleased — audit hardening, round 6: repairing immunity (§19)
+
+### Repair-selecting immunity (§19)
+- The loop now selects a REPAIR from history instead of retrying identically:
+  `retry` (transient blips), `retry-delayed` (rate limits/cold starts),
+  `retry-shrunk` (oversized inputs, truncates long string args).
+- Selection policy: learned past success wins, ≥2 past failures escalate to a
+  backed-off retry, otherwise the per-class default. Unknown recorded actions
+  cannot escape the vocabulary. Giving up stays the drift halt's job.
+- Outcomes recorded back with reinforcing confidence (success 0.85 / fail 0.6);
+  repairs applied are named in step summaries and logged in
+  `receipt.repairs` (survives resume via checkpoint).
 
 ### Credential policy (§18)
 - `policy.credential_policy.allow` filters the resolved provider chain in the

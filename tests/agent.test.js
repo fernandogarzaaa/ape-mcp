@@ -304,6 +304,91 @@ test("agent: recovery retries transient failures once and records immunity", asy
   assert.equal(fingerprint("x.y", { error: "handler_failed" }), "x.y:handler_failed");
 });
 
+test("agent: repair selection — learned success wins, failure escalates, defaults per class", async () => {
+  const { selectRepair, parseRepairHistory, shrinkArgs } = await import("../src/agent/recovery.js");
+  // Defaults with no history.
+  assert.deepEqual(selectRepair("t:connector_timeout", null, "connector_timeout"), { action: "retry-delayed", delayMs: 1500, learned: false });
+  assert.deepEqual(selectRepair("t:connector_fetch_failed", null, "connector_fetch_failed"), { action: "retry", learned: false });
+  assert.deepEqual(selectRepair("t:handler_failed", null, "handler_failed"), { action: "retry", learned: false });
+  // Learned success overrides the default.
+  const hist = "repair:t:handler_failed repair=retry-shrunk outcome=success";
+  assert.deepEqual(selectRepair("t:handler_failed", hist, "handler_failed"), { action: "retry-shrunk", learned: true });
+  const hist2 = "repair:t:x repair=retry-delayed:3000 outcome=success";
+  assert.deepEqual(selectRepair("t:x", hist2, "timeout"), { action: "retry-delayed", delayMs: 3000, learned: true });
+  // Unknown recorded actions cannot escape the vocabulary.
+  assert.equal(selectRepair("t:x", "repair:t:x repair=nuke outcome=success", "timeout").action, "retry");
+  // Repeated failure escalates to a backed-off retry instead of another identical attempt.
+  const fails = "repair:t:x repair=retry outcome=fail:timeout\nrepair:t:x repair=retry outcome=fail:timeout";
+  assert.deepEqual(selectRepair("t:x", fails, "timeout"), { action: "retry-delayed", delayMs: 1500, learned: true, escalated: true });
+  // One failure is not a pattern — default stands.
+  assert.equal(selectRepair("t:x", "repair:t:x repair=retry outcome=fail:timeout", "timeout").learned, false);
+  // History parsing ignores other fingerprints.
+  assert.deepEqual(parseRepairHistory("repair:other repair=retry outcome=success", "t:x"), []);
+  // Shrink truncates long strings, preserves shape.
+  const shrunk = shrinkArgs({ a: "x".repeat(2000), b: "short", c: 42 });
+  assert.ok(shrunk.a.length < 2000 && shrunk.a.includes("truncated"), "long arg shrunk with marker");
+  assert.equal(shrunk.b, "short");
+  assert.equal(shrunk.c, 42);
+});
+
+test("agent: flaky connector recovers via delayed repair, logged in receipt", async () => {
+  const { createServer } = await import("node:http");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  let hits = 0;
+  const srv = createServer((req, res) => {
+    hits++;
+    if (hits === 1) return; // hang → client timeout (connector_timeout)
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"recovered":true}');
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const prev = process.env.APE_DATA_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "ape-repair-"));
+  mkdirSync(join(dir, "connectors"), { recursive: true });
+  writeFileSync(join(dir, "connectors", "flaky.yaml"), [
+    "name: flaky",
+    `base_url: http://127.0.0.1:${srv.address().port}`,
+    "egress_allow: [127.0.0.1]",
+    "operations:",
+    "  - name: get",
+    "    method: GET",
+    "    path: /data",
+    "    timeout_ms: 400",
+    "",
+  ].join("\n"));
+  process.env.APE_DATA_DIR = dir;
+  try {
+    const steps = [];
+    const res = await runAgent({
+      profile: {
+        ...baseProfile,
+        tools: [{ connector: "flaky" }, { builtin: "finish" }],
+        policy: { verify_before_finish: "off" },
+      },
+      objective: "repair me",
+      mockScript: [
+        { tool: "flaky", args: { operation: "get" } },
+        { tool: "finish", args: { summary: "recovered" } },
+      ],
+      onStep: (s) => steps.push(s),
+    });
+    assert.equal(res.stop_reason, "explicit_final_answer", "repaired retry succeeds");
+    assert.equal(hits, 2, "exactly one repair attempt");
+    const toolStep = steps.find((s) => s.kind === "tool" && s.tool === "flaky");
+    assert.ok(toolStep.resultSummary.startsWith("retry:2:retry-delayed:"), "ledger names the repair, got: " + toolStep.resultSummary.slice(0, 40));
+    assert.equal(res.receipt.repairs.length, 1, "repair logged");
+    assert.equal(res.receipt.repairs[0].repair, "retry-delayed");
+    assert.equal(res.receipt.repairs[0].outcome, "success");
+    assert.equal(res.receipt.repairs[0].learned, false, "class default, no history");
+  } finally {
+    if (prev === undefined) delete process.env.APE_DATA_DIR;
+    else process.env.APE_DATA_DIR = prev;
+    srv.close();
+  }
+});
+
 test("agent: context compression digests old turns, keeps tail", async () => {
   const { compressHistory, estimateTokens } = await import("../src/agent/context.js");
   const big = Array.from({ length: 30 }, (_, i) => ({ role: "tool", toolCallId: "t" + i, content: "result-" + i + "-" + "z".repeat(2000) }));
