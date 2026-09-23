@@ -1,8 +1,9 @@
 export { diagnoseSurfaces, isOptionalTransport, renderDoctor } from "./doctor.js";
 export { DriverLoadError, DriverMissingError } from "./driverLoader.js";
-export { hesitationMs, planClick, planSoftKeyType, planSwipe, planTap, planTyping, } from "./humanizer.js";
+export { CLICK_MISCLICK_POLICY, hesitationMs, planClick, planSoftKeyType, planSwipe, planTap, planTyping, TAP_MISCLICK_POLICY, } from "./humanizer.js";
 export { DEVICE_PRESETS, MobileAdapter } from "./mobile.js";
 export { DEMO_APP, MockAdapter } from "./mock.js";
+export { mergeNativeDialogs, recordNativeDialog, resolveNativeDialogHandling, } from "./nativeDialog.js";
 export { PERCEPTION_SCRIPT } from "./perceptionScript.js";
 export { PlaywrightAdapter } from "./playwright.js";
 export { PuppeteerAdapter } from "./puppeteer.js";
