@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
+// W-4: test-only mock-input flag (production servers strip _mockScript).
+process.env.APE_ALLOW_MOCK_INPUT ??= "1";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";

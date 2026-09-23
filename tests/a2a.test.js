@@ -41,3 +41,24 @@ test("a2a: unknown method + empty message error honestly", async () => {
   await assert.rejects(handleA2A("message/send", { message: { role: "user", parts: [] } }), /text part/);
   await assert.rejects(handleA2A("tasks/get", { id: "missing" }), /not found/);
 });
+
+test("a2a: terminal state comes from outcome, never lifecycle alone (W-2)", () => {
+  const base = { run_id: "run-x", started_at: new Date().toISOString() };
+  // The audit probe: max-steps exhaustion must not read as completed.
+  const exhausted = toTask({ ...base, status: "done", stop_reason: "max_steps", outcome: "halted" });
+  assert.equal(exhausted.status.state, "failed", "exhaustion is failure to orchestrators");
+  assert.ok(exhausted.status.message.parts[0].text.includes("max_steps"), "stop reason in message");
+  const incomplete = toTask({ ...base, status: "done", stop_reason: "no_tool_call_in_step", outcome: "" });
+  assert.equal(incomplete.status.state, "failed");
+  const spiral = toTask({ ...base, status: "done", stop_reason: "error_spiral", outcome: "halted" });
+  assert.equal(spiral.status.state, "failed");
+  const ok = toTask({ ...base, status: "done", stop_reason: "explicit_final_answer", outcome: "done", finished_at: new Date().toISOString() });
+  assert.equal(ok.status.state, "completed");
+  const reused = toTask({ ...base, status: "done", stop_reason: "dedup_reuse", outcome: "reused" });
+  assert.equal(reused.status.state, "completed", "verified reuse counts as completed");
+  const unver = toTask({ ...base, status: "done", stop_reason: "explicit_final_answer", outcome: "x", unverified: 1 });
+  assert.equal(unver.status.state, "completed", "unverified claims still deliver, flagged in outcome text");
+  // Rows that already carry outcome_status (server path) are honored directly.
+  const pre = toTask({ ...base, status: "done", stop_reason: "max_usd", outcome: "", outcome_status: "exhausted" });
+  assert.equal(pre.status.state, "failed");
+});

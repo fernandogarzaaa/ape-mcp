@@ -98,6 +98,19 @@ export function runStatusSummary(result) {
   };
 }
 
+// W-4: mock-test controls must never arrive via production inputs. MCP schemas
+// are descriptive and extra properties are not rejected, so _mockScript /
+// _mockCostPerCall are stripped unless the test-only APE_ALLOW_MOCK_INPUT=1 is
+// set in the server's own environment (unreachable to remote callers).
+export function stripMockInput(a) {
+  if (!a || typeof a !== "object") return a;
+  if (process.env.APE_ALLOW_MOCK_INPUT !== "1") {
+    delete a._mockScript;
+    delete a._mockCostPerCall;
+  }
+  return a;
+}
+
 // Resume a stopped/failed run from its last checkpoint with a replacement worker.
 // Refuses live workers, finished runs, missing checkpoints, and resume-cap excess.
 function resumeRun(runId, workerOpts = {}) {
@@ -249,6 +262,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
       case "ape_agent_run": {
         const profile = loadProfile(a.profile);
         if (!profile) { result = { error: "profile_not_found", profile: a.profile, available: listProfiles() }; break; }
+        stripMockInput(a);
         // Atomic admission (ceilings + insert in one transaction — no overshoot).
         reconcileRuns();
         const admitted = admitRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default", outcome_family: familyOf(a.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()), maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4), dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25) });
@@ -433,6 +447,7 @@ export async function agentMethod(method, params = {}) {
     case "agent/run": {
       const profile = loadProfile(params.profile);
       if (!profile) return { error: "profile_not_found", profile: params.profile, available: listProfiles() };
+      stripMockInput(params);
       reconcileRuns();
       const admitted = admitRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default", outcome_family: familyOf(params.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()), maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4), dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25) });
       if (admitted.error) return admitted;

@@ -4,6 +4,8 @@ import assert from "node:assert";
 // processes; raise the production concurrency guard so scheduling luck can't
 // flake worker-fork tests (the daily spend ceiling still applies).
 process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
+// W-4: test-only mock-input flag (production servers strip _mockScript).
+process.env.APE_ALLOW_MOCK_INPUT ??= "1";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -164,6 +166,29 @@ test("dispatchCall accepts stringified arguments (hosts like opencode send JSON 
   // Malformed string degrades to {} (honest behavior, not a crash).
   const r3 = await dispatchCall("ape_task_get", "not-json{");
   assert.equal(r3.structuredContent.result.status, "not_found");
+});
+
+test("production inputs cannot smuggle mock-test controls (W-4)", async () => {
+  const { stripMockInput } = await import("../src/server.js");
+  const prev = process.env.APE_ALLOW_MOCK_INPUT;
+  delete process.env.APE_ALLOW_MOCK_INPUT;
+  try {
+    const stripped = stripMockInput({ profile: "p", objective: "o", _mockScript: [{ tool: "finish" }], _mockCostPerCall: 9 });
+    assert.ok(!("_mockScript" in stripped) && !("_mockCostPerCall" in stripped), "mock controls stripped by default");
+    assert.equal(stripped.profile, "p", "real args preserved");
+    assert.equal(stripMockInput(null), null, "null-safe");
+  } finally {
+    if (prev === undefined) delete process.env.APE_ALLOW_MOCK_INPUT;
+    else process.env.APE_ALLOW_MOCK_INPUT = prev;
+  }
+  process.env.APE_ALLOW_MOCK_INPUT = "1";
+  try {
+    const kept = stripMockInput({ _mockScript: [{ tool: "finish" }] });
+    assert.ok("_mockScript" in kept, "test flag preserves mock input");
+  } finally {
+    if (prev === undefined) delete process.env.APE_ALLOW_MOCK_INPUT;
+    else process.env.APE_ALLOW_MOCK_INPUT = prev;
+  }
 });
 
 test("tool content text is always valid JSON, even for long multi-step results", async () => {

@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert";
 // See ape.test.js: mock workers share one ledger DB across parallel processes.
 process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
+// W-4: _mockScript travels through dispatch only with this test-only flag;
+// production servers (flag unset) strip mock controls from caller input.
+process.env.APE_ALLOW_MOCK_INPUT ??= "1";
 import { loadProfile, listProfiles } from "../src/agent/profiles.js";
 import { resolveChain } from "../src/agent/providers.js";
 import { runAgent } from "../src/agent/loop.js";

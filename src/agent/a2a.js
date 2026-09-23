@@ -5,6 +5,7 @@
 // every A2A task is a fully audited APE run.
 import { agentMethod } from "../server.js";
 import { listProfiles, describeProfile } from "./profiles.js";
+import { outcomeStatus } from "../runs.js";
 
 export function agentCard(baseUrl) {
   const skills = listProfiles().map((n) => {
@@ -33,19 +34,26 @@ export function toTask(run) {
   if (!run || run.status === "not_found") {
     throw Object.assign(new Error(`task not found: ${run?.run_id ?? "?"}`), { code: -32002 });
   }
-  const stateMap = { running: "working", done: "completed", failed: "failed", stopped: "canceled" };
+  // W-2: A2A state comes from OUTCOME, not lifecycle. status=done with
+  // stop_reason=max_steps used to report completed — a lie to orchestrators.
+  const outcome = run.outcome_status ?? outcomeStatus(run);
+  const state = run.status === "running" ? "working"
+    : outcome === "success" || outcome === "unverified" ? "completed"
+    : outcome === "cancelled" ? "canceled"
+    : "failed";
   const task = {
     id: run.run_id,
     contextId: "ctx-" + run.run_id,
     status: {
-      state: stateMap[run.status] ?? "unknown",
+      state,
       timestamp: run.finished_at ?? run.started_at,
     },
   };
-  if (run.status === "done" || run.status === "failed") {
+  if (run.status !== "running") {
+    const text = `[outcome:${outcome} stop:${run.stop_reason ?? "?"}] ${String(run.outcome ?? "").slice(0, 3800)}`;
     task.status.message = {
       role: "agent",
-      parts: [{ kind: "text", text: String(run.outcome ?? "").slice(0, 4000) }],
+      parts: [{ kind: "text", text }],
       messageId: "msg-" + run.run_id,
     };
     task.artifacts = [{
@@ -53,13 +61,6 @@ export function toTask(run) {
       name: "outcome",
       parts: [{ kind: "text", text: String(run.outcome ?? "").slice(0, 4000) }],
     }];
-  }
-  if (run.status === "failed") {
-    task.status.message = {
-      role: "agent",
-      parts: [{ kind: "text", text: `run failed (${run.stop_reason}): ${String(run.outcome ?? "").slice(0, 500)}` }],
-      messageId: "msg-" + run.run_id,
-    };
   }
   return task;
 }
