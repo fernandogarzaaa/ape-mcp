@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { ADAPTER_VERSION } from "../core/versions.js";
 import { detectAffordances, stripAnsi } from "./affordances.js";
 import { TEXTUAL_SURFACE } from "./capabilities.js";
 import { LINE_HEIGHT, layoutTextFrame } from "./textFrame.js";
@@ -29,6 +30,7 @@ export function tokenizeCommand(command) {
 export class CliAdapter {
     options;
     name = "cli";
+    version = ADAPTER_VERSION;
     capabilities = TEXTUAL_SURFACE;
     child = null;
     lines = [];

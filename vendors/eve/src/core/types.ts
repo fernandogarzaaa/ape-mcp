@@ -17,6 +17,45 @@
  * types, new affordance kinds) is added to the kernel, not to these shapes.
  */
 
+/**
+ * Where one perceived fact came from. A human-visible label and an
+ * accessibility-tree label are different evidence sources even when the
+ * string is identical — cognition must never silently receive DOM-only
+ * facts as though a human literally saw them (P0.3).
+ *
+ * - "visual": rendered pixels / visible text a sighted human reads.
+ * - "dom": DOM-derived metadata (tag, tabIndex, cursor, CSS) — useful, not seen.
+ * - "accessibility": accessibility-tree facts (aria-label, alt, title
+ *   fallback, focus) — available to assistive tech, not sight.
+ * - "surface": surface-reported signals (URL bar, loading indicator, native
+ *   dialog text) — perceived through chrome, not page content.
+ * - "modeled": computed by EVE (keyboard occlusion, reach cost) — never sensed.
+ */
+export type ObservationSource = "visual" | "dom" | "accessibility" | "surface" | "modeled";
+
+/**
+ * Epistemic status of a number or finding. Consumers can inspect where a
+ * value came from instead of treating a heuristic like a measurement (P1.5).
+ *
+ * - "observed": directly perceived in simulation (clicks, transitions).
+ * - "derived": computed from observations (rates, means, Wilson bounds on
+ *   the *simulation* sample).
+ * - "heuristic": hand-weighted formula, not fitted to human data.
+ * - "model-inferred" / "llm-inferred": produced by a model (LLM critic).
+ * - "human-calibrated": fitted against real human traces.
+ * - "externally-validated": confirmed against held-out human data.
+ * - "modeled": synthetic stand-in for unobservable behavior.
+ */
+export type EvidenceProvenance =
+  | "observed"
+  | "derived"
+  | "heuristic"
+  | "model-inferred"
+  | "llm-inferred"
+  | "human-calibrated"
+  | "externally-validated"
+  | "modeled";
+
 /** Axis-aligned rectangle in CSS pixels, viewport-relative. */
 export interface BoundingBox {
   x: number;
@@ -75,6 +114,13 @@ export interface VisibleElement {
   readonly role: PerceivedRole;
   /** Visible text content, truncated to what a human reads at a glance. */
   readonly text: string;
+  /**
+   * Where `text` came from (P0.3). "visual" = rendered text a sighted human
+   * reads; "accessibility" = aria-label/alt/title/placeholder fallback a
+   * sighted human does NOT see; "dom" = structural inference. Optional so
+   * existing literals keep working; absent means "visual-or-unknown (legacy)".
+   */
+  readonly textSource?: ObservationSource;
   readonly box: BoundingBox;
   /** Whether the element visually affords interaction (cursor, tag, tabindex). */
   readonly interactive: boolean;
@@ -107,6 +153,18 @@ export interface VisibleElement {
 export interface VisibleDialog {
   readonly text: string;
   readonly box: BoundingBox | null;
+  /**
+   * "native" = browser-native alert/confirm/prompt surfaced by the adapter
+   * (P0.2); "dom" = in-page dialog element. Optional for backwards compat.
+   */
+  readonly source?: "dom" | "native";
+  /**
+   * How the adapter handled a blocking native dialog. Real native dialogs
+   * block the page until handled, so the adapter must dismiss/accept to
+   * unblock — but that handling is recorded here rather than silently
+   * treated as the operator's decision. Default/safe is "dismissed".
+   */
+  readonly autoHandled?: "accepted" | "dismissed" | null;
 }
 
 /**
@@ -227,6 +285,64 @@ function label(el: VisibleElement): string {
 }
 
 /* ------------------------------------------------------------------ */
+/* Choice context (calibration substrate)                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How the winning action was selected. The calibration-critical
+ * distinction: only `probabilistic` carries model probabilities, because
+ * only the utility policy computes them. Anything else claiming
+ * probabilities would be manufactured evidence.
+ */
+export type ChoiceSetKind =
+  /** Ordered/eligible candidates from a rule cascade (no probabilities). */
+  | "heuristic-ordered"
+  /** Scored candidates with a softmax distribution (utility policy). */
+  | "probabilistic"
+  /** Exactly one eligible action existed; selection is trivial. */
+  | "deterministic-single";
+
+export interface ChoiceCandidate {
+  /** The candidate action itself. */
+  readonly action: Action;
+  /** Human-readable label, captured at record time. */
+  readonly label: string;
+  /** Whether the policy considered this candidate eligible. */
+  readonly eligible: boolean;
+  /** Why an ineligible candidate was excluded, when known. */
+  readonly ineligibilityReason?: string;
+  /**
+   * Model score where the policy computes one: salience total for the
+   * heuristic cascade, expected utility for the utility policy. Absent for
+   * unscored (merely listed) candidates — explicit absence.
+   */
+  readonly score?: number;
+  /**
+   * Selection probability. Present ONLY for `probabilistic` sets from a
+   * real softmax. Never synthesize this for rule-cascade decisions.
+   */
+  readonly probability?: number;
+}
+
+/**
+ * What alternatives were available at the moment of decision, and how the
+ * winner was chosen. Absent (`undefined` on the iteration) when the
+ * deciding branch selects without scoring — e.g. dialog handling, loading
+ * waits, abandonment. Candidate < scored < probabilistic is a strict
+ * evidence ladder: each level claims only what the policy computed.
+ */
+export interface ChoiceSet {
+  readonly kind: ChoiceSetKind;
+  readonly candidates: readonly ChoiceCandidate[];
+  /** Index into `candidates` of the selected action; null if selected outside the set. */
+  readonly selectedIndex: number | null;
+  /** Softmax temperature — present only when `kind` is `probabilistic`. */
+  readonly temperature?: number;
+  /** One-line account of the selection rule, when rule-based. */
+  readonly selectionRule?: string;
+}
+
+/* ------------------------------------------------------------------ */
 /* Predictions & expectation checking                                 */
 /* ------------------------------------------------------------------ */
 
@@ -261,6 +377,32 @@ export interface PredictionOutcome {
   readonly errorPerceived: boolean;
   /** Perceived wait between action and settled screen, in ms. */
   readonly perceivedLatencyMs: number;
+  /**
+   * Where the latency number came from (reviewer decision 3). The evaluator
+   * can choose whether environmental variance participates in the model —
+   * real latency is never hidden, never silently smoothed.
+   */
+  readonly latencyEvidence?: LatencyEvidence;
+  /** Modeled human time (hesitation + motor + typing) for this action, in ms. */
+  readonly motorTimeMs?: number;
+}
+
+/**
+ * Latency provenance for one interaction (reviewer decision 3).
+ *
+ * - `modeledMs`: elapsed time on the session clock (simulated human time +
+ *   modeled waits in deterministic mode; pace-scaled sleeps in wall mode).
+ * - `observedMs`: elapsed WALL time on the host for the same interval —
+ *   environmental reality, recorded in wall-clock mode and used for
+ *   appraisal there; deliberately ZERO in deterministic mode so host noise
+ *   can never enter a replayed trajectory (see `latencyEvidenceFor`).
+ * - `source`: which one `perceivedLatencyMs` was taken from.
+ */
+export interface LatencyEvidence {
+  readonly modeledMs: number;
+  readonly observedMs: number;
+  readonly source: "modeled" | "environmental";
+  readonly deterministic: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -313,6 +455,18 @@ export interface Finding {
   /** Screenshot index in the session gallery, when captured. */
   readonly screenshotIndex?: number;
   readonly recommendation?: string;
+  /**
+   * Epistemic status of this finding (P1.10/P1.11). An LLM-generated
+   * critique ("llm-inferred"/"model-inferred") must never appear identical
+   * to an observed interaction failure ("observed").
+   */
+  readonly provenance?: EvidenceProvenance;
+  /** Model identifier when provenance is model/llm-inferred. */
+  readonly modelId?: string;
+  /** Whether a screenshot was supplied as evidence for this finding. */
+  readonly screenshotBacked?: boolean;
+  /** Whether a deterministic rule independently supports this finding. */
+  readonly ruleBacked?: boolean;
 }
 
 /**
@@ -377,7 +531,31 @@ export interface LoopIteration {
   readonly emotion: Readonly<Record<string, number>>;
   readonly screenshotIndex: number | null;
   readonly clickPoint: Point | null;
+  /** Stable structural identity of the decision-time screen (memory key). */
+  readonly stableKey?: string;
+  /** Sensitive semantic state of the decision-time screen (attribution key). */
+  readonly sensitiveKey?: string;
+  /**
+   * The choice context the decision was selected from, when the policy
+   * records one (Phase 3 calibration substrate). Absent for cascade
+   * branches that select without scoring — explicit absence, never
+   * a fabricated candidate list.
+   */
+  readonly choiceSet?: ChoiceSet;
+  /**
+   * The genuine post-action observation for this step's action
+   * (screenshot buffer stripped). Null when no actuation occurred
+   * (e.g. abandon decisions) — explicit absence.
+   */
+  readonly stateAfter?: PerceptSnapshot | null;
 }
+
+/**
+ * A percept with the screenshot buffer stripped: serializable, replayable,
+ * and safe to persist in traces and datasets. All semantic content
+ * (elements, dialogs, geometry, occlusion) is preserved.
+ */
+export type PerceptSnapshot = Omit<Percept, "screenshot"> & { readonly screenshot: null };
 
 export interface SessionUsage {
   readonly steps: number;

@@ -1,5 +1,5 @@
 import { clamp01 } from "../core/random.js";
-import { screenSignature } from "../memory/memory.js";
+import { sensitiveStateKey } from "../memory/surfaceIdentity.js";
 import { tokenize, visibleText } from "./mentalModel.js";
 const FEEDBACK_RE = /\b(saved|sent|success|done|added|created|updated|deleted|removed|confirmed|thank you|welcome|copied|applied|error|failed|invalid|required)\b/i;
 /**
@@ -44,8 +44,8 @@ export function scoreExpectation(expectation, before, after, perceivedLatencyMs)
         "visual-change": 1,
         feedback: 1,
     };
-    const beforeSig = screenSignature(before);
-    const afterSig = screenSignature(after);
+    const beforeSig = sensitiveStateKey(before);
+    const afterSig = sensitiveStateKey(after);
     const changed = beforeSig !== afterSig;
     const afterText = visibleText(after).toLowerCase();
     // Outcome: expected signals present?
