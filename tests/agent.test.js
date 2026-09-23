@@ -718,3 +718,43 @@ test("agent: spend caps skip to fallback instead of dying", async () => {
   assert.equal(res.receipt.fallback_used, true);
   assert.deepEqual(Object.keys(res.receipt.spend_by_provider), ["mock"], "spend attributed to the serving provider only");
 });
+
+test("agent: exhausted budget halts BEFORE tools run, not after (W-1 probe)", async () => {
+  const steps = [];
+  const res = await runAgent({
+    profile: { ...baseProfile, limits: { ...baseProfile.limits, max_usd: 0.01 }, policy: { verify_before_finish: "off" } },
+    objective: "overspend",
+    mockScript: [
+      { tool: "memory.recall", args: { query: "never-runs" } },
+      { tool: "finish", args: { summary: "never" } },
+    ],
+    mockCostPerCall: 0.02,
+    onStep: (s) => steps.push(s),
+  });
+  assert.equal(res.stop_reason, "max_usd");
+  assert.ok(!steps.some((s) => s.kind === "tool"), "no tool executed on spent budget");
+});
+
+test("agent: provider timeout is min(provider cap, remaining wall time)", async () => {
+  const { providerTimeoutMs, PROVIDER_CALL_CAP_MS } = await import("../src/agent/providers.js");
+  assert.equal(providerTimeoutMs({}, 0), PROVIDER_CALL_CAP_MS, "no wall limit means ceiling only");
+  assert.equal(providerTimeoutMs({ limits: {} }, 0), PROVIDER_CALL_CAP_MS);
+  assert.equal(providerTimeoutMs({ limits: { max_wall_seconds: 300 } }, 1000, 1000), PROVIDER_CALL_CAP_MS, "large remaining clamps to ceiling");
+  assert.equal(providerTimeoutMs({ limits: { max_wall_seconds: 300 } }, 0, 250000), 50000, "remaining wall time wins when smaller");
+  assert.equal(providerTimeoutMs({ limits: { max_wall_seconds: 1 } }, 0, 5000), 1, "overrun floors at 1ms, never zero/negative");
+});
+
+test("agent: stalled provider call aborts at the timeout", async () => {
+  const { createServer } = await import("node:http");
+  const { chat } = await import("../src/agent/providers.js");
+  const srv = createServer(() => { /* hang forever */ });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  try {
+    const t0 = Date.now();
+    await assert.rejects(
+      chat({ provider: "local", id: "hang", baseUrl: `http://127.0.0.1:${srv.address().port}` }, { system: "x", messages: [], tools: [], timeoutMs: 250 }),
+      "hanging provider rejects"
+    );
+    assert.ok(Date.now() - t0 < 10000, `aborted promptly (${Date.now() - t0}ms), not at the 30s connector default`);
+  } finally { srv.close(); }
+});

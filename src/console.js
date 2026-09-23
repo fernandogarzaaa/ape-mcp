@@ -83,7 +83,26 @@ export function startConsole({ port = 0, open = false } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     const host = req.headers.host || "127.0.0.1";
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    // CORS: same-origin only. The console shell calls its own origin; browsers
+    // must never read this loopback service cross-origin (wildcard ACAO would
+    // let any site that discovers the port drain runs/traces/ledger). Non-
+    // browser clients send no Origin and are unaffected.
+    const origin = req.headers.origin;
+    let sameOrigin = false;
+    if (origin) {
+      try { sameOrigin = new URL(origin).host === host; }
+      catch { sameOrigin = false; }
+    }
+    if (sameOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+    if (req.method === "OPTIONS") {
+      if (!origin) { res.writeHead(204); return res.end(); }
+      if (!sameOrigin) { res.writeHead(403); return res.end(JSON.stringify({ error: "cors_denied" })); }
+      res.writeHead(204, { "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type" });
+      return res.end();
+    }
     if (req.method === "GET" && url.pathname === "/.well-known/oauth-protected-resource") {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify(protectedResourceDoc(host)));
@@ -93,6 +112,10 @@ export function startConsole({ port = 0, open = false } = {}) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(html);
     }
+    // Single auth gate: everything past the public metadata + static shell
+    // requires bearer when enforced. Previously read routes sat before the
+    // check, so bearer mode left runs/traces/ledger/SSE world-readable.
+    if (!checkBearer(req).ok) return unauthorized(res, host);
     if (req.method === "GET" && url.pathname === "/api/tools") {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify(toolsList()));

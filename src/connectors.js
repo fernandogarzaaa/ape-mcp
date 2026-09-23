@@ -140,33 +140,73 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
     // Egress containment must hold for EVERY actual destination, not just the
     // constructed URL: fetch() follows redirects by default, so a 302 from an
     // allowed host could otherwise escape the allowlist. Manual redirect chain
-    // with per-hop validation (max 5 hops). Auth query params do NOT forward
-    // to redirect targets — safer, and re-applied only to same-origin hops.
+    // with per-hop host validation (max 5 hops).
+    //
+    // Credential scope (CR-2): auth headers and query secrets belong to ONE
+    // origin. Same-origin hops (and same-host http→https upgrades) forward
+    // them; any other hop is REJECTED by default (cross_origin_redirect)
+    // unless the connector opts in with allow_cross_origin_redirects: true —
+    // and even then the hop goes out CLEAN (no auth headers, secret params
+    // stripped). An allowed redirect target can never receive another
+    // origin's credential.
+    const originOf = (u) => {
+      const x = new URL(u);
+      return `${x.protocol}//${x.hostname}${x.port ? ":" + x.port : ""}`;
+    };
+    const isHttpsUpgrade = (from, to) => {
+      const a = new URL(from);
+      const b = new URL(to);
+      return a.hostname === b.hostname && a.protocol === "http:" && b.protocol === "https:";
+    };
+    const cleanInit = { ...init, headers: { accept: "application/json" } };
+    const stripSecrets = (u) => {
+      if (!secretParams.size) return u;
+      try {
+        const x = new URL(u);
+        for (const k of secretParams) x.searchParams.delete(k);
+        return x.toString();
+      } catch { return u; }
+    };
     const maxHops = 5;
-    let current = url;
+    let hopUrl = url;
+    let hopInit = init;
     let finalUrl = url;
     let res = null;
     for (let hop = 0; hop <= maxHops; hop++) {
-      const r = await fetch(current, { ...init, redirect: "manual" });
+      const r = await fetch(hopUrl, { ...hopInit, redirect: "manual" });
       const loc = r.headers.get("location");
       if (r.status >= 300 && r.status < 400 && loc) {
         let next = null;
-        try { next = new URL(loc, current).toString(); } catch { /* bad Location */ }
+        try { next = new URL(loc, hopUrl).toString(); } catch { /* bad Location */ }
         try { await r.arrayBuffer(); } catch { /* drain best-effort */ }
-        if (!next) { clearTimeout(timer); return { ok: false, error: "connector_bad_redirect", url: redactUrl(current) }; }
+        if (!next) { clearTimeout(timer); return { ok: false, error: "connector_bad_redirect", url: redactUrl(hopUrl) }; }
         if (!hostAllowed(conn, next)) {
           clearTimeout(timer);
           let host = "?";
           try { host = new URL(next).hostname; } catch { /* ignore */ }
-          return { error: "egress_denied_redirect", host, egress_allow: conn.egress_allow, url: redactUrl(current), redirect: redactUrl(next) };
+          return { error: "egress_denied_redirect", host, egress_allow: conn.egress_allow, url: redactUrl(hopUrl), redirect: redactUrl(next) };
         }
-        if (hop === maxHops) { clearTimeout(timer); return { ok: false, error: "too_many_redirects", url: redactUrl(current) }; }
-        current = next;
+        let same = false;
+        let upgrade = false;
+        try {
+          same = originOf(next) === originOf(hopUrl);
+          upgrade = !same && isHttpsUpgrade(hopUrl, next);
+        } catch { /* unparsable — treated as cross-origin below */ }
+        if (!same && !upgrade && conn.allow_cross_origin_redirects !== true) {
+          clearTimeout(timer);
+          return { error: "cross_origin_redirect", from: redactUrl(hopUrl), redirect: redactUrl(next), hint: "redirect target is a different origin; set allow_cross_origin_redirects: true to permit (auth never forwards cross-origin)" };
+        }
+        if (hop === maxHops) { clearTimeout(timer); return { ok: false, error: "too_many_redirects", url: redactUrl(hopUrl) }; }
+        hopUrl = next;
         finalUrl = next;
+        // Same origin (or safe upgrade): credentials ride along. Anything
+        // else: clean hop even when explicitly permitted.
+        hopInit = (same || upgrade) ? init : cleanInit;
+        if (!same && !upgrade) hopUrl = stripSecrets(next);
         continue;
       }
       res = r;
-      finalUrl = current;
+      finalUrl = hopUrl;
       break;
     }
     if (!res) { clearTimeout(timer); return { ok: false, error: "too_many_redirects", url: redactUrl(url) }; }

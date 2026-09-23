@@ -166,3 +166,67 @@ test("connector: confirm=true passes end-to-end through ape_connector_call", asy
     srv.close();
   }
 });
+
+test("connector: cross-origin redirect is rejected AND never receives credentials (CR-2 repro)", async () => {
+  process.env.APE_CR2_TOKEN = "cr2-secret";
+  let targetHits = 0;
+  let seenAuth = null;
+  const target = await serve((req, res) => {
+    targetHits++;
+    seenAuth = req.headers.authorization ?? null;
+    res.writeHead(200, { "content-type": "application/json" }); res.end('{"x":1}');
+  });
+  const launcher = await serve((req, res) => {
+    res.writeHead(302, { location: `http://localhost:${target.port}/target` });
+    res.end();
+  });
+  try {
+    const base = {
+      name: "cr2", base_url: `http://127.0.0.1:${launcher.port}`, egress_allow: ["127.0.0.1", "localhost"],
+      auth: { type: "bearer", token_env: "APE_CR2_TOKEN" },
+      operations: [{ name: "go", method: "GET", path: "/start" }],
+    };
+    const r = await runConnectorOperation(base, base.operations[0], {}, {});
+    assert.equal(r.error, "cross_origin_redirect", "default rejects cross-origin hop, got: " + JSON.stringify(r).slice(0, 160));
+    assert.equal(targetHits, 0, "target never hit — credential cannot leak");
+    // Explicit opt-in follows, but CLEAN: no auth headers forwarded.
+    const opted = { ...base, allow_cross_origin_redirects: true };
+    const r2 = await runConnectorOperation(opted, opted.operations[0], {}, {});
+    assert.equal(r2.ok, true, "opted-in hop completes: " + JSON.stringify(r2).slice(0, 160));
+    assert.equal(targetHits, 1);
+    assert.equal(seenAuth, null, "bearer header stripped on cross-origin hop");
+  } finally { launcher.close(); target.close(); delete process.env.APE_CR2_TOKEN; }
+});
+
+test("connector: same-origin redirect keeps working WITH auth", async () => {
+  process.env.APE_CR2_TOKEN = "cr2-secret";
+  let seenAuth = null;
+  const srv = await serve((req, res) => {
+    if (req.url === "/start") { res.writeHead(302, { location: "/final" }); res.end(); return; }
+    seenAuth = req.headers.authorization ?? null;
+    res.writeHead(200, { "content-type": "application/json" }); res.end('{"done":true}');
+  });
+  try {
+    const c = {
+      name: "cr2", base_url: `http://127.0.0.1:${srv.port}`, egress_allow: ["127.0.0.1"],
+      auth: { type: "bearer", token_env: "APE_CR2_TOKEN" },
+      operations: [{ name: "go", method: "GET", path: "/start" }],
+    };
+    const r = await runConnectorOperation(c, c.operations[0], {}, {});
+    assert.equal(r.ok, true);
+    assert.equal(seenAuth, "Bearer cr2-secret", "same-origin hop keeps credentials");
+  } finally { srv.close(); delete process.env.APE_CR2_TOKEN; }
+});
+
+test("connector: same-host port change is cross-origin without opt-in", async () => {
+  const b = await serve((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end('{"x":1}'); });
+  const a = await serve((req, res) => {
+    res.writeHead(302, { location: `http://127.0.0.1:${b.port}/other` });
+    res.end();
+  });
+  try {
+    const c = { name: "cr2", base_url: `http://127.0.0.1:${a.port}`, egress_allow: ["127.0.0.1"], operations: [{ name: "go", method: "GET", path: "/start" }] };
+    const r = await runConnectorOperation(c, c.operations[0], {}, {});
+    assert.equal(r.error, "cross_origin_redirect", "port change is a different origin, got: " + JSON.stringify(r).slice(0, 120));
+  } finally { a.close(); b.close(); }
+});

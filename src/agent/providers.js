@@ -176,7 +176,7 @@ export function applyCredentialPolicy(chain, policy) {
 }
 
 // --- Anthropic ---
-async function anthropicChat(cfg, system, messages, tools) {
+async function anthropicChat(cfg, system, messages, tools, timeoutMs) {
   const wire = [];
   for (const m of messages) {
     if (m.role === "system") continue;
@@ -193,6 +193,8 @@ async function anthropicChat(cfg, system, messages, tools) {
   }
   const body = { model: cfg.id, max_tokens: 4096, system, messages: wire, tools };
   let token = cfg.key ?? process.env.ANTHROPIC_API_KEY;
+  const abort = timeoutMs != null ? new AbortController() : null;
+  const timer = abort ? setTimeout(() => abort.abort(), timeoutMs) : null;
   const call = (tok) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -201,14 +203,20 @@ async function anthropicChat(cfg, system, messages, tools) {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
+    ...(abort ? { signal: abort.signal } : {}),
   });
-  let res = await call(token);
-  // OAuth token expired → best-effort refresh once using the host's refreshToken.
-  if (res.status === 401 && cfg.oauth && cfg.refreshToken) {
-    try {
-      const refreshed = await refreshAnthropicOAuth(cfg.refreshToken);
-      if (refreshed) { token = refreshed; res = await call(token); }
-    } catch { /* keep original error */ }
+  let res;
+  try {
+    res = await call(token);
+    // OAuth token expired → best-effort refresh once using the host's refreshToken.
+    if (res.status === 401 && cfg.oauth && cfg.refreshToken) {
+      try {
+        const refreshed = await refreshAnthropicOAuth(cfg.refreshToken);
+        if (refreshed) { token = refreshed; res = await call(token); }
+      } catch { /* keep original error */ }
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
@@ -235,7 +243,7 @@ async function refreshAnthropicOAuth(refreshToken) {
 }
 
 // --- OpenAI-compatible ---
-async function openaiChat(cfg, system, messages, tools) {
+async function openaiChat(cfg, system, messages, tools, timeoutMs) {
   const base = cfg.baseUrl ?? BASE_URLS[cfg.provider];
   const key = cfg.key ?? (cfg.provider === "local" ? null : process.env.OPENAI_API_KEY);
   const wire = [];
@@ -255,11 +263,27 @@ async function openaiChat(cfg, system, messages, tools) {
     tools,
     tool_choice: "auto",
   };
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
-    body: JSON.stringify(body),
-  });
+  const res = await (async () => {
+    if (timeoutMs == null) {
+      return fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+        body: JSON.stringify(body),
+      });
+    }
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+      return await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
   if (!res.ok) throw new Error(`${cfg.provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const msg = data.choices?.[0]?.message ?? {};
@@ -310,13 +334,23 @@ async function mockChat(convKey, modelId, system, messages, tools) {
   };
 }
 
-export async function chat(cfg, { system, messages, tools }) {
+// Per-call provider cap: the smaller of the provider ceiling and the run's
+// remaining wall time, so a stalled model request cannot outlive
+// max_wall_seconds. No wall limit configured → ceiling only.
+export const PROVIDER_CALL_CAP_MS = 120000;
+export function providerTimeoutMs(profile, startedAt, now = Date.now()) {
+  const wall = profile?.limits?.max_wall_seconds;
+  if (wall == null) return PROVIDER_CALL_CAP_MS;
+  return Math.max(1, Math.min(PROVIDER_CALL_CAP_MS, startedAt + Number(wall) * 1000 - now));
+}
+
+export async function chat(cfg, { system, messages, tools, timeoutMs = null }) {
   switch (cfg.provider) {
     case "mock":
       return mockChat(cfg.convKey ?? "default", cfg.id, system, messages, tools);
     case "anthropic":
       if (!cfg.key && !process.env.ANTHROPIC_API_KEY) throw new Error("no anthropic credential");
-      return await anthropicChat(cfg, system, messages, tools);
+      return await anthropicChat(cfg, system, messages, tools, timeoutMs);
     case "openai":
     case "openrouter":
     case "groq":
@@ -324,7 +358,7 @@ export async function chat(cfg, { system, messages, tools }) {
     case "opencode":
     case "google":
     case "local":
-      return await openaiChat(cfg, system, messages, tools);
+      return await openaiChat(cfg, system, messages, tools, timeoutMs);
     default:
       throw new Error(`unknown provider: ${cfg.provider}`);
   }

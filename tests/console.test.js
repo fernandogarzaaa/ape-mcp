@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
+// W-4: test-only mock-input flag (production servers strip _mockScript).
+process.env.APE_ALLOW_MOCK_INPUT ??= "1";
 import { startConsole } from "../src/console.js";
 
 let base = null;
@@ -111,6 +113,41 @@ test("console: runs/stream pushes run, step, and spend events", async () => {
   assert.ok(seen.has("run"), "run event streamed");
   assert.ok(seen.has("step"), "step event streamed");
   assert.ok(seen.has("spend"), "spend event streamed");
+});
+
+test("console: bearer mode gates read APIs; CORS is same-origin only", async () => {
+  // checkBearer reads env per request, so no reboot is needed.
+  const prevAuth = process.env.APE_REQUIRE_AUTH;
+  const prevTokens = process.env.APE_TOKENS;
+  process.env.APE_REQUIRE_AUTH = "1";
+  process.env.APE_TOKENS = "test-token-xyz";
+  const host = new URL(base).host;
+  try {
+    const anon = await fetch(base + "api/runs");
+    assert.equal(anon.status, 401, "unauthenticated reads refused");
+    const authed = await fetch(base + "api/runs", { headers: { Authorization: "Bearer test-token-xyz" } });
+    assert.equal(authed.status, 200, "bearer reads allowed");
+    const trace = await fetch(base + "api/trace");
+    assert.equal(trace.status, 401, "trace refused without bearer");
+    const call = await fetch(base + "api/call", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(call.status, 401, "writes still refused");
+    // Public allowlist stays public.
+    assert.equal((await fetch(base + ".well-known/oauth-protected-resource")).status, 200, "metadata public");
+    assert.equal((await fetch(base)).status, 200, "shell public");
+    // CORS: foreign origin gets no ACAO; same origin gets an echo.
+    const evil = await fetch(base + "api/tools", { headers: { Origin: "https://evil.example" } });
+    assert.equal(evil.headers.get("access-control-allow-origin"), null, "no wildcard for foreign origins");
+    const same = await fetch(base + "api/tools", { headers: { Origin: `http://${host}`, Authorization: "Bearer test-token-xyz" } });
+    assert.equal(same.headers.get("access-control-allow-origin"), `http://${host}`, "same origin echoed");
+    assert.equal(same.status, 200);
+    const preflight = await fetch(base + "api/tools", { method: "OPTIONS", headers: { Origin: "https://evil.example" } });
+    assert.equal(preflight.status, 403, "foreign preflight refused");
+  } finally {
+    if (prevAuth === undefined) delete process.env.APE_REQUIRE_AUTH;
+    else process.env.APE_REQUIRE_AUTH = prevAuth;
+    if (prevTokens === undefined) delete process.env.APE_TOKENS;
+    else process.env.APE_TOKENS = prevTokens;
+  }
 });
 
 test.after(() => { try { server?.close(); } catch { /* ignore */ } });

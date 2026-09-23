@@ -1,6 +1,40 @@
 # Changelog
 
-## Unreleased — audit hardening, round 6: repairing immunity (§19)
+## Unreleased — external audit remediation (2026-09-22 audit)
+
+### CR-1: profile loader preserves documented controls
+- `loadProfile` no longer rebuilds policy/limits from fixed key lists:
+  `credential_policy`, `parallel_calls`, `drift`, `dedup_window_sec`, and
+  `max_parallel` survive YAML loading with explicit validation (invalid values
+  fall back safe — never open/unlimited; non-numeric budgets coerce to
+  defaults). `describeProfile` exposes effective policy.
+- YAML-to-loop integration tests prove every documented key reaches the
+  runtime (parallel/drift/spend-cap behaviors driven from loaded YAML).
+
+### CR-3: console auth gate + same-origin CORS
+- One bearer gate sits before every route past the public metadata + static
+  shell (reads included). `Access-Control-Allow-Origin: *` replaced with
+  same-origin reflection; foreign preflights refused.
+
+### CR-2: cross-origin redirect credentials
+- Cross-origin hops rejected by default (`cross_origin_redirect`); same-host
+  https upgrades and same-origin hops keep working. Opt-in
+  `allow_cross_origin_redirects: true` follows CLEAN (auth headers dropped,
+  secret params stripped). Port changes count as cross-origin.
+
+### W-1: budget before tools + provider wall-time abort
+- Budget checked after every model turn before any tool runs (a spent turn
+  launches nothing). Provider calls carry `min(120s cap, remaining wall
+  time)` abort signals; `providerTimeoutMs` is pure and tested.
+
+### W-2/W-3: A2A honesty + per-provider schemas
+- `toTask` maps state from `outcome_status` (exhaustion reads as failed with
+  the stop reason, never completed). Tool schemas derive per serving
+  provider so cross-family fallbacks keep the right wire shape.
+
+### W-4: mock controls out of production inputs
+- `_mockScript`/`_mockCostPerCall` stripped from MCP inputs unless test-only
+  `APE_ALLOW_MOCK_INPUT=1` is set in server env (unreachable to callers).
 
 ### Repair-selecting immunity (§19)
 - The loop now selects a REPAIR from history instead of retrying identically:

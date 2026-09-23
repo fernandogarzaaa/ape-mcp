@@ -2,7 +2,7 @@
 // The host sees one tool call (ape_agent_run); everything below is APE's implementation.
 // Tool results are untrusted data: they are framed as such before re-entering the model.
 import { makeBudget } from "./budget.js";
-import { chat, estimateCost, toolSchemas, mockPlan, clearMock } from "./providers.js";
+import { chat, estimateCost, toolSchemas, mockPlan, clearMock, providerTimeoutMs } from "./providers.js";
 import { internalTools, invokeTool, isDestructiveCall } from "./registry.js";
 import { isRetryable, fingerprint, lookupImmunity, recordImmunity, selectRepair, shrinkArgs } from "./recovery.js";
 import { DEFAULT_VERIFY_TOOLS } from "./profiles.js";
@@ -215,11 +215,13 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       let lastErr = null;
       let cappedSkips = 0;
       const modelT0 = Date.now();
+      // Wall-time abort: a stalled provider call cannot outlive the run.
+      const timeoutMs = providerTimeoutMs(profile, startedAt, modelT0);
       for (const [pi, p] of providerCfgs.entries()) {
         const cap = spendCaps?.[p.provider];
         if (cap != null && (spendByProvider[p.provider] ?? 0) >= cap) { cappedSkips++; continue; }
         try {
-          resp = await chat({ provider: p.provider, id: p.id, key: p.key, baseUrl: p.baseUrl, convKey }, { system, messages, tools: schemas });
+          resp = await chat({ provider: p.provider, id: p.id, key: p.key, baseUrl: p.baseUrl, convKey }, { system, messages, tools: schemas, timeoutMs });
           usedModel = p.id;
           usedProvider = p.provider;
           usedResolution = p.resolution ?? null;
@@ -247,6 +249,12 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       budget.spend({ tokens, cost });
       spendByProvider[usedProvider] = Number(((spendByProvider[usedProvider] ?? 0) + cost).toFixed(6));
       record({ step: budget.steps, kind: "model", tool: null, durationMs: modelDur, tokens, cost, resultSummary: (resp.content ?? "").slice(0, 200) });
+
+      // W-1: the budget is checked BEFORE tools run, not after. A model turn
+      // that exhausts the budget must not launch tool calls — especially
+      // destructive ones — on spent money. Mirrors the per-call post-check.
+      const postModel = budget.check();
+      if (postModel.exhausted) { stopReason = postModel.reason; break; }
 
 const toolCalls = resp.toolCalls ?? [];
       // Explicit finish tool = terminal, subject to the grounding gate.
