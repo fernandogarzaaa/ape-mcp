@@ -4,9 +4,11 @@ import { type BenchmarkTier } from "./apps.js";
  *
  * Runs EVE against the three known-quality apps with a fixed persona panel
  * and checks that the resulting scores are ordered excellent > average > bad.
- * This is EVE's standing construct-validity test — if a change to the
- * cognitive model breaks the ordering, the instrument has lost discriminative
- * power and the harness fails.
+ * This is EVE's construct-DISCRIMINATION REGRESSION benchmark (P1.9-audit):
+ * it proves the instrument still discriminates the reference fixtures it was
+ * designed against — it is NOT external human validation and must never be
+ * reported as "construct validity" or proof of human realism. Human
+ * calibration requires real human ground truth (see docs/human-calibration.md).
  */
 export interface BenchmarkRunResult {
     tier: BenchmarkTier;
