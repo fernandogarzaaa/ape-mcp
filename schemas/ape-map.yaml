@@ -11,7 +11,7 @@ tools:
   - { name: ape_mcp_eval, from: [eve(mcpEval oracles via eve mcp-eval)], args: { target }, out: { schema, conformance, fuzz } }
   - { name: ape_audit_claim, from: [genesis(audit,evaluate,trust,gate,attest)], args: { spec_or_verifier, suite }, out: { verdict, rates, findings }, ledger: true }
   - { name: ape_compare, from: [genesis(compare,regression)], args: { run_a, run_b }, out: { delta } }
-  - { name: ape_orchestrate, from: [skein(graph,claim,worktree,verify,supervisor,sync)], args: { op, node, agent_id }, out: { graph, evidence } }
+  - { name: ape_orchestrate, from: [skein(graph,node-add,claim,worktree,verify,supervisor,sync)], args: { op, node, agent_id, title, goal, context, constraints, completion, depends_on }, out: { graph, evidence } }
   - { name: ape_evolve, from: [adam(evolve,propose,accept,reject)+eve(measure)], args: { signals_or_proposal, organism_id }, out: { proposal, fitness }, destructive_confirm: true }
   - { name: ape_report, from: [eve(reporting), genesis(report-html)], args: { ref }, out: { html_uri, markdown } }
   - { name: ape_task_start, from: [core(tasks)], args: { tool, arguments }, out: { task_id }, long_running: true }

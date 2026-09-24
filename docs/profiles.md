@@ -17,6 +17,7 @@ write one objective sentence, run:
 | `code-reviewer` | audit (`enforce`) + recall | Adversarial review of a code claim/diff pasted in the objective (no repo access — the code travels in the objective) |
 | `triage-lead` | Skein graph + audit + recall | Decomposing an issue into checkable workstreams + synthesis |
 | `planner` | Skein graph + recall, cheap budget | Strategy only: emits a task graph for executors, never executes |
+| `supervisor` | delegate + Skein graph + recall | Coordinates specialist child runs and synthesizes their receipts |
 
 `planner` and `triage-lead` are structured for the delegation primitive (L2):
 small, independently checkable nodes a supervisor can later fan out.

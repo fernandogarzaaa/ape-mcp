@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased — high-level agents, L2: delegation primitive
+## Unreleased — high-level agents, L3: planner→executor over Skein
+
+### Planner-executor + patterns (L3)
+- `skein.orchestrate` gains `node-add` (planners emit the inspectable plan
+  artifact: id + title/goal/completion per node); `release` mapped to
+  upstream's force-release so the op actually succeeds (previously dead).
+- New `supervisor` profile (delegate + graph + recall); `docs/patterns.md`
+  maps supervisor/workers, planner→executor, hierarchical teams, and
+  generator→critic onto APE primitives with entry points.
+- Hierarchy e2e: mock supervisor adds 2 plan nodes, fans out 2 real
+  delegated children concurrently, synthesizes — graph, linkage, fan-out,
+  and terminal states all asserted.
 
 ### Supervisor delegation (L2)
 - New `delegate` builtin: a run spawns a scoped child agent (profile +

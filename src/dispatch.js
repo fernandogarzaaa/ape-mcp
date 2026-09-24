@@ -118,11 +118,28 @@ export const dispatch = {
     const r = await run("node", [e, "compare", run_a, run_b]);
     return { run_a, run_b, ...r };
   },
-  async orchestrate({ op = "status", node = "", agent_id = "ape-mcp" } = {}) {
+  async orchestrate({ op = "status", node = "", agent_id = "ape-mcp", title = "", goal = "", context = "", constraints = "", completion = "", depends_on = "" } = {}) {
     const s = skeinSrc();
     if (!s) return fail("skein", "vendors/skein/src missing");
     const py = process.env.APE_PYTHON || "python";
-    const map = { status: ["status"], graph: ["graph"], claim: ["claim", node, "--agent-id", agent_id], release: ["release", node], log: ["log", "--node", node] };
+    const map = {
+      status: ["status"], graph: ["graph"],
+      claim: ["claim", node, "--agent-id", agent_id],
+      // Upstream release is always an explicit force-release (logged); the
+      // plain form cannot release even the holder's own claim, so the op
+      // would otherwise never succeed.
+      release: ["release", node, "--force"],
+      log: ["log", "--node", node],
+      // L3 planner primitive: planners emit the inspectable plan artifact by
+      // adding nodes (id + done-criteria); executors claim them by id.
+      "node-add": ["node", "add", node,
+        ...(title ? ["--title", title] : []),
+        ...(goal ? ["--goal", goal] : []),
+        ...(context ? ["--context", context] : []),
+        ...(constraints ? ["--constraints", constraints] : []),
+        ...(completion ? ["--completion", completion] : []),
+        ...(depends_on ? ["--depends-on", depends_on] : [])],
+    };
     const args = map[op] ?? ["status"];
     const r = await run(py, ["-m", "skein.cli", ...args].filter(Boolean), {
       cwd: process.cwd(),

@@ -26,6 +26,8 @@ ape-mcp             # opens the browser console (your home base)
 | `research-verify` | Researches a question on the web, double-checks before answering |
 | `persona-validate` | Tests an experience the way different users would |
 
+More specialists ship bundled (`deep-researcher`, `code-reviewer`, `triage-lead`, `planner`, `supervisor`) — see "Bundled specialists" in [Profiles](docs/profiles.md), and multi-agent compositions in [Patterns](docs/patterns.md).
+
 Example objective: *"Verify: Wikipedia is free."* You'll get back a **run ID** (like `run-a1b2c3d4`) — your tracking number for progress and results.
 
 **Read the result.** Every job returns three things:
