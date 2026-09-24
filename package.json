@@ -31,7 +31,7 @@
     "postinstall": "node scripts/postinstall.mjs",
     "doctor": "node bin/ape-mcp.js doctor",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --test tests/ape.test.js tests/agent.test.js tests/connectors.test.js tests/extension.test.js tests/hostdetect.test.js tests/console.test.js tests/a2a.test.js tests/analyze.test.js tests/router.test.js tests/outcomes.test.js tests/drift.test.js tests/admission.test.js tests/supply.test.js tests/tasks.test.js tests/profiles.test.js",
+    "test": "node --test tests/ape.test.js tests/agent.test.js tests/connectors.test.js tests/extension.test.js tests/hostdetect.test.js tests/console.test.js tests/a2a.test.js tests/analyze.test.js tests/router.test.js tests/outcomes.test.js tests/drift.test.js tests/admission.test.js tests/supply.test.js tests/tasks.test.js tests/profiles.test.js tests/delegate.test.js",
     "console": "node bin/ape-mcp.js serve"
   },
   "dependencies": {

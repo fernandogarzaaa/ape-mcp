@@ -46,7 +46,8 @@ function open() {
     total_cost REAL DEFAULT 0,
     outcome TEXT,
     started_at TEXT NOT NULL,
-    finished_at TEXT
+    finished_at TEXT,
+    parent_run_id TEXT
   )`);
       handle.exec(`CREATE TABLE IF NOT EXISTS steps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +90,7 @@ function open() {
       ensureColumn("outcome_hash", "outcome_hash TEXT");
       ensureColumn("profile_hash", "profile_hash TEXT");
       ensureColumn("env_hash", "env_hash TEXT");
+      ensureColumn("parent_run_id", "parent_run_id TEXT");
       handle.exec("CREATE INDEX IF NOT EXISTS idx_runs_family ON runs(outcome_family)");
       // Variant deprecation: marks a family's outcome variant as dead with a reason.
       handle.exec(`CREATE TABLE IF NOT EXISTS deprecated_variants (
@@ -110,11 +112,11 @@ function open() {
   throw lastErr;
 }
 
-export function createRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null }) {
+export function createRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null, parent_run_id = null }) {
   const d = open();
   const runId = "run-" + randomUUID().slice(0, 12);
-  d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
-    .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, new Date().toISOString());
+  d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
+    .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, new Date().toISOString());
   return runId;
 }
 
@@ -124,7 +126,7 @@ export function createRun({ profile, model, objective, organism_id = "default", 
 // partial row (rollback). Reconcile BEFORE calling — process signaling must
 // not hold the write lock. A busy ledger returns ledger_busy (retry), never
 // a crash.
-export function admitRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null, maxConcurrent = 4, dailyCapUsd = 25 }) {
+export function admitRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null, parent_run_id = null, maxConcurrent = 4, dailyCapUsd = 25 }) {
   const d = open();
   try {
     d.exec("BEGIN IMMEDIATE");
@@ -146,8 +148,8 @@ export function admitRun({ profile, model, objective, organism_id = "default", o
       }
     }
     const runId = "run-" + randomUUID().slice(0, 12);
-    d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
-      .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, new Date().toISOString());
+    d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
+      .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, new Date().toISOString());
     d.exec("COMMIT");
     return { run_id: runId };
   } catch (e) {

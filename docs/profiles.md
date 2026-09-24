@@ -21,6 +21,35 @@ write one objective sentence, run:
 `planner` and `triage-lead` are structured for the delegation primitive (L2):
 small, independently checkable nodes a supervisor can later fan out.
 
+## Delegation (supervisor primitive, L2)
+
+A run with the `delegate` builtin tool can spawn scoped child runs:
+
+```yaml
+tools:
+  - builtin: delegate
+  - builtin: finish
+limits:
+  max_delegate_depth: 2   # recursion cap; 0 disables delegation
+```
+
+`delegate(profile, objective, budget_share?, timeout_s?)` runs a real child
+worker to completion and returns its receipt summary as framed (untrusted)
+tool output. Rules:
+
+- **Budget slices from remaining budget**: `budget_share` (default 0.25, max
+  0.5) scales the parent's *remaining* steps/tokens/USD/wall — parent plus
+  children can never exceed the parent ceiling. The child's effective limits
+  are min(own profile, slice).
+- **Depth-capped**: `depth >= max_delegate_depth` refuses honestly; at most 2
+  delegations fan out per turn (overflow runs sequentially).
+- **Fully audited**: child rows carry `parent_run_id`; parent receipts log
+  `delegations[]` + `delegated_cost_usd`; child receipts echo the linkage.
+  Child admission goes through the same caps as top-level runs.
+- **Failures are non-fatal**: refused/admitted/timeout/depth errors return as
+  tool results — the parent sees them and continues. Hangs are killed at
+  `timeout_s` (default 120s, capped by remaining wall).
+
 ## Anatomy
 
 ```yaml
@@ -46,6 +75,7 @@ limits:                         # budget governor — enforced every step
   max_usd: 0.50
   max_destructive: 1            # cap on unattended destructive calls (when allowed)
   max_repeats: 3                # halt if the same (tool, args) repeats this often
+  max_delegate_depth: 2         # cap on delegate chains (0 = no delegation)
 policy:                         # loop policy
   destructive: deny              # deny (default) | allow. Allow is still capped + audited
   verify_before_finish: warn    # warn (default) | enforce | off

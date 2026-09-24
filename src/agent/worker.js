@@ -41,6 +41,17 @@ async function main() {
     process.exit(1);
   }
   if (opts.mockScript) profile.model = { provider: "mock", id: "mock-model" };
+  // Delegated children arrive with budgetCaps (a slice of the parent's remaining
+  // budget): the child's effective ceiling is min(profile, slice), so a parent
+  // plus all its children can never exceed the parent's ceiling.
+  if (opts.budgetCaps && typeof opts.budgetCaps === "object") {
+    for (const k of ["max_steps", "max_tokens", "max_usd", "max_wall_seconds"]) {
+      const cap = Number(opts.budgetCaps[k]);
+      if (Number.isFinite(cap) && cap > 0) {
+        profile.limits[k] = Math.min(Number(profile.limits?.[k] ?? cap), cap);
+      }
+    }
+  }
   // Task-based routing (opt-out via policy.routing: false or explicit provider/model):
   // trivial objectives go local when a local model is detected; otherwise normal
   // resolution. The decision is recorded in the receipt for later judgment.
@@ -164,6 +175,7 @@ async function main() {
     initial: opts.resume ? loadCheckpoint(runId)?.state ?? null : null,
     // Mock runs are hermetic replays: no ADAM I/O (also keeps test workers fast).
     initialContext: (opts.resume || opts.mockScript) ? null : await hydrateContext(req.objective, req.organism_id ?? "default"),
+    parentRunId: opts.parentRunId ?? req.parent_run_id ?? null,
   });
   updateRun(runId, {
     status: result.stop_reason === "model_error" ? "failed" : "done",
@@ -176,7 +188,8 @@ async function main() {
     unverified: result.unverified ? 1 : 0,
     outcome_family: result.receipt.family ?? familyOf(req.objective),
     outcome_hash: result.receipt.outcome_hash ?? null,
-    receipt: JSON.stringify({ ...result.receipt, run_id: runId }).slice(0, 2000),
+    parent_run_id: opts.parentRunId ?? req.parent_run_id ?? null,
+    receipt: JSON.stringify({ ...result.receipt, run_id: runId, ...((opts.parentRunId ?? req.parent_run_id) ? { parent_run_id: opts.parentRunId ?? req.parent_run_id } : {}) }).slice(0, 2000),
     outcome: typeof result.outcome === "string" ? result.outcome.slice(0, 4000) : JSON.stringify(result.outcome ?? null).slice(0, 4000),
     finished_at: new Date().toISOString(),
   });

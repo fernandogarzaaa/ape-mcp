@@ -79,6 +79,7 @@ export function loadProfile(name) {
     max_repeats: num(profile.limits?.max_repeats, 3),
     max_retries: num(profile.limits?.max_retries, 1),
     max_history_tokens: num(profile.limits?.max_history_tokens, 60000, { min: 1 }),
+    max_delegate_depth: num(profile.limits?.max_delegate_depth, 2),
     ...(profile.limits?.max_parallel !== undefined
       ? { max_parallel: Math.max(1, Math.floor(Number(profile.limits.max_parallel)) || 4) }
       : {}),

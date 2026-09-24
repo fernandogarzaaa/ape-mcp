@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased — high-level agents, L1: composite specialists
+## Unreleased — high-level agents, L2: delegation primitive
+
+### Supervisor delegation (L2)
+- New `delegate` builtin: a run spawns a scoped child agent (profile +
+  sub-objective) as a real worker — own row, budget, and receipt, linked by
+  `parent_run_id` (new ledger column). The child's receipt summary returns
+  as framed tool output.
+- Budget slices come from the parent's *remaining* budget (`budget_share`
+  default 0.25, max 0.5; child effective limits are min(profile, slice)), so
+  a tree can never outspend its root. Hangs die at `timeout_s`.
+- Depth-capped (`limits.max_delegate_depth`, default 2, 0 disables); max 2
+  concurrent delegations per fan-out turn; child admission honors global
+  caps; all failure modes (refused/timeout/depth/profile/budget) are honest
+  non-fatal tool results — the parent continues.
+- Receipts link both ways: parent `delegations[]` + `delegated_cost_usd`,
+  child `parent_run_id` (row and receipt). Depth and delegation log survive
+  resume. Tool-output banner now lives in registry.js (ASCII-bracketed).
 
 ### L1 composite profiles
 - Four new bundled specialists composing existing engines (YAML only, no
