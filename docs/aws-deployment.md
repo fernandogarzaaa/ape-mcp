@@ -14,7 +14,8 @@ Internet → :80/:443 → Caddy (TLS, LE auto-renew) → 127.0.0.1:8787 → ape-
 | Resource | ID / value |
 |---|---|
 | EC2 | `i-036c300637d69b335`, t3.small, Ubuntu 24.04 (`ami-0045d7fc2ad003464`), default VPC `vpc-0bb90e6dfc47a52c3` |
-| Public IP | `98.86.146.92` → `98-86-146-92.sslip.io` (no Route53 zone; real domain = follow-up) |
+| Public IP | Elastic IP `32.197.109.159` (static; DNS no longer tracks instance lifecycle) |
+| DNS | `ape.runs-on.dev` → A `32.197.109.159` (free registry; sslip.io retired) |
 | Security group | `sg-0465525a14bd1ca75`: 22 from operator IP only, 80/443 open |
 | SSH key | `ape-mcp-key` (private key with operator only, ACL-locked) |
 | EBS | `vol-03ff1b580911c2df2`, 8 GB gp3, **unencrypted** (default-encryption now ON for future volumes; migrate or accept, see below) |
@@ -27,7 +28,7 @@ Internet → :80/:443 → Caddy (TLS, LE auto-renew) → 127.0.0.1:8787 → ape-
 - `ape.service` (user `ape`, `Restart=always`, env from `/home/ape/ape.env`
   `0600`): `node bin/ape-mcp.js --http 8787`, loopback only. Branch deployed:
   check with `git log --oneline -1` in `/home/ape/ape-mcp`.
-- `caddy.service`: `98-86-146-92.sslip.io → reverse_proxy 127.0.0.1:8787`.
+- `caddy.service`: `ape.runs-on.dev → reverse_proxy 127.0.0.1:8787`.
   No Caddyfile hardening beyond defaults yet (see limitations).
 - `unattended-upgrades` enabled; NTP synced.
 
@@ -37,7 +38,7 @@ Internet → :80/:443 → Caddy (TLS, LE auto-renew) → 127.0.0.1:8787 → ape-
 APE_REQUIRE_AUTH=1
 APE_TOKENS=<hex>                 # rotated out-of-band, never in git
 APE_PORT=8787
-APE_ALLOWED_HOSTS=98-86-146-92.sslip.io
+APE_ALLOWED_HOSTS=ape.runs-on.dev
 # APE_CORS_ORIGIN=...            # set when a browser client exists
 # APE_RATE_LIMIT_RPM=240         # defaults; raise only deliberately
 ```
@@ -62,8 +63,8 @@ outside SQLite `ALTER TABLE ... ADD COLUMN` (additive, backward compatible).
   reproducible from git + objectives, not restorable byte-for-byte. Accept, or
   add an EBS snapshot schedule when the ledger becomes load-bearing.
 - RTO: replacement instance from `deploy/aws/user-data.sh` in ~10 minutes
-  (fresh IP → new sslip.io name → update clients). With a real domain: update
-  the A record, same procedure.
+  (EIP reassociation → update the A record once, same procedure). DNS recovery
+  is a registry edit, not infrastructure work.
 - Secrets: bearer token exists ONLY in `/home/ape/ape.env`. Loss = generate a
   new one (`openssl rand -hex 32`), replace, restart. No backup of secrets
   anywhere (by design).
@@ -77,7 +78,7 @@ S3 pennies. No ALB/NAT/billable extras by design.
 ## Limitations (explicit)
 
 Single node, no HA; unencrypted root volume (accepted pending migration);
-sslip.io temporary hostname; single shared bearer (no per-client identity);
+retired sslip.io hostname; single shared bearer (no per-client identity);
 no rate-limit tuning yet (defaults); no CloudWatch alarms (see
 incident-response for the manual watch list); no Secrets Manager (evaluated
 below — env file + 0600 + rotation procedure is the current control).

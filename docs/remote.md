@@ -29,7 +29,9 @@ APE stays bound to loopback. Caddy is the only public entry point.
 ## 3. DNS
 
 Point an `A` record at the host (e.g. `mcp.your-domain.com → <public-ip>`).
-No-DNS alternative for testing: `<dash-ip>.sslip.io` (e.g. `98-86-146-92.sslip.io`
+Free alternative that works today: a `runs-on.dev` subdomain with an `A`
+record (e.g. `ape.runs-on.dev`); the legacy no-DNS trick below still works
+for testing: `<dash-ip>.sslip.io` (e.g. `98-86-146-92.sslip.io`
 for `98.86.146.92`) resolves with no action and gets valid Let's Encrypt certs.
 
 ## 4–5. TLS via Caddy (reverse proxy only — no in-process TLS in v1)

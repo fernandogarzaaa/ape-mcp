@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased — remote MCP: functional streams + per-host registration
+## Unreleased — production endpoint on ape.runs-on.dev + EIP
+
+### Canonical name + static IP
+- Live endpoint is now `https://ape.runs-on.dev/mcp` (free registry A record;
+  own LE cert, verified SAN). Elastic IP freezes the address so DNS never
+  tracks instance lifecycle again. sslip.io site retired after green.
+- Full live battery re-verified on the new name (init/session/list/call/
+  stream/delete/401s/Host-Origin rejection/rate-trip).
 
 ### GET /mcp streams (functional)
 - `GET /mcp` is a live event stream (was 405): session+bearer gated before
