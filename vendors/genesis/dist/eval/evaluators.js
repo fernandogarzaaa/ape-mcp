@@ -23,7 +23,9 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { redact } from "../shared/redact.js";
 import { SubprocessRunner } from "../evidence/runner.js";
+import { splitCommand } from "./subjects.js";
 import { retrievalTrialStats } from "./metrics.js";
+import { cohenKappa } from "./agreement.js";
 export function createEvaluator(spec, runner = new SubprocessRunner()) {
     switch (spec.type) {
         case "exact":
@@ -96,26 +98,29 @@ export class ExactEvaluator {
         };
     }
 }
-/** Regex over stringified output. */
+/** Regex over stringified output; `invert` passes when the pattern is ABSENT (e.g. injected markers). */
 export class RegexEvaluator {
     name = "regex";
     kind = "deterministic";
     #pattern;
     #source;
+    #invert;
     constructor(spec) {
         if (!spec.pattern)
             throw new Error("evaluator regex: pattern is required");
         this.#source = spec.pattern;
         this.#pattern = new RegExp(spec.pattern);
+        this.#invert = spec.invert === true;
     }
     describe() {
-        return { type: "regex", pattern: this.#source };
+        return { type: "regex", pattern: this.#source, ...(this.#invert ? { invert: true } : {}) };
     }
     async evaluate(task, output) {
         void task;
         const text = typeof output === "string" ? output : JSON.stringify(output);
-        const passed = this.#pattern.test(text ?? "");
-        return { evaluator: this.name, evaluator_kind: this.kind, score: passed ? 1 : 0, passed, details: { pattern: this.#source } };
+        const matched = this.#pattern.test(text ?? "");
+        const passed = this.#invert ? !matched : matched;
+        return { evaluator: this.name, evaluator_kind: this.kind, score: passed ? 1 : 0, passed, details: { pattern: this.#source, ...(this.#invert ? { invert: true } : {}) } };
     }
 }
 /** Minimal JSON-schema check (type/properties/required/enum) — no dependency. */
@@ -241,7 +246,9 @@ export class CommandEvaluator {
             const outputFile = join(dir, "output.json");
             writeFileSync(taskFile, JSON.stringify(task, null, 2), "utf8");
             writeFileSync(outputFile, typeof output === "string" ? output : JSON.stringify(output), "utf8");
-            const parts = this.#command.split(/\s+/).map((p) => p.replaceAll("{task_file}", taskFile).replaceAll("{output_file}", outputFile).replaceAll("{output}", outputFile));
+            // Use the shared quote-aware parser (same as command subjects): naive
+            // split(/\s+/) breaks quoted paths, `node -e` scripts, and args with spaces.
+            const parts = splitCommand(this.#command).map((p) => p.replaceAll("{task_file}", taskFile).replaceAll("{output_file}", outputFile).replaceAll("{output}", outputFile));
             const result = await this.#runner.run(parts, { cwd: process.cwd(), timeoutMs: 60_000 });
             if (result.spawn_error || result.timed_out) {
                 return {
@@ -316,7 +323,7 @@ export class LlmCommandEvaluator {
             const outputFile = join(dir, "output.json");
             writeFileSync(taskFile, JSON.stringify(task, null, 2), "utf8");
             writeFileSync(outputFile, typeof output === "string" ? output : JSON.stringify(output), "utf8");
-            const parts = this.#command.split(/\s+/).map((p) => p.replaceAll("{task_file}", taskFile).replaceAll("{output_file}", outputFile));
+            const parts = splitCommand(this.#command).map((p) => p.replaceAll("{task_file}", taskFile).replaceAll("{output_file}", outputFile));
             const result = await this.#runner.run(parts, { cwd: process.cwd(), timeoutMs: 120_000 });
             const promptDigest = createHash("sha256").update(JSON.stringify({ task, output, rubric: this.#rubric })).digest("hex");
             if (result.spawn_error || result.timed_out) {
@@ -348,27 +355,32 @@ export class HumanEvaluator {
     kind = "human";
     #judgments = new Map();
     #path;
+    #secondaryPath;
+    // Cached at construction: describe() runs per evidence record, so rereading
+    // the secondary file there is O(N²) I/O over N trials. Load once instead.
+    #agreementCache;
     constructor(spec) {
         if (!spec.judgments)
             throw new Error("evaluator human: judgments path is required");
         this.#path = spec.judgments;
-        const text = readFileSync(spec.judgments, "utf8");
-        for (const line of text.split(/\r?\n/)) {
-            const t = line.trim();
-            if (!t)
-                continue;
-            const row = JSON.parse(t);
-            const id = String(row.task_id ?? row.id ?? "");
-            if (!id)
-                continue;
-            this.#judgments.set(id, {
-                score: typeof row.score === "number" ? row.score : null,
-                passed: typeof row.passed === "boolean" ? row.passed : null,
-            });
-        }
+        this.#secondaryPath = spec.judgments_secondary;
+        loadJudgments(spec.judgments, this.#judgments);
+        this.#agreementCache = this.#secondaryPath ? computeAgreement(this.#judgments, this.#secondaryPath) : null;
     }
     describe() {
-        return { type: "human", judgments: this.#path, count: this.#judgments.size };
+        return {
+            type: "human", judgments: this.#path, count: this.#judgments.size,
+            ...(this.#secondaryPath ? { judgments_secondary: this.#secondaryPath } : {}),
+            ...(this.#agreementCache ? { agreement: this.#agreementCache } : {}),
+        };
+    }
+    /**
+     * Inter-rater agreement (Cohen's κ) between primary and secondary
+     * judgments over overlapping tasks, or null when no second rater exists.
+     * Precomputed once — no per-call file I/O.
+     */
+    agreement() {
+        return this.#agreementCache;
     }
     async evaluate(task, _output) {
         const j = this.#judgments.get(task.id);
@@ -381,6 +393,42 @@ export class HumanEvaluator {
             passed: j.passed ?? (j.score !== null ? j.score >= 0.5 : null),
             details: { rater: "human", task_id: task.id },
         };
+    }
+}
+function computeAgreement(primary, secondaryPath) {
+    const secondary = new Map();
+    loadJudgments(secondaryPath, secondary);
+    const ids = [...primary.keys()].filter((id) => secondary.has(id));
+    const a = [];
+    const b = [];
+    for (const id of ids) {
+        const j1 = primary.get(id);
+        const j2 = secondary.get(id);
+        const l1 = j1?.label ?? (j1?.passed === true ? true : j1?.passed === false ? false : j1?.score ?? null);
+        const l2 = j2?.label ?? (j2?.passed === true ? true : j2?.passed === false ? false : j2?.score ?? null);
+        if (l1 === null || l1 === undefined || l2 === null || l2 === undefined)
+            continue;
+        a.push(l1);
+        b.push(l2);
+    }
+    const r = cohenKappa(a, b);
+    return { cohen_kappa: r.kappa, n: r.n, interpretation: r.interpretation };
+}
+function loadJudgments(path, into) {
+    const text = readFileSync(path, "utf8");
+    for (const line of text.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t)
+            continue;
+        const row = JSON.parse(t);
+        const id = String(row.task_id ?? row.id ?? "");
+        if (!id)
+            continue;
+        into.set(id, {
+            score: typeof row.score === "number" ? row.score : null,
+            passed: typeof row.passed === "boolean" ? row.passed : null,
+            label: typeof row.label === "string" ? row.label : null,
+        });
     }
 }
 /** Combine sub-evaluators: all must pass (all) or any (any); scores averaged. */
@@ -402,8 +450,19 @@ export class CompositeEvaluator {
         const parts = await Promise.all(this.#evals.map((e) => e.evaluate(task, output)));
         const scores = parts.map((p) => p.score).filter((s) => typeof s === "number");
         const passes = parts.map((p) => p.passed);
-        const decided = passes.filter((p) => typeof p === "boolean");
-        const passed = decided.length === 0 ? null : this.#mode === "all" ? decided.every(Boolean) : decided.some(Boolean);
+        // Three-valued logic (fail-closed): abstention (null) is not success.
+        // all: false if ANY part is false; true only if EVERY part is true; else null.
+        // any: true if ANY part is true; false only if EVERY part is false; else null.
+        const hasFalse = passes.some((p) => p === false);
+        const hasTrue = passes.some((p) => p === true);
+        const hasNull = passes.some((p) => p === null || p === undefined);
+        let passed;
+        if (this.#mode === "all") {
+            passed = hasFalse ? false : !hasNull && passes.length > 0 ? true : null;
+        }
+        else {
+            passed = hasTrue ? true : !hasNull && passes.length > 0 ? false : null;
+        }
         const score = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
         return {
             evaluator: this.name, evaluator_kind: this.kind, score, passed,
