@@ -9,6 +9,71 @@ import { agentCard, handleA2A } from "./agent/a2a.js";
 import { taskGet } from "./tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "./auth.js";
 
+// --- Host allowlist (§14: DNS-rebinding protection) ---
+// When APE_ALLOWED_HOSTS is set (comma-separated, port-insensitive), any
+// request whose Host is not listed is rejected before auth or dispatch. This
+// is the DNS-rebinding guard: a browser reaching this server under an
+// attacker domain gets nothing, even with valid credentials. Caddy enforces
+// Host at the edge too; this is defense-in-depth for direct access. Unset =
+// no enforcement (loopback/dev default). The OAuth discovery document stays
+// public (protocol necessity: clients fetch it to learn auth).
+export function allowedHost(req) {
+  const list = String(process.env.APE_ALLOWED_HOSTS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (!list.length) return true;
+  const host = String(req.headers.host || "").split(":")[0].toLowerCase();
+  return host !== "" && list.includes(host);
+}
+function hostAllowedOr403(req, res) {
+  if (allowedHost(req)) return true;
+  res.writeHead(403, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "host-not-allowed" }));
+  return false;
+}
+
+// --- Rate limiting (§21): fixed-window per client IP on /mcp ---
+// Checked BEFORE auth so the bearer endpoint itself resists brute force.
+// Trusts X-Forwarded-For (single-proxy deployment: Caddy sets it; direct
+// access is loopback-only where spoofing is meaningless).
+const rateBuckets = new Map(); // ip -> { windowStart, count }
+export function rateLimitRpm() {
+  const v = Number(process.env.APE_RATE_LIMIT_RPM);
+  return Number.isFinite(v) && v > 0 ? v : 240;
+}
+export function rateLimitWindowMs() {
+  const v = Number(process.env.APE_RATE_LIMIT_WINDOW_MS);
+  return Number.isFinite(v) && v > 0 ? v : 60000;
+}
+export function clientIp(req) {
+  const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return xff || req.socket?.remoteAddress || "unknown";
+}
+export function checkRateLimit(ip, nowMs = Date.now()) {
+  const rpm = rateLimitRpm();
+  const win = rateLimitWindowMs();
+  let b = rateBuckets.get(ip);
+  if (!b || nowMs - b.windowStart >= win) {
+    b = { windowStart: nowMs, count: 0 };
+    rateBuckets.set(ip, b);
+  }
+  if (rateBuckets.size > 10000) {
+    for (const [k, v] of rateBuckets) if (nowMs - v.windowStart >= win) rateBuckets.delete(k);
+  }
+  b.count++;
+  if (b.count > rpm) return { limited: true, retryAfterMs: Math.max(0, b.windowStart + win - nowMs) };
+  return { limited: false };
+}
+export function resetRateLimits() { rateBuckets.clear(); }
+function rateLimitedOr429(req, res) {
+  const verdict = checkRateLimit(clientIp(req));
+  if (!verdict.limited) return true;
+  res.writeHead(429, {
+    "Content-Type": "application/json",
+    "Retry-After": String(Math.ceil(verdict.retryAfterMs / 1000)),
+  });
+  res.end(JSON.stringify({ error: "rate_limited", retry_after_ms: verdict.retryAfterMs }));
+  return false;
+}
+
 // --- Fail-closed bind policy (Phase 11) ---
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
 export function resolveBindConfig({ host = "127.0.0.1" } = {}) {
@@ -295,6 +360,8 @@ export function startHttp({ port = 8787, host = "127.0.0.1" } = {}) {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify(protectedResourceDoc(h)));
     }
+    // Host gate for everything past public discovery (DNS-rebinding defense).
+    if (!hostAllowedOr403(req, res)) return;
     if (req.method === "GET" && req.url === "/.well-known/agent.json") {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify(agentCard(`http://${h}`)));
@@ -364,6 +431,7 @@ export function startHttp({ port = 8787, host = "127.0.0.1" } = {}) {
         return res.end();
       }
       applyCors(req, res);
+      if (!rateLimitedOr429(req, res)) return;
       if (!checkBearer(req).ok) return unauthorized(res, h);
       if (req.method === "GET") {
         // Functional stream (no 405): session-gated, cursors at now.

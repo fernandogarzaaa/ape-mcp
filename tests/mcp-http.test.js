@@ -375,3 +375,105 @@ test("mcp: sessions sweep without leaking the store", () => {
   assert.ok(mcpSessionCount() >= 0, "store introspectable");
   assert.ok(sweepSessions() >= 0, "sweep runs cleanly");
 });
+
+test("mcp: Host allowlist rejects rebinding attempts", async () => {
+  const { allowedHost } = await import("../src/http.js");
+  const prev = process.env.APE_ALLOWED_HOSTS;
+  process.env.APE_ALLOWED_HOSTS = "98-86-146-92.sslip.io";
+  const req = (host) => ({ headers: { host } });
+  try {
+    // Unit: matching semantics.
+    assert.equal(allowedHost(req("98-86-146-92.sslip.io")), true, "listed Host passes");
+    assert.equal(allowedHost(req("98-86-146-92.sslip.io:8787")), true, "port ignored");
+    assert.equal(allowedHost(req("evil.example")), false, "stranger rejected");
+    assert.equal(allowedHost(req("EVIL.EXAMPLE")), false, "case-insensitive, still rejects");
+    assert.equal(allowedHost(req("")), false, "empty Host rejected when list set");
+    assert.equal(allowedHost(req("sub.98-86-146-92.sslip.io")), false, "subdomains do not inherit");
+    // Integration: real Host header control needs node:http (undici overrides Host).
+    const { default: http } = await import("node:http");
+    const url = new URL(base);
+    const get = (host) => new Promise((resolve, reject) => {
+      const r = http.request({ host: url.hostname, port: url.port, path: "/discover", method: "GET", headers: { Host: host } }, (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode));
+      });
+      r.on("error", reject);
+      r.end();
+    });
+    assert.equal(await get("evil.example"), 403, "rebound Host refused over the wire");
+    assert.equal(await get("98-86-146-92.sslip.io"), 200, "listed Host served");
+    // MCP surface too, with a valid session (Host checked before dispatch).
+    // node:http throughout: undici overrides Host, which would vacate the check.
+    const { default: http2 } = await import("node:http");
+    const postRaw = (host, body, sid) => new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const r = http2.request({
+        host: url.hostname, port: url.port, path: "/mcp", method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), Authorization: "Bearer mcp-test-token", Host: host, ...(sid ? { "mcp-session-id": sid } : {}) },
+      }, (res) => {
+        let buf = "";
+        res.on("data", (c) => (buf += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: buf }));
+      });
+      r.on("error", reject);
+      r.end(data);
+    });
+    const init = await postRaw("98-86-146-92.sslip.io", { jsonrpc: "2.0", id: 71, method: "initialize", params: {} });
+    assert.equal(init.status, 200, "listed Host initializes");
+    const sid = init.headers["mcp-session-id"];
+    assert.ok(sid, "session issued");
+    const mcp = await postRaw("evil.example", { jsonrpc: "2.0", id: 70, method: "ping" }, sid);
+    assert.equal(mcp.status, 403, "rebound Host gets nothing from /mcp, session or not");
+    const mcpOk = await postRaw("98-86-146-92.sslip.io", { jsonrpc: "2.0", id: 73, method: "ping" }, sid);
+    assert.equal(mcpOk.status, 200, "listed Host proceeds");
+  } finally {
+    if (prev === undefined) delete process.env.APE_ALLOWED_HOSTS;
+    else process.env.APE_ALLOWED_HOSTS = prev;
+  }
+});
+
+test("mcp: rate limiter throttles floods, isolates others", async () => {
+  const { checkRateLimit, resetRateLimits } = await import("../src/http.js");
+  const prevRpm = process.env.APE_RATE_LIMIT_RPM;
+  const prevWin = process.env.APE_RATE_LIMIT_WINDOW_MS;
+  process.env.APE_RATE_LIMIT_RPM = "3";
+  process.env.APE_RATE_LIMIT_WINDOW_MS = "60000";
+  resetRateLimits();
+  try {
+    assert.ok(!checkRateLimit("10.0.0.1", 1000).limited);
+    assert.ok(!checkRateLimit("10.0.0.1", 1000).limited);
+    assert.ok(!checkRateLimit("10.0.0.1", 1000).limited);
+    const hit = checkRateLimit("10.0.0.1", 1000);
+    assert.ok(hit.limited, "4th request in window refused");
+    assert.ok(hit.retryAfterMs > 0, "retry hint present");
+    assert.ok(!checkRateLimit("10.0.0.2", 1000).limited, "other IPs unaffected");
+    assert.ok(!checkRateLimit("10.0.0.1", 1000 + 60001).limited, "window rolls over");
+  } finally {
+    resetRateLimits();
+    if (prevRpm === undefined) delete process.env.APE_RATE_LIMIT_RPM; else process.env.APE_RATE_LIMIT_RPM = prevRpm;
+    if (prevWin === undefined) delete process.env.APE_RATE_LIMIT_WINDOW_MS; else process.env.APE_RATE_LIMIT_WINDOW_MS = prevWin;
+  }
+});
+
+test("mcp: HTTP 429 on /mcp flood with Retry-After", async () => {
+  const { resetRateLimits } = await import("../src/http.js");
+  const prevRpm = process.env.APE_RATE_LIMIT_RPM;
+  process.env.APE_RATE_LIMIT_RPM = "2";
+  resetRateLimits();
+  try {
+    const { sid } = await initSession();
+    const h = { headers: { "mcp-session-id": sid, "X-Forwarded-For": "198.51.100.7" } };
+    assert.equal((await post({ jsonrpc: "2.0", id: 80, method: "ping" }, h)).status, 200);
+    assert.equal((await post({ jsonrpc: "2.0", id: 81, method: "ping" }, h)).status, 200);
+    const flooded = await fetch(base + "/mcp", {
+      method: "POST", headers: { "Content-Type": "application/json", ...auth, "mcp-session-id": sid, "X-Forwarded-For": "198.51.100.7" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 82, method: "ping" }),
+    });
+    assert.equal(flooded.status, 429, "flood refused");
+    assert.ok(flooded.headers.get("retry-after"), "Retry-After present");
+    assert.equal((await flooded.json()).error, "rate_limited");
+  } finally {
+    resetRateLimits();
+    if (prevRpm === undefined) delete process.env.APE_RATE_LIMIT_RPM; else process.env.APE_RATE_LIMIT_RPM = prevRpm;
+  }
+});
