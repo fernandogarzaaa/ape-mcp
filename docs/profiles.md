@@ -3,6 +3,24 @@
 A profile is the user-editable definition of what the agent *is*. Loaded at call time —
 no restart. Bundled defaults live in `profiles/`; user overrides in `.ape/profiles/` win.
 
+## Bundled specialists (high-level agents, L1)
+
+Single-purpose profiles compose the engines into specialists. Pick the profile,
+write one objective sentence, run:
+
+| Profile | Composes | For |
+|---|---|---|
+| `repo-triage` | recall + audit + plan | Sorting out software issues |
+| `research-verify` | web + recall + verify | Checking a claim with citations |
+| `persona-validate` | EVE + recall + store | Testing an experience as different users |
+| `deep-researcher` | web + recall + audit (`enforce`) | Broad research ending in an audited verdict |
+| `code-reviewer` | audit (`enforce`) + recall | Adversarial review of a code claim/diff pasted in the objective (no repo access — the code travels in the objective) |
+| `triage-lead` | Skein graph + audit + recall | Decomposing an issue into checkable workstreams + synthesis |
+| `planner` | Skein graph + recall, cheap budget | Strategy only: emits a task graph for executors, never executes |
+
+`planner` and `triage-lead` are structured for the delegation primitive (L2):
+small, independently checkable nodes a supervisor can later fan out.
+
 ## Anatomy
 
 ```yaml

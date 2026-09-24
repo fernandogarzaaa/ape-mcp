@@ -108,3 +108,47 @@ test("profiles: absent keys stay absent (defaults apply downstream)", () => {
   assert.equal(p.policy.dedup_window_sec, undefined);
   assert.equal(p.limits.max_parallel, undefined);
 });
+
+test("profiles: L1 specialists load with their engine compositions", () => {
+  const deep = loadProfile("deep-researcher");
+  assert.ok(deep.tools.some((t) => t.connector === "web"), "research needs the web");
+  assert.ok(deep.tools.some((t) => t.engine === "genesis.audit_claim"), "research ends in audit");
+  assert.equal(deep.policy.verify_before_finish, "enforce", "research claims are gated");
+  const reviewer = loadProfile("code-reviewer");
+  assert.ok(reviewer.tools.some((t) => t.engine === "genesis.audit_claim"));
+  assert.equal(reviewer.policy.verify_before_finish, "enforce");
+  assert.ok(
+    reviewer.system.includes("no repository access"),
+    "reviewer is honest about having no repo access"
+  );
+  const lead = loadProfile("triage-lead");
+  assert.ok(lead.tools.some((t) => t.engine === "skein.orchestrate"), "lead decomposes via graph");
+  const planner = loadProfile("planner");
+  assert.ok(planner.tools.some((t) => t.engine === "skein.orchestrate"));
+  assert.ok(!planner.tools.some((t) => t.engine === "genesis.audit_claim"), "planner never audits (never executes)");
+  assert.ok(planner.limits.max_usd <= 0.3 && planner.limits.max_steps <= 8, "planners stay cheap");
+});
+
+test("profiles: loaded enforce policy engages in the loop from YAML", async () => {
+  const profile = loadProfile("deep-researcher");
+  const res = await runAgent({
+    profile,
+    objective: "L1 enforce smoke",
+    mockScript: [{ tool: "finish", args: { summary: "no evidence" } }],
+    resolvedModel: { provider: "mock", id: "mock-model" },
+  });
+  assert.notEqual(res.stop_reason, "explicit_final_answer", "finish rejected without audit evidence");
+  assert.ok(res.steps.some((s) => String(s.resultSummary).includes("finish:rejected")));
+});
+
+test("profiles: loaded triage-lead finishes a mock smoke run", async () => {
+  const profile = loadProfile("triage-lead");
+  const res = await runAgent({
+    profile,
+    objective: "L1 smoke",
+    mockScript: [{ tool: "finish", args: { summary: "synthesis" } }],
+    resolvedModel: { provider: "mock", id: "mock-model" },
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  assert.ok(res.receipt, "receipt present");
+});

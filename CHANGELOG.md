@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased — external audit remediation (2026-09-22 audit)
+## Unreleased — high-level agents, L1: composite specialists
+
+### L1 composite profiles
+- Four new bundled specialists composing existing engines (YAML only, no
+  runtime changes): `deep-researcher` (web + recall + audit, enforce),
+  `code-reviewer` (adversarial audit of code pasted in the objective —
+  honestly scoped with no repo access, enforce), `triage-lead` (Skein graph
+  + audit + recall + synthesis; nodes kept delegation-ready), `planner`
+  (cheap strategy-only L3 prep: emits a Skein graph, never executes).
+- Documented in profiles.md alongside the existing three; loader round-trip
+  and mock smoke tests per profile.
 
 ### CR-1: profile loader preserves documented controls
 - `loadProfile` no longer rebuilds policy/limits from fixed key lists:
