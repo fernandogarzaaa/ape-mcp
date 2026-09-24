@@ -199,6 +199,7 @@ function normalizeTask(r, i) {
             ...(o.constraints ? { constraints: o.constraints } : {}),
             ...(o.metadata ? { metadata: o.metadata } : {}),
             ...(Array.isArray(o.tags) ? { tags: o.tags } : {}),
+            ...(Array.isArray(o.turns) ? { turns: o.turns } : {}),
             ...(o.labels && typeof o.labels === "object" && !Array.isArray(o.labels)
                 ? { labels: o.labels }
                 : {}),
