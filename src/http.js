@@ -4,6 +4,7 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { dispatchCall, toolsList, discover, agentMethod, resourcesList, readResource, promptsList, getPrompt, PROTOCOL } from "./server.js";
+import { listRuns, stepsSince, maxStepId } from "./runs.js";
 import { agentCard, handleA2A } from "./agent/a2a.js";
 import { taskGet } from "./tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "./auth.js";
@@ -48,6 +49,71 @@ export function sweepSessions(nowMs = Date.now()) {
   return swept;
 }
 export function mcpSessionCount() { return mcpSessions.size; }
+
+// --- MCP SSE streams (functional): run/step notifications + heartbeat ---
+// Reuses the console's proven shape: snapshot-diff over the WAL ledger,
+// cursors start at "now" (connect never replays history), per-stream timers,
+// cleanup on client disconnect. Active streams introspectable for tests.
+const mcpStreams = new Set();
+export function mcpStreamCount() { return mcpStreams.size; }
+export function mcpHeartbeatMs() {
+  const v = Number(process.env.APE_MCP_HEARTBEAT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 15000;
+}
+function openMcpStream(req, res, sessionId) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  const stream = { sessionId, alive: true, lastStepId: 0, lastStatuses: new Map(), timer: null, hb: null };
+  const close = () => {
+    if (!stream.alive) return;
+    stream.alive = false;
+    clearInterval(stream.timer);
+    clearInterval(stream.hb);
+    mcpStreams.delete(stream);
+    try { res.end(); } catch { /* ignore */ }
+  };
+  const send = (payload) => {
+    if (!stream.alive) return false;
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); return true; }
+    catch { close(); return false; }
+  };
+  const notify = (logger, data) => send({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info", logger, data } });
+  const tick = () => {
+    if (!stream.alive) return;
+    try {
+      // The open-time snapshot pre-fills lastStatuses, so an unknown id here
+      // can only be a run created after connect: emit its creation, then any
+      // later transition. (A run that finishes before its first sighting is
+      // still reported — never swallowed as baseline.)
+      for (const r of listRuns(50)) {
+        const prev = stream.lastStatuses.get(r.run_id);
+        stream.lastStatuses.set(r.run_id, r.status);
+        if ((prev === undefined || prev !== r.status) && !notify("ape/runs", { run: r })) return;
+      }
+      for (const s of stepsSince(stream.lastStepId, 100)) {
+        stream.lastStepId = Math.max(stream.lastStepId, s.id);
+        if (!notify("ape/steps", { step: s })) return;
+      }
+    } catch { /* transient ledger miss — next tick retries */ }
+  };
+  // Baseline at "now": snapshot cursors without emitting history.
+  try {
+    for (const r of listRuns(50)) stream.lastStatuses.set(r.run_id, r.status);
+    stream.lastStepId = maxStepId();
+  } catch { /* first tick self-heals */ }
+  req.on("close", close);
+  res.write("retry: 10000\n");
+  res.write(": connected ape/mcp stream\n\n");
+  mcpStreams.add(stream);
+  stream.timer = setInterval(tick, 1000);
+  stream.hb = setInterval(() => {
+    if (!stream.alive) return;
+    try { res.write(":\n\n"); } catch { close(); }
+  }, mcpHeartbeatMs());
+}
 function takeSession(req) {
   sweepSessions();
   const id = req.headers[MCP_SESSION_HEADER];
@@ -300,8 +366,16 @@ export function startHttp({ port = 8787, host = "127.0.0.1" } = {}) {
       applyCors(req, res);
       if (!checkBearer(req).ok) return unauthorized(res, h);
       if (req.method === "GET") {
-        res.writeHead(405, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: "method_not_allowed", detail: "server-initiated streams unsupported in v1; use POST /mcp" }));
+        // Functional stream (no 405): session-gated, cursors at now.
+        sweepSessions();
+        const id = req.headers[MCP_SESSION_HEADER];
+        const s = (typeof id === "string" && mcpSessions.get(id)) || null;
+        if (!s) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify(mcpError(null, MCP_SESSION_NOT_FOUND, "session-not-found: initialize first and send mcp-session-id")));
+        }
+        s.lastSeen = Date.now();
+        return openMcpStream(req, res, id);
       }
       if (req.method === "DELETE") {
         sweepSessions();

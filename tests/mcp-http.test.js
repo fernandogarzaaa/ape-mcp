@@ -7,6 +7,11 @@ import assert from "node:assert/strict";
 process.env.APE_REQUIRE_AUTH = "1";
 process.env.APE_TOKENS = "mcp-test-token";
 process.env.APE_CORS_ORIGIN = "https://allowed.example";
+process.env.APE_ALLOW_MOCK_INPUT = "1";
+// Worker-forking suites share one ledger DB across parallel processes: raise
+// the production concurrency guard (spend ceiling still applies).
+process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
+process.env.APE_MAX_DAILY_USD ??= "1000000";
 
 const { startHttp, resolveBindConfig, sweepSessions, mcpSessionCount } = await import("../src/http.js");
 
@@ -150,14 +155,121 @@ test("mcp: resources and prompts round-trip", async () => {
   assert.ok(Array.isArray(pl.json.result.prompts), "prompts listed");
 });
 
-test("mcp: GET is 405, DELETE/OPTIONS exist", async () => {
-  const get = await fetch(base + "/mcp", { method: "GET", headers: auth });
-  assert.equal(get.status, 405, "no server-initiated streams in v1");
+test("mcp: OPTIONS preflight allow/deny", async () => {
   const preflight = await fetch(base + "/mcp", { method: "OPTIONS", headers: { Origin: "https://allowed.example" } });
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get("access-control-allow-origin"), "https://allowed.example");
   const preflightDenied = await fetch(base + "/mcp", { method: "OPTIONS", headers: { Origin: "https://evil.example" } });
   assert.equal(preflightDenied.status, 403);
+});
+
+async function openStream(sid, extraHeaders = {}) {
+  const ctrl = new AbortController();
+  const resp = await fetch(base + "/mcp", {
+    method: "GET",
+    headers: { ...auth, "mcp-session-id": sid, ...extraHeaders },
+    signal: ctrl.signal,
+  });
+  return { resp, close: () => ctrl.abort() };
+}
+async function readUntil(reader, pred, timeoutMs = 8000) {
+  // NOTE: exactly one pending read at a time. An earlier version raced each
+  // read against a timeout, orphaning pending reads whose late-arriving chunks
+  // were then discarded — silently eating sparse stream data. Heartbeats keep
+  // reads resolving so the deadline stays honest without overlapping reads.
+  const dec = new TextDecoder();
+  let buf = "";
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buf += dec.decode(chunk.value, { stream: true });
+    if (pred(buf)) return buf;
+  }
+  return buf;
+}
+
+test("mcp: GET opens a gated SSE stream (auth + session before first byte)", async () => {
+  const anon = await fetch(base + "/mcp", { method: "GET" });
+  assert.equal(anon.status, 401, "no bearer, no stream");
+  await anon.arrayBuffer().catch(() => {});
+  const noSession = await fetch(base + "/mcp", { method: "GET", headers: { ...auth, "mcp-session-id": "gone" } });
+  assert.equal(noSession.status, 404, "unknown session, no stream");
+  await noSession.arrayBuffer().catch(() => {});
+  const { sid } = await initSession();
+  const { resp, close } = await openStream(sid);
+  try {
+    assert.equal(resp.status, 200);
+    assert.match(resp.headers.get("content-type"), /text\/event-stream/);
+    const buf = await readUntil(resp.body.getReader(), (b) => b.includes("retry:") && b.includes(": connected"));
+    assert.ok(buf.includes("retry:"), "retry field first");
+    assert.ok(buf.includes(": connected"), "opening comment");
+  } finally { close(); }
+});
+
+test("mcp: stream heartbeats on the configured interval", async () => {
+  const prev = process.env.APE_MCP_HEARTBEAT_MS;
+  process.env.APE_MCP_HEARTBEAT_MS = "80";
+  try {
+    const { sid } = await initSession();
+    const { resp, close } = await openStream(sid);
+    try {
+      const buf = await readUntil(resp.body.getReader(), (b) => (b.match(/:\n\n/g) || []).length >= 3, 6000);
+      assert.ok((buf.match(/:\n\n/g) || []).length >= 3, "repeated heartbeat comments");
+    } finally { close(); }
+  } finally {
+    if (prev === undefined) delete process.env.APE_MCP_HEARTBEAT_MS;
+    else process.env.APE_MCP_HEARTBEAT_MS = prev;
+  }
+});
+
+test("mcp: stream emits run/step notifications for new activity", async () => {
+  const { dispatchCall } = await import("../src/server.js");
+  const prevHb = process.env.APE_MCP_HEARTBEAT_MS;
+  process.env.APE_MCP_HEARTBEAT_MS = "200";
+  try {
+    const { sid } = await initSession();
+    const { resp, close } = await openStream(sid);
+    const reader = resp.body.getReader();
+    try {
+      const r = await dispatchCall("ape_agent_run", {
+        profile: "repo-triage",
+        objective: "stream probe",
+        _mockScript: [{ tool: "finish", args: { summary: "streamed" } }],
+      }, { headlessBypass: true });
+      const runId = r.structuredContent.result.run_id;
+      assert.ok(runId, "run started");
+      for (let i = 0; i < 40; i++) {
+        const g = await dispatchCall("ape_agent_status", { run_id: runId });
+        if (g.structuredContent.result.status !== "running") break;
+        await new Promise((x) => setTimeout(x, 250));
+      }
+      const buf = await readUntil(reader, (b) => b.includes('"logger":"ape/runs"') && b.includes('"logger":"ape/steps"'), 12000);
+      assert.ok(buf.includes('"logger":"ape/runs"'), "run transition notification");
+      assert.ok(buf.includes('"logger":"ape/steps"'), "step notification");
+      assert.ok(buf.includes(runId), "notifications scoped to the new run");
+    } finally {
+      // Settle the reader BEFORE aborting: a floating cancel() rejection after
+      // test end fails the file ("asynchronous activity after the test ended").
+      try { await reader.cancel(); } catch { /* ignore */ }
+      close();
+    }
+  } finally {
+    if (prevHb === undefined) delete process.env.APE_MCP_HEARTBEAT_MS;
+    else process.env.APE_MCP_HEARTBEAT_MS = prevHb;
+  }
+});
+
+test("mcp: closed streams release server resources", async () => {
+  const { mcpStreamCount } = await import("../src/http.js");
+  const { sid } = await initSession();
+  const before = mcpStreamCount();
+  const { close } = await openStream(sid);
+  await new Promise((x) => setTimeout(x, 200));
+  assert.equal(mcpStreamCount(), before + 1, "stream registered");
+  close();
+  await new Promise((x) => setTimeout(x, 300));
+  assert.equal(mcpStreamCount(), before, "disconnect tears down timers");
 });
 
 test("mcp: bearer gate precedes dispatch (401, nothing executed)", async () => {
@@ -186,6 +298,29 @@ test("mcp: CORS exact-origin only", async () => {
   });
   assert.equal(denied.headers.get("access-control-allow-origin"), null, "no wildcard, no echo for strangers");
   assert.equal(denied.status, 200, "request still served; browser enforces the missing header");
+});
+
+test("mcp: CORS allowlist holds multiple exact origins", async () => {
+  const prev = process.env.APE_CORS_ORIGIN;
+  process.env.APE_CORS_ORIGIN = "https://allowed.example, https://chat.example";
+  try {
+    const { sid } = await initSession();
+    for (const origin of ["https://allowed.example", "https://chat.example"]) {
+      const r = await fetch(base + "/mcp", {
+        method: "POST", headers: { "Content-Type": "application/json", ...auth, "mcp-session-id": sid, Origin: origin },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 52, method: "ping" }),
+      });
+      assert.equal(r.headers.get("access-control-allow-origin"), origin, `echoed: ${origin}`);
+    }
+    const sub = await fetch(base + "/mcp", {
+      method: "POST", headers: { "Content-Type": "application/json", ...auth, "mcp-session-id": sid, Origin: "https://sub.allowed.example" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 53, method: "ping" }),
+    });
+    assert.equal(sub.headers.get("access-control-allow-origin"), null, "subdomains do not inherit");
+  } finally {
+    if (prev === undefined) delete process.env.APE_CORS_ORIGIN;
+    else process.env.APE_CORS_ORIGIN = prev;
+  }
 });
 
 test("mcp: open mode preserved when auth unenforced", async () => {

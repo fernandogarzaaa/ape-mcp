@@ -103,28 +103,50 @@ curl -s "${H[@]}" -H "mcp-session-id: $SID" -d '{"jsonrpc":"2.0","id":3,"method"
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "${H[@]}" -H "mcp-session-id: $SID" $BASE
 ```
 
-## 11. ChatGPT registration
+## 11. Client registration
 
-Register a custom MCP app with:
+| Client | Transport setup | Auth | CORS needed? | Verify |
+|---|---|---|---|---|
+| ChatGPT custom app | MCP server URL `https://<host>/mcp` | Paste bearer token | Only the web playground — allowlist its exact origin | Tools discovered + a call completes |
+| Claude Code (CLI) | `claude mcp add --transport http ape https://<host>/mcp --header "Authorization: Bearer <token>"` | Header flag | No (desktop sends no `Origin`) | `claude mcp list` shows `ape` |
+| Cursor / VS Code / Windsurf | MCP JSON `{ "url": "https://<host>/mcp", "headers": { "Authorization": "Bearer <token>" } }` | Headers map | No (desktop) | Tool list appears after client restart |
+| OpenCode / Copilot | Same JSON shape | Same | No | — |
+| Raw / custom | §10 curl sequence | Bearer header | Only browser-based — see below | HTTP codes + session lifecycle |
 
-- **MCP server URL:** `https://mcp.your-domain.com/mcp`
-- **Authentication:** Bearer token (paste the value of `APE_TOKENS`).
-- **Required headers:** `Authorization: Bearer <token>` (plus `mcp-session-id`
-  after `initialize`, managed by the client).
-- **Expected tools:** the full `ape_*` surface (`ape_agent_run`,
-  `ape_agent_status`, `ape_recall`, `ape_connector_call`, …).
+**Required headers for every client:** `Authorization: Bearer <token>`, plus
+`mcp-session-id` after `initialize` (managed by spec-compliant clients).
+**Expected tools:** the 24 `ape_*` tools (`ape_agent_run`,
+`ape_agent_status`, `ape_recall`, `ape_connector_call`, …).
+
+**Finding your browser client's Origin** (only needed for web playgrounds):
+open devtools → Network → trigger any cross-origin request → read the
+`Origin` request header (e.g. `https://chatgpt.com`) → add it verbatim to
+`APE_CORS_ORIGIN` → restart APE. Desktop/CLI clients send no `Origin` and
+need nothing.
 
 Do not claim a client connected until it actually has: registration is proven
 only by the client discovering tools and completing a call.
 
-## 12. Limitations (v1, explicit)
+## 12. Live streams (`GET /mcp`)
+
+Streams are functional, not decorative: `ape/runs` status transitions and
+`ape/steps` records for activity after connect, plus heartbeats.
+
+- Open with bearer + valid `mcp-session-id`; response is
+  `text/event-stream` with `retry: 10000`, an opening comment, then
+  `notifications/message` envelopes:
+  `{ level: "info", logger: "ape/runs" | "ape/steps", data: { run | step } }`.
+- Cursors start at connect (no replay); heartbeat comment every
+  `APE_MCP_HEARTBEAT_MS` (default 15000ms); disconnect tears down timers.
+- Multiple streams per session allowed; each independent.
+
+## 13. Limitations (v1, explicit)
 
 Single-node. In-memory sessions (restart drops them). No horizontal scaling
 (SQLite ledger is local). No multi-tenant isolation (one shared token set).
-No rate limiting. No server-initiated streams (`GET /mcp` → 405). No
-in-process TLS. Request bodies capped at 4 MB.
+No rate limiting. No in-process TLS. Request bodies capped at 4 MB.
 
-## 13. Token rotation
+## 14. Token rotation
 
 ```bash
 # on the host, as root:
