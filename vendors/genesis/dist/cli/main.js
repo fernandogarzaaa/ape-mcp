@@ -16,7 +16,7 @@ import { ALL_DESCRIPTORS } from "../assurance/findings.js";
 import { VerifierAdapter } from "../assurance/verifier.js";
 import { SubprocessRunner } from "../evidence/runner.js";
 import { Ledger } from "../ledger/ledger.js";
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const USAGE = `genesis ${VERSION} — universal evaluation & assurance for AI-native software
 
   Evaluation ("does it work?"):
@@ -78,7 +78,7 @@ export async function main(argv) {
             case "run":
                 return await cmdEvaluate(argv.slice(1));
             case "report":
-                return cmdReport(argv.slice(1));
+                return await cmdReport(argv.slice(1));
             case "compare":
                 return await cmdCompare(argv.slice(1));
             case "regression":
@@ -304,11 +304,20 @@ async function cmdEvaluate(argv) {
         return AUDIT_EXIT.INTERNAL_ERROR;
     }
 }
-function cmdReport(argv) {
-    const [dir] = argv;
+async function cmdReport(argv) {
+    const [dir, ...rest] = argv;
     if (!dir) {
-        fail("usage: genesis report <results-dir>");
+        fail("usage: genesis report <results-dir> [--html <out.html>]");
         return AUDIT_EXIT.INTERNAL_ERROR;
+    }
+    const htmlIndex = rest.indexOf("--html");
+    if (htmlIndex >= 0) {
+        const out = rest[htmlIndex + 1];
+        if (!out) {
+            fail("usage: genesis report <results-dir> --html <out.html>");
+            return AUDIT_EXIT.INTERNAL_ERROR;
+        }
+        return cmdReportHtml(dir, out);
     }
     try {
         const verdict = JSON.parse(readFileSync(join(dir, "verdict.json"), "utf8"));
@@ -643,6 +652,19 @@ async function cmdRunBenchmark(argv) {
         return AUDIT_EXIT.INTERNAL_ERROR;
     }
 }
+async function cmdReportHtml(dir, out) {
+    try {
+        const { renderHtmlFromBundle } = await import("../eval/report-html.js");
+        const { writeFileSync } = await import("node:fs");
+        writeFileSync(out, renderHtmlFromBundle(dir), "utf8");
+        process.stdout.write(`HTML report: ${out}\n`);
+        return 0;
+    }
+    catch (error) {
+        fail(`cannot render HTML from ${dir}: ${error.message}`);
+        return AUDIT_EXIT.INTERNAL_ERROR;
+    }
+}
 // ── helpers ─────────────────────────────────────────────────────────────────
 async function cmdMcp() {
     // stdio is the protocol channel: keep it clean, diagnostics go to stderr.
@@ -763,6 +785,23 @@ async function cmdVerify(argv) {
         }
         const verification = verifyBundle(dir, keys);
         process.stdout.write(`bundle: ${verification.bundle_digest}\n`);
+        // Unsigned-tree check (v2 DIGEST covers the full bundle, not just the verdict).
+        try {
+            const { verifyEvidenceBundle } = await import("../eval/bundle.js");
+            const tree = verifyEvidenceBundle(dir);
+            process.stdout.write(`tree digest: ${tree.digest} (${tree.ok ? "match" : "MISMATCH"}; expected ${tree.expected})\n`);
+            if (tree.legacyExpected) {
+                const lm = tree.legacyDigest === tree.legacyExpected ? "match" : "MISMATCH";
+                process.stdout.write(`legacy verdict digest: ${tree.legacyDigest} (${lm})\n`);
+            }
+            if (!tree.ok) {
+                process.stdout.write("VERIFICATION FAILED\n");
+                return 1;
+            }
+        }
+        catch {
+            // Attestation-only bundles (no evaluation tree) skip the tree check.
+        }
         if (verification.checks.length === 0) {
             process.stdout.write("no attestations found — nothing to verify\n");
         }
