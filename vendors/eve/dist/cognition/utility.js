@@ -55,6 +55,10 @@ export function evaluateUtilities(scored, weights, options = {}) {
  * Softmax choice over utilities. Temperature shrinks as urgency rises —
  * pressured humans behave more deterministically (Easterbrook 1959,
  * attentional narrowing under arousal).
+ *
+ * NOTE (frozen model v1.0.0): the arithmetic below is byte-pinned. Do not
+ * "simplify" it against `softmaxDistribution` — the two orderings can
+ * differ in last-ulp edge cases, which would silently reseed trajectories.
  */
 export function softmaxChoice(candidates, weights, sample) {
     if (candidates.length === 0)
@@ -70,6 +74,22 @@ export function softmaxChoice(candidates, weights, sample) {
             return candidates[i];
     }
     return candidates[candidates.length - 1];
+}
+/**
+ * The softmax distribution itself (temperature + probabilities) using the
+ * same formula inputs as {@link softmaxChoice}. Exposed so the utility
+ * policy can RECORD the probabilities it acted on (Phase 3) — the
+ * distribution the sample came from, never synthesized. Recording-only:
+ * choice still flows exclusively through `softmaxChoice`.
+ */
+export function softmaxDistribution(candidates, weights) {
+    if (candidates.length === 0)
+        throw new Error("softmaxDistribution: no candidates");
+    const temperature = Math.max(0.12, 0.55 - weights.urgency * 0.35);
+    const max = candidates[0].utility;
+    const exps = candidates.map((c) => Math.exp((c.utility - max) / temperature));
+    const total = exps.reduce((a, b) => a + b, 0);
+    return { temperature, probabilities: exps.map((e) => e / total) };
 }
 /**
  * Should the operator double-check before this action? Low-trust operators
