@@ -5,9 +5,12 @@ import type { Finding, LoopIteration, Percept, Score, SessionUsage, Viewport } f
 import { type EmotionSample } from "../emotion/emotionalState.js";
 import { type LearningMetrics } from "../memory/learning.js";
 import { type ApplicationMemory, type PersistentMemory } from "../memory/longTerm.js";
+import { type QueryStatePolicy } from "../memory/surfaceIdentity.js";
 import { type CultureProfile } from "../personas/culture.js";
-import type { Persona } from "../personas/persona.js";
+import type { Persona, PersonaTraits } from "../personas/persona.js";
+import { type TaskSpec } from "../planning/task.js";
 import { type EvePlugin } from "../plugins/plugin.js";
+import { type TerminalObservation } from "../trace/trace.js";
 import type { DiscoveredWorkflow, WorkflowNode, WorkflowTransition } from "../workflow/graph.js";
 import { type DiscoveredJourney } from "../workflow/journeys.js";
 import { type CognitiveConfig, type CognitiveLoadTimeline, type ExpectationScore, type Fixation, type TrustSample } from "./cognitiveSuite.js";
@@ -70,12 +73,58 @@ export interface SessionOptions {
      * becomes more efficient over repeated runs.
      */
     longTermMemory?: PersistentMemory;
+    /**
+     * Explicit operator identity for persistent memory (CodeRabbit PR #39).
+     * `persona.name` is a template ("office-worker"), not an operator: two
+     * different humans on the same persona must not share episodic history,
+     * frustration spots, shortcuts, or confidence. Pass a per-operator id
+     * (user id, twin id, run label); omitted → legacy `persona.name`
+     * namespacing (unchanged behavior for existing callers).
+     */
+    operatorId?: string;
     /** Cultural profile (locale string or object) shaping reading direction etc. */
     culture?: CultureProfile | string;
+    /**
+     * Stable experimental task identity (Phase 2 calibration substrate).
+     * Recorded on the result for calibration matching and manifests; it does
+     * NOT alter goals, signals, or navigation — behavior is unchanged whether
+     * or not a task is named. Prefer `taskSpec` for full specifications.
+     */
+    taskId?: string;
+    /** Full task specification; `taskId` wins when both are present. */
+    taskSpec?: TaskSpec;
+    /**
+     * Optional navigation allowlist (domains + their subdomains) — operational
+     * safety (P1.12). When set, the start URL and every cognition-chosen `navigate`
+     * action outside it are blocked. Empty/omitted = unrestricted (default,
+     * backwards compatible). Container isolation, time/resource quotas and
+     * download control remain deployment concerns — see docs/security.md.
+     */
+    allowedHosts?: readonly string[];
+    /**
+     * Query-state classification policy (reviewer decision 2): which URL query
+     * keys are semantic UI state vs high-cardinality data. Defaults to
+     * `DEFAULT_QUERY_STATE_POLICY`; override to teach EVE app-specific state
+     * keys. Threaded into sensitive-state keys and workflow attribution.
+     */
+    queryStatePolicy?: QueryStatePolicy;
 }
 export interface SessionResult {
     readonly startUrl: string;
     readonly personaName: string;
+    /** Generating parameters for calibration records (reviewer requirement). */
+    readonly personaTraits?: PersonaTraits;
+    readonly policyName?: string;
+    readonly surfaceAdapter?: string;
+    readonly surfaceAdapterVersion?: string | null;
+    /** Stable experimental task identity, when the run was named (else null). */
+    readonly taskId?: string | null;
+    /**
+     * Genuine terminal observation: the last post-action state (or the
+     * goal-satisfying / abandonment percept). Never a bare URL. Null only
+     * when the run produced no observation at all (explicit absence).
+     */
+    readonly terminalState?: TerminalObservation | null;
     readonly seed: number;
     readonly iterations: readonly LoopIteration[];
     readonly findings: readonly Finding[];
@@ -220,5 +269,12 @@ export declare class EveSession {
     private addFinding;
     private makeIteration;
     private log;
+    /**
+     * Build the terminal observation snapshot (Phase 1 trace substrate).
+     * Pure recording: identity keys, counts, and a truncated visible-text
+     * excerpt of a percept the session genuinely observed. No screenshots
+     * (buffers must never enter persisted traces).
+     */
+    private terminalStateOf;
 }
 //# sourceMappingURL=session.d.ts.map

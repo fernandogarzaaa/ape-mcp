@@ -2,11 +2,30 @@
 
 A single EVE session answers *"how did this one person do?"* A **population
 study** answers the question a UX researcher actually ships on: *"how does the
-distribution of real humans do?"*
+distribution of modeled operators do?"* Simulated personas are not a random
+sample of real humans — this describes the modeled population's behavior,
+never validated real-human performance (see
+[human-calibration.md](human-calibration.md)).
 
 `simulatePopulation` runs many varied operators against the same app — each an
 ordinary seeded [`EveSession`](developer-guide.md), so a study is as
 reproducible as its seed — and aggregates them statistically.
+
+## Sampling semantics: BalancedPanel vs PopulationDistribution
+
+Two modes, explicitly distinguished:
+
+- **`BalancedPanel` (default)**: deterministic round-robin over the
+  persona/profession/culture pools. Guarantees balanced coverage — not a
+  population model, not demographics.
+- **`PopulationDistribution`**: pass `distribution: { segments:
+  [{ persona?, profession?, culture?, weight }] }` for deterministic
+  weighted sampling (cumulative-weight draws, seeds
+  `"<base>#weighted-<i>"`, never colliding with round-robin seeds).
+
+Weights are operator-specified scenario parameters. They do NOT represent
+real user populations without human evidence — that claim requires
+calibration, not configuration.
 
 ## Quick start
 
@@ -65,9 +84,10 @@ Each segment reports its size, share, mean score, and mean steps.
 | `label` | `url` | human-facing target name shown in reports (set when an `adapterFactory` drives an app that isn't the literal `url`) |
 | `size` | `25` | number of operators |
 | `personas` | whole library | names to sample from (round-robin) |
+| `distribution` | none | weighted `PopulationDistribution`: deterministic seeded sampling INSTEAD of round-robin |
 | `professions` / `cultures` | none | overlays mixed round-robin |
 | `goal` / `goalSuccessSignals` | none | the task every operator attempts |
-| `seed` | `1` | base seed; operator *i* uses `"<seed>#<i>"` |
+| `seed` | `1` | base seed; round-robin operator *i* uses `"<seed>#<i>"`; distribution mode uses `"<seed>#weighted-<i>"` (never colliding) |
 | `maxSteps` / `maxDurationMs` | `60` / `10min` | per-operator budgets |
 | `cognitive` / `utility` | `false` | deeper cognition / utility decisions |
 | `browser` | inferred | `mock` for `mock:` URLs, else `playwright` |
@@ -105,9 +125,12 @@ The same capability is exposed as the `eve_run_usability_study` tool, so any
 MCP client (Claude, Codex, Cursor, …) can run a study directly — see
 [integrations.md](integrations.md). Set `output_dir` to also write the dataset.
 
-## Construct validity
+## Construct-discrimination regression (internal — not human validation)
 
 Population studies inherit EVE's benchmark discipline: a population on the
 excellent reference app out-scores the same population on the bad one
 (`tests/population.test.ts` → *"population construct validity"*). If that
-ordering ever breaks, the instrument — not the app — is wrong.
+ordering ever breaks, the instrument — not the app — is wrong. This proves
+the instrument still discriminates its own fixtures; it does NOT prove the
+simulation matches real humans (that requires `eve_calibrate` against human
+traces).

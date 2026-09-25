@@ -25,7 +25,26 @@ export function clearRegisteredSecrets() {
  * Patterns for credentials Genesis was never told about. Deliberately
  * conservative — a false positive costs a few characters of a log, a false
  * negative writes a live token into the ledger permanently.
+ *
+ * Sensitive header/field names are redacted by KEY as well as by value
+ * pattern (see SENSITIVE_KEYS): an `Authorization: Bearer ...` header must
+ * not survive just because the token itself looks random.
  */
+const SENSITIVE_KEYS = new Set([
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+    "api_key",
+    "apikey",
+    "auth_token",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "private_key",
+]);
 const PATTERNS = [
     { name: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{16,}\b/g },
     { name: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g },
@@ -66,10 +85,19 @@ export function redactDeep(value) {
     if (value && typeof value === "object") {
         const out = {};
         for (const [k, v] of Object.entries(value)) {
-            out[k] = redactDeep(v);
+            if (SENSITIVE_KEYS.has(k.toLowerCase())) {
+                out[k] = REDACTED;
+            }
+            else {
+                out[k] = redactDeep(v);
+            }
         }
         return out;
     }
     return value;
+}
+/** True when a field name carries credentials regardless of value shape. */
+export function isSensitiveKey(key) {
+    return SENSITIVE_KEYS.has(key.toLowerCase());
 }
 //# sourceMappingURL=redact.js.map

@@ -43,6 +43,7 @@ export interface MockAppSpec {
 export declare const DEMO_APP: MockAppSpec;
 export declare class MockAdapter implements BrowserAdapter {
     readonly name = "mock";
+    readonly version = "0.5.0";
     /** Visual/spatial like a real browser, but never produces a screenshot. */
     readonly capabilities: {
         readonly spatial: boolean;

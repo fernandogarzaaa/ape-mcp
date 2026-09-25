@@ -38,7 +38,7 @@ function capture() {
 describe("benchmark registry", () => {
   it("lists the three shipped benchmarks with versions and task counts", () => {
     const infos = listBenchmarks(join(process.cwd(), "benchmarks"));
-    expect(infos.map((b) => b.name).sort()).toEqual(["arithmetic-v1", "retrieval-v1", "safety-v1", "sentiment-v1"]);
+    expect(infos.map((b) => b.name).sort()).toEqual(["arithmetic-v1", "prompt-injection-v1", "retrieval-v1", "safety-v1", "sentiment-v1"]);
     for (const b of infos) {
       expect(b.version).toMatch(/^\d+\.\d+\.\d+$/);
       expect(b.description.length).toBeGreaterThan(0);
@@ -93,9 +93,9 @@ describe("benchmark registry", () => {
 
 describe("benchmark templates in specs", () => {
   it("parses a subject-less spec only with a benchmark block", () => {
-    const withBlock = validateSpec({ name: "t", benchmark: { version: "1.0.0" }, dataset: {}, evaluator: { type: "exact" } });
+    const withBlock = validateSpec({ name: "t", benchmark: { version: "1.0.0" }, dataset: { inline: [{ input: "a" }] }, evaluator: { type: "exact" } });
     expect(withBlock.subject).toBeUndefined();
-    expect(() => validateSpec({ name: "t", dataset: {}, evaluator: { type: "exact" } })).toThrow();
+    expect(() => validateSpec({ name: "t", dataset: { inline: [{ input: "a" }] }, evaluator: { type: "exact" } })).toThrow();
   });
 
   it("runExperiment refuses a subject-less spec instead of inventing one", async () => {
