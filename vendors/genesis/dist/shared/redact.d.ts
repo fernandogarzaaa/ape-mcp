@@ -18,4 +18,6 @@ export declare function clearRegisteredSecrets(): void;
 export declare function redact(text: string): string;
 /** Redact every string in a JSON-ish structure, in place of the original. */
 export declare function redactDeep<T>(value: T): T;
+/** True when a field name carries credentials regardless of value shape. */
+export declare function isSensitiveKey(key: string): boolean;
 //# sourceMappingURL=redact.d.ts.map

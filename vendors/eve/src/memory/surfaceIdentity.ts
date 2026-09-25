@@ -1,0 +1,401 @@
+import type { Percept } from "../core/types.js";
+import { normalizeTaskId } from "../planning/task.js";
+
+/**
+ * Two-tier surface identity (P0.5, reviewer decision 1).
+ *
+ * ```text
+ * SurfaceIdentity  (stable structural identity)
+ * SurfaceState     (mutable interaction/semantic state)
+ * OutcomeEvidence  (transition/result evidence — see planning/evidence.ts)
+ * ```
+ *
+ * A single key cannot serve both tried-affordance memory and workflow
+ * attribution: a key that forks on every keystroke or focus move orphans
+ * tried-marks and loops forever (regression: tests/memory-identity.test.ts),
+ * while a key that ignores query tabs, dialogs and validation errors aliases
+ * materially different states. So:
+ *
+ * - `stableIdentityKey` — origin + path, layout roles + geometry, heading
+ *   gist. NEVER forks on: typing, focus moves, enable/disable toggles,
+ *   dialog TEXT, query values, keyboard band, error appearance. Used for
+ *   tried-affordances, familiarity, recognition, revisit detection.
+ * - `sensitiveStateKey` — stable + classified query values + dialog texts +
+ *   validation-error signal + action-tracked form fill + interaction-state
+ *   signature (role/geometry/interactive/disabled/editable, no text, no
+ *   focus). Used for workflow attribution, transition analysis, outcome
+ *   interpretation, state-specific findings. Focus and keyboard-band state
+ *   are deliberately excluded — they are interaction evidence on the
+ *   Percept, not state discriminators.
+ *
+ * `screenSignature()` in `./memory.js` is unchanged (backwards compat);
+ * `surfaceIdentity()` remains as a deprecated alias of the stable key.
+ */
+
+export interface QueryStatePolicy {
+  /**
+   * Query keys whose values are semantic UI state (tabs, views, steps).
+   * Short values discriminate verbatim; longer ones are bucketed.
+   */
+  readonly stateBearingKeys: readonly string[];
+  /**
+   * Query keys with high-cardinality user/opaque data. Always bucketed,
+   * never verbatim — they must not explode the state graph.
+   */
+  readonly highCardinalityKeys: readonly string[];
+  /** Max length for a verbatim state-bearing value. */
+  readonly shortValueMaxLength: number;
+}
+
+export const DEFAULT_QUERY_STATE_POLICY: QueryStatePolicy = {
+  stateBearingKeys: [
+    "tab",
+    "view",
+    "mode",
+    "step",
+    "page",
+    "sort",
+    "filter",
+    "section",
+    "stage",
+    "pane",
+    "panel",
+  ],
+  highCardinalityKeys: ["q", "search", "query", "session", "tracking", "token", "id", "sid"],
+  shortValueMaxLength: 24,
+};
+
+function hashStr(s: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function originPath(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+/** Length bucket for high-cardinality values (never verbatim). */
+function bucket(v: string): string {
+  return v.length <= 24 ? "s" : v.length <= 96 ? "m" : "l";
+}
+
+export type QueryParameterClassification = "state-bearing" | "high-cardinality" | "unknown-key";
+
+export type QueryNormalization = "verbatim" | "bucketed";
+
+/**
+ * Explainable per-parameter query classification (reviewer: identity
+ * behavior must be debuggable). Each normalized component reports what it
+ * is, how it was normalized, and why.
+ */
+export interface QueryStateClassification {
+  readonly parameter: string;
+  readonly classification: QueryParameterClassification;
+  readonly normalization: QueryNormalization;
+  readonly normalized: string;
+  readonly reason: string;
+}
+
+/** Classify every query parameter of a URL without discarding information. */
+export function classifyQueryDetailed(
+  url: string,
+  policy: QueryStatePolicy = DEFAULT_QUERY_STATE_POLICY,
+): readonly QueryStateClassification[] {
+  try {
+    const u = new URL(url);
+    // All key-value entries (not just names): `?filter=a&filter=b` and
+    // `?filter=a&filter=c` must not collapse (CodeRabbit PR #39). Sorted as
+    // complete pairs so order swaps don't fork identity either.
+    const entries = [...u.searchParams.entries()].sort(([ka, va], [kb, vb]) =>
+      ka === kb ? (va < vb ? -1 : va > vb ? 1 : 0) : ka < kb ? -1 : 1,
+    );
+    const state = new Set(policy.stateBearingKeys.map((k) => k.toLowerCase()));
+    const cardinal = new Set(policy.highCardinalityKeys.map((k) => k.toLowerCase()));
+    return entries.map(([k, v]) => {
+      const lk = k.toLowerCase();
+      if (cardinal.has(lk)) {
+        return {
+          parameter: k,
+          classification: "high-cardinality" as const,
+          normalization: "bucketed" as const,
+          normalized: `${k}=${bucket(v)}`,
+          reason: `"${k}" is a high-cardinality key: values must not explode the state graph`,
+        };
+      }
+      if (state.has(lk) && v.length <= policy.shortValueMaxLength) {
+        return {
+          parameter: k,
+          classification: "state-bearing" as const,
+          normalization: "verbatim" as const,
+          normalized: `${k}=${v}`,
+          reason: `"${k}" is a state-bearing key with a short (${v.length}ch) value`,
+        };
+      }
+      if (state.has(lk)) {
+        return {
+          parameter: k,
+          classification: "state-bearing" as const,
+          normalization: "bucketed" as const,
+          normalized: `${k}=${bucket(v)}`,
+          reason: `"${k}" is state-bearing but the value (${v.length}ch) exceeds shortValueMaxLength=${policy.shortValueMaxLength}`,
+        };
+      }
+      return {
+        parameter: k,
+        classification: "unknown-key" as const,
+        normalization: "bucketed" as const,
+        normalized: `${k}=${bucket(v)}`,
+        reason: `"${k}" is in neither key list: bucketed conservatively (add it to the policy to discriminate it)`,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Classified query string for the SENSITIVE tier (reviewer decision 2):
+ * state-bearing keys discriminate verbatim when short, everything else is
+ * bucketed. Configurable via `QueryStatePolicy` — the length cutoff is a
+ * safety mechanism, not the semantic rule.
+ */
+export function classifiedQuery(
+  url: string,
+  policy: QueryStatePolicy = DEFAULT_QUERY_STATE_POLICY,
+): string {
+  // Dedupe exact-duplicate pairs (`?a=1&a=1` ≡ `?a=1`); distinct values
+  // stay distinct.
+  return [...new Set(classifyQueryDetailed(url, policy).map((p) => p.normalized))].join("&");
+}
+
+function structurePart(percept: Percept): string {
+  // Roles + geometry of interactive elements — deliberately NO label text,
+  // NO focus flag, NO disabled flag, NO alerts (an appearing validation
+  // error must not fork the stable key or tried-marks orphan — see header).
+  // Heading text IS included: same-layout screens ("Login" vs "Sign up")
+  // need discrimination, and field values never appear in headings.
+  const items = percept.elements
+    .filter((e) => e.interactive || e.editable || e.role === "heading" || e.role === "menuitem")
+    .map((e) => {
+      const b = e.box;
+      const geo = `${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.width)}x${Math.round(b.height)}`;
+      const label = e.role === "heading" ? e.text.trim().toLowerCase().slice(0, 40) : "";
+      return `${e.role}@${geo}:${label}`;
+    })
+    .sort();
+  return hashStr(items.join("|"));
+}
+
+/** Stable structural identity — see header for the tier contract. */
+export function stableIdentityKey(percept: Percept): string {
+  return [originPath(percept.url), structurePart(percept)].join("::");
+}
+
+export interface SensitiveStateOptions {
+  readonly queryPolicy?: QueryStatePolicy;
+  /**
+   * Whether the screen carries a validation/error state (the session passes
+   * its already-computed error perception — no layer violation, no import
+   * cycle with cognition). Distinguishes "same form, validation-error".
+   */
+  readonly errorSignal?: boolean;
+  /**
+   * Form fill state tracked from the ACTION stream (reviewer adversarial
+   * matrix: "form empty / form populated" must not collapse at the
+   * sensitive tier). Perception alone cannot reliably separate an empty
+   * field from a filled one across adapters, so the session — which knows
+   * which type actions succeeded — supplies it. Omitted → neutral ("-").
+   */
+  readonly formFill?: "empty" | "populated";
+}
+
+/**
+ * Interaction-state signature for the SENSITIVE tier (reviewer final defect
+ * fix): role + rounded geometry + interactive/disabled/editable flags for
+ * relevant controls — NO user-entered text, NO focus flag.
+ *
+ * A disabled "Save" and an enabled "Save" share the stable layout but are
+ * different workflow states (different transitions, expectations, recovery
+ * paths). Typing, focus moves and cursor travel never touch these flags, so
+ * the tried-mark stability invariant is preserved.
+ */
+function interactionStatePart(percept: Percept): string {
+  const items = percept.elements
+    .filter((e) => e.interactive || e.editable)
+    .map((e) => {
+      const b = e.box;
+      const geo = `${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.width)}x${Math.round(b.height)}`;
+      const flags = `${e.interactive ? "i" : "-"}${e.disabled ? "d" : "-"}${e.editable ? "e" : "-"}`;
+      return `${e.role}@${geo}:${flags}`;
+    })
+    .sort();
+  return `ia:${hashStr(items.join("|"))}`;
+}
+
+/** Mutable semantic state — stable key plus state-bearing distinctions. */
+export function sensitiveStateKey(percept: Percept, opts: SensitiveStateOptions = {}): string {
+  const query = classifiedQuery(percept.url, opts.queryPolicy);
+  const dialogs =
+    percept.dialogs.length === 0
+      ? "-"
+      : `dlg:${hashStr(
+          percept.dialogs
+            .map((x) => `${x.source ?? "dom"}:${x.text.slice(0, 80)}`)
+            .sort()
+            .join("||"),
+        )}`;
+  // NOTE: focus and keyboard-band state are deliberately ABSENT (reviewer:
+  // focus belongs neither in stable identity nor as a default sensitive
+  // discriminator). Focus/keyboard remain interaction evidence on the
+  // Percept (`focused`, `keyboardOcclusion`) for outcome analysis.
+  const err = opts.errorSignal ? "err" : "-";
+  const fill = opts.formFill === "populated" ? "pop" : opts.formFill === "empty" ? "clr" : "-";
+  return [
+    stableIdentityKey(percept),
+    query || "-",
+    dialogs,
+    err,
+    fill,
+    interactionStatePart(percept),
+  ].join("::");
+}
+
+/**
+ * @deprecated Prefer `stableIdentityKey` (tried-marks, familiarity,
+ * recognition) or `sensitiveStateKey` (workflow, transitions, outcomes).
+ * Byte-identical to `stableIdentityKey`.
+ */
+export function surfaceIdentity(percept: Percept): string {
+  return stableIdentityKey(percept);
+}
+
+/** True when two percepts share stable structural identity. */
+export function sameSurface(a: Percept, b: Percept): boolean {
+  return stableIdentityKey(a) === stableIdentityKey(b);
+}
+
+/** True when two percepts share full semantic state. */
+export function sameState(a: Percept, b: Percept, opts: SensitiveStateOptions = {}): boolean {
+  return sensitiveStateKey(a, opts) === sensitiveStateKey(b, opts);
+}
+
+/* ------------------------------------------------------------------ */
+/* Canonical surface identity (Phase 4 calibration layer)             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Which experimental world a state reference comes from. Canonical identity
+ * maps all three into one comparable shape WITHOUT equating them: an EVE
+ * key, a human screen id, and an agent state id are different evidence
+ * carried in one envelope.
+ */
+export type CanonicalStateKind = "eve-stable" | "eve-sensitive" | "human" | "agent";
+
+/** Provenance of a canonical state reference. */
+export type CanonicalStateProvenance = "eve-perception" | "human-report" | "agent-log" | "manifest";
+
+/**
+ * Canonical surface identity: the smallest envelope that lets a human
+ * observed state, an EVE state, and an AI-agent state refer to the same
+ * experimental moment. Matching across kinds uses `taskId` + `url` +
+ * whichever key the other side actually carries — never raw URL equality
+ * alone, never DOM ids (explicitly excluded: DOM structure is an
+ * implementation detail, not experimental state).
+ */
+export interface CanonicalSurfaceIdentity {
+  readonly kind: CanonicalStateKind;
+  readonly taskId: string | null;
+  readonly url: string | null;
+  /** EVE stable key, when the reference comes from EVE memory. */
+  readonly eveStableKey?: string;
+  /** EVE sensitive key, when the reference carries full EVE state. */
+  readonly eveSensitiveKey?: string;
+  /**
+   * Foreign state id (human screen id, agent state id). Opaque strings —
+   * compared by equality only, never parsed.
+   */
+  readonly externalStateId?: string;
+  readonly provenance: CanonicalStateProvenance;
+}
+
+/**
+ * Deterministic canonical string for maps and alignment keys. JSON-array
+ * encoding (not a joined delimiter): component values may legally contain
+ * any delimiter character (`::`, `|`, …), and joining would let distinct
+ * tuples collide (`["a::b", "c"]` vs `["a", "b::c"]`). JSON arrays are
+ * unambiguous by construction.
+ */
+export function canonicalSurfaceId(c: CanonicalSurfaceIdentity): string {
+  return JSON.stringify([
+    c.kind,
+    c.taskId,
+    c.url,
+    c.eveStableKey ?? null,
+    c.eveSensitiveKey ?? null,
+    c.externalStateId ?? null,
+  ]);
+}
+
+/** Build the canonical EVE-stable reference for a percept. */
+export function canonicalFromPercept(
+  percept: Percept,
+  taskId: string | null = null,
+): CanonicalSurfaceIdentity {
+  return {
+    kind: "eve-stable",
+    taskId,
+    url: percept.url,
+    eveStableKey: stableIdentityKey(percept),
+    provenance: "eve-perception",
+  };
+}
+
+/**
+ * Whether two canonical references may denote the same experimental
+ * moment: same normalized task (when both name one) plus a shared key —
+ * EVE-stable equality, EVE-sensitive equality, external-id equality, or
+ * URL equality as the weakest fallback. Returns the matched basis, or
+ * null when they cannot be the same moment. Basis is reported (not just
+ * a boolean) so alignment stays debuggable.
+ */
+export function canonicalMatchBasis(
+  a: CanonicalSurfaceIdentity,
+  b: CanonicalSurfaceIdentity,
+):
+  | "task+stable"
+  | "task+sensitive"
+  | "task+external-id"
+  | "task+url"
+  | "stable"
+  | "sensitive"
+  | "external-id"
+  | "url"
+  | null {
+  const tasksAgree =
+    !a.taskId || !b.taskId || normalizeTaskId(a.taskId) === normalizeTaskId(b.taskId);
+  if (!tasksAgree) return null;
+  const taskPrefix = Boolean(a.taskId && b.taskId);
+  if (a.eveStableKey && b.eveStableKey && a.eveStableKey === b.eveStableKey) {
+    return taskPrefix ? "task+stable" : "stable";
+  }
+  // Reachable when callers carry sensitive keys without stable keys.
+  // (Full sensitive keys embed the stable key, so with both present the
+  // stable branch above always fires first.)
+  if (a.eveSensitiveKey && b.eveSensitiveKey && a.eveSensitiveKey === b.eveSensitiveKey) {
+    return taskPrefix ? "task+sensitive" : "sensitive";
+  }
+  if (a.externalStateId && b.externalStateId && a.externalStateId === b.externalStateId) {
+    return taskPrefix ? "task+external-id" : "external-id";
+  }
+  if (a.url && b.url && a.url === b.url) return taskPrefix ? "task+url" : "url";
+  return null;
+}
