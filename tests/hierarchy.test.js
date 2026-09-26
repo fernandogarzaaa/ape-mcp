@@ -49,6 +49,7 @@ test("hierarchy: node-add creates plan nodes visible in status", async () => {
     completion: "cause written down",
   });
   const res = r.structuredContent.result;
+  assert.equal(res.ok, true, "orchestrate node-add ok, got: " + JSON.stringify(res).slice(0, 200));
   assert.ok(!res.error, "node added, got: " + JSON.stringify(res).slice(0, 200));
   const st = await dispatchCall("ape_orchestrate", { op: "status" });
   const text = JSON.stringify(st.structuredContent.result);
@@ -58,6 +59,7 @@ test("hierarchy: node-add creates plan nodes visible in status", async () => {
 test("hierarchy: claim and release round-trip through the tool", async () => {
   await dispatchCall("ape_orchestrate", { op: "node-add", node: "h-claim-1", title: "Claim me" });
   const c = await dispatchCall("ape_orchestrate", { op: "claim", node: "h-claim-1", agent_id: "ape-mcp" });
+  assert.equal(c.structuredContent.result.ok, true, "claim ok: " + JSON.stringify(c.structuredContent.result).slice(0, 200));
   assert.ok(!JSON.stringify(c.structuredContent.result).includes("error"), "claimed: " + JSON.stringify(c.structuredContent.result).slice(0, 160));
   const held = JSON.stringify((await dispatchCall("ape_orchestrate", { op: "status" })).structuredContent.result);
   assert.ok(held.includes("ape-mcp"), "lease holder visible");
@@ -84,7 +86,9 @@ test("hierarchy: supervisor fans out one delegate per node, then synthesizes", a
   });
   assert.equal(res.stop_reason, "explicit_final_answer");
   // Plan artifact exists independent of execution.
-  const st = JSON.stringify((await dispatchCall("ape_orchestrate", { op: "status" })).structuredContent.result);
+  const stRaw = (await dispatchCall("ape_orchestrate", { op: "status" })).structuredContent.result;
+  assert.equal(stRaw.ok, true, "orchestrate status ok, got: " + JSON.stringify(stRaw).slice(0, 200));
+  const st = JSON.stringify(stRaw);
   assert.ok(st.includes("h-n1") && st.includes("h-n2"), "both plan nodes exist");
   // Two children fanned out, both linked, both terminal.
   assert.equal(res.receipt.delegations.length, 2, "one delegate per node");
