@@ -1,4 +1,4 @@
-﻿import { execFile } from "node:child_process";
+﻿import { execFile, spawnSync } from "node:child_process";
 import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,31 @@ export function skeinSrc() {
   return existsSync(V("skein/src/skein/cli.py")) ? V("skein/src") : null;
 }
 
+let cachedPython = null;
+/**
+ * Resolve the Python interpreter for skein orchestration. Honors
+ * APE_PYTHON, then prefers `python`, falling back to `python3` (systems
+ * without the `python` alias, e.g. minimal containers). The probe runs at
+ * most once. Last resort is the historical `python` default so behavior
+ * without any interpreter is unchanged (ENOENT surfaces via run()).
+ */
+export function resolvePython() {
+  if (process.env.APE_PYTHON) return process.env.APE_PYTHON;
+  if (cachedPython) return cachedPython;
+  for (const bin of ["python", "python3"]) {
+    try {
+      const r = spawnSync(bin, ["--version"]);
+      if (!r.error && r.status === 0) {
+        cachedPython = bin;
+        return bin;
+      }
+    } catch {
+      // try the next candidate
+    }
+  }
+  return "python";
+}
+
 function ledgerSummary(entry) {
   try {
     const dir = process.env.APE_DATA_DIR || join(process.cwd(), ".ape");
@@ -121,7 +146,7 @@ export const dispatch = {
   async orchestrate({ op = "status", node = "", agent_id = "ape-mcp", title = "", goal = "", context = "", constraints = "", completion = "", depends_on = "" } = {}) {
     const s = skeinSrc();
     if (!s) return fail("skein", "vendors/skein/src missing");
-    const py = process.env.APE_PYTHON || "python";
+    const py = resolvePython();
     const map = {
       status: ["status"], graph: ["graph"],
       claim: ["claim", node, "--agent-id", agent_id],
