@@ -21,6 +21,17 @@ import type { AdapterOptions, BrowserAdapter, DeviceMetrics, RawSnapshot } from 
  * swipe momentum, soft-keyboard cadence — is composed by the humanizer and
  * the engine, one primitive call at a time. This adapter never decides *how
  * many* taps or scrolls to issue.
+ *
+ * HONEST LIMITATIONS (P1.3 — mobile gesture semantics):
+ * - Touch scrolling is delivered as `mouse.wheel` events segmented by the
+ *   humanizer's swipe-momentum plan (flick + decaying segments), NOT as true
+ *   touchstart/touchmove/touchend with velocity, inertial scroll, overscroll
+ *   or pull-to-refresh physics. The TIMING/momentum shape is modeled; the
+ *   INPUT MECHANISM is wheel emulation. Gesture recognizers that key off raw
+ *   touch events will not fire as on hardware.
+ * - Always Chromium, even for iPhone descriptors (documented limitation):
+ *   an "iPhone" result is Chromium emulating an iPhone environment, not
+ *   Safari/iOS behavior.
  */
 /**
  * Approximate on-screen keyboard heights, in CSS px, portrait orientation
@@ -46,6 +57,7 @@ export declare const DEVICE_PRESETS: {
 export type DeviceName = keyof typeof DEVICE_PRESETS;
 export declare class MobileAdapter implements BrowserAdapter {
     readonly name = "mobile";
+    readonly version = "0.5.0";
     readonly capabilities: import("../surface/capabilities.js").SurfaceCapabilities;
     readonly deviceMetrics: DeviceMetrics;
     private readonly deviceName;

@@ -56,6 +56,7 @@ export interface HumanityAdapterOptions {
 export declare class HumanityAdapter implements BrowserAdapter, KernelSurface {
     private readonly options;
     readonly name = "humanity";
+    readonly version = "0.5.0";
     readonly capabilities: {
         spatial: boolean;
         modality: import("../core/registry.js").Modality;
