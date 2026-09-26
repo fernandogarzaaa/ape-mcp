@@ -2,7 +2,7 @@
  * Population simulation — run many varied operators against the same app and
  * aggregate their experiences statistically. Where a single {@link EveSession}
  * answers "how did this one person do?", a population study answers "how does
- * the distribution of real humans do?": success/drop-off rates, confidence and
+ * the distribution of modeled operators do?": success/drop-off rates, confidence and
  * frustration distributions, a task-completion histogram, a navigation
  * heatmap, and the expected user segments.
  *
@@ -16,6 +16,7 @@ import { UtilityCognition } from "../cognition/utilityCognition.js";
 import { EMOTION_KEYS } from "../emotion/emotionalState.js";
 import { EveSession } from "../engine/session.js";
 import { applyProfession, getCulture, getPersona, getProfession, listPersonas, } from "../personas/index.js";
+import { sampleDistribution } from "./distribution.js";
 import { classifySegment, segmentPopulation } from "./segments.js";
 import { histogram, summarize } from "./stats.js";
 const MAX_HEATMAP_ROWS = 20;
@@ -35,6 +36,14 @@ function severityRank(severity) {
 }
 /** Build the deterministic roster of operators to simulate. */
 export function sampleOperators(options) {
+    // Weighted distribution mode (Phase 10): explicit segment weights with
+    // seeded draws. Default path below is untouched (BalancedPanel).
+    if (options.distribution) {
+        return sampleDistribution(options.distribution, options.size ?? 25, options.seed ?? 1, options.personas, options.professions, options.cultures);
+    }
+    if (typeof options.size === "number" && !Number.isFinite(options.size)) {
+        throw new Error(`PopulationOptions.size must be a finite number, got ${options.size}.`);
+    }
     const size = Math.max(1, Math.floor(options.size ?? 25));
     const base = String(options.seed ?? 1);
     const personaPool = options.personas && options.personas.length > 0

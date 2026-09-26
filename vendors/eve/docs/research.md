@@ -146,9 +146,32 @@ interpretability and controlled ablation are first-class — which is what a
 
 ### Benchmarks (`src/benchmarks/`)
 
-- **Construct validity**: a measurement instrument must discriminate known
-  cases. The benchmark suite (bad / average / excellent UX apps) is EVE's
-  standing validity check — score ordering must hold, enforced by tests.
+- **Construct-discrimination regression** (internal — not external validity):
+  a measurement instrument must discriminate known cases. The benchmark
+  suite (bad / average / excellent UX apps) is EVE's standing regression
+  check — score ordering must hold, enforced by tests. This proves the
+  instrument agrees with itself on its own fixtures; human validity requires
+  `eve_calibrate` against real human traces (see
+  [human-calibration.md](human-calibration.md)).
+
+## Metric classification
+
+Every number EVE reports belongs to exactly one class. The class travels
+with the number (provenance fields, docstrings); a consumer that ignores
+the class is misreading the output.
+
+| Class | Meaning | Examples |
+|---|---|---|
+| `descriptive` | Summarizes observed data; claims nothing beyond it | completion/abandonment rates, friction correlation, `transitionDivergenceL1`, `spearmanRankCorrelation`, `meanLogDurationError` |
+| `heuristic` | Hand-authored formula, unfitted | support-contact estimate, struggle/abandonment risk indices, completion lift, trust/emotion updates |
+| `simulation-sample` | Computed over simulated operators, not humans | Wilson intervals, `topKAgreement`/`brierScore` on simulated choices, population distributions |
+| `behavioral-model-output` | Produced by the cognitive/motor model | predicted confusion, surprise, learning metrics, power-law fit |
+| `calibration-candidate` | Eligible as a future fitting objective | `TraceAlignment` coverage, action/transition agreement, dwell error, hazard agreement |
+
+Nothing above is `human-calibrated` or `externally-validated` until a
+held-out human evaluation says so. `src/calibration/metrics.ts` holds the
+pure primitives future objectives can be written in — vocabulary, not
+evidence.
 
 ## Sources
 

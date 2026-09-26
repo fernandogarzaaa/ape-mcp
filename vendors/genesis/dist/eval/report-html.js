@@ -18,6 +18,16 @@ export function escapeHtml(s) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
 }
+/**
+ * Escape a bundle-sourced value for HTML interpolation. Bundle files are
+ * parsed with JSON.parse + casts only, so a crafted bundle can smuggle
+ * markup in a "numeric" field (e.g. `"repetition": "<img src=x
+ * onerror=...>"`). Every interpolated bundle value goes through escapeHtml,
+ * even ones the type system claims are numbers.
+ */
+export function num(v) {
+    return escapeHtml(String(v));
+}
 const VERDICT_COLORS = {
     SUPPORTED: "#3fb950",
     FALSIFIED: "#f85149",
@@ -82,15 +92,15 @@ input#q{background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:
 <tr><th>Tested</th><td>${escapeHtml(v.scope.tested).slice(0, 500)}</td></tr>
 <tr><th>Not tested</th><td>${escapeHtml(v.scope.not_tested)}</td></tr>
 <tr><th>Dataset</th><td class="mono">${escapeHtml(v.scope.dataset)} (${escapeHtml(v.scope.dataset_digest.slice(0, 20))}…)</td></tr>
-<tr><th>Samples</th><td>N=${v.scope.sample_size}, repetitions=${v.scope.repetitions}</td></tr>
+<tr><th>Samples</th><td>N=${num(v.scope.sample_size)}, repetitions=${num(v.scope.repetitions)}</td></tr>
 <tr><th>Metrics</th><td class="mono">${escapeHtml(v.scope.metrics.join(", "))}</td></tr>
 </table></div>
 ${result.arms.map(renderArm).join("\n")}
 ${result.comparisons.length > 0 ? `<div class="card"><h2>Comparisons (paired, descriptive)</h2><table><tr><th>Metric</th><th>Baseline</th><th>Treatment</th><th>Δ</th><th>95% CI of Δ</th></tr>${result.comparisons.map((c) => `<tr><td class="mono">${escapeHtml(c.metric)}</td><td>${fmt(c.baseline_mean)}</td><td>${fmt(c.treatment_mean)}</td><td>${fmt(c.delta)}</td><td class="mono">[${fmt(c.ci95_delta.low)}, ${fmt(c.ci95_delta.high)}]</td></tr>`).join("")}</table></div>` : ""}
 ${result.findings.length > 0 ? `<div class="card"><h2>Findings (${result.findings.length})</h2>${result.findings.map((f) => `<p><span class="chip sev-${escapeHtml(f.severity)}">${escapeHtml(f.severity)}</span> <strong>${escapeHtml(f.category)}</strong> — ${escapeHtml(f.summary)}${f.possible_cause ? `<br><span class="mono">possible cause: ${escapeHtml(f.possible_cause)}</span>` : ""}</p>`).join("")}</div>` : ""}
-${v.hypothesis_results?.length ? `<div class="card"><h2>Hypotheses</h2><table>${v.hypothesis_results.map((h) => `<tr><td>${h.satisfied === true ? "✓" : h.satisfied === false ? "✗" : "?"}</td><td class="mono">${escapeHtml(h.metric)} ${escapeHtml(h.operator)} ${h.threshold}</td><td>observed ${h.observed === null ? "n/a" : fmt(h.observed)}</td></tr>`).join("")}</table></div>` : ""}
+${v.hypothesis_results?.length ? `<div class="card"><h2>Hypotheses</h2><table>${v.hypothesis_results.map((h) => `<tr><td>${h.satisfied === true ? "✓" : h.satisfied === false ? "✗" : "?"}</td><td class="mono">${escapeHtml(h.metric)} ${escapeHtml(h.operator)} ${num(h.threshold)}</td><td>observed ${h.observed === null ? "n/a" : fmt(h.observed)}</td></tr>`).join("")}</table></div>` : ""}
 <div class="card"><h2>Trials (${rows.length})</h2>
-<input id="q" type="search" placeholder="filter by task, trial, or output…" oninput="filter Trials(this.value)">
+<input id="q" type="search" placeholder="filter by task, trial, or output…" oninput="filterTrials(this.value)">
 <div id="trials">${rows.map(renderTrial).join("")}</div></div>
 <script>
 function filterTrials(q){q=q.toLowerCase();for(const d of document.querySelectorAll("details.trial")){d.style.display=d.textContent.toLowerCase().includes(q)?"":"none"}}
@@ -102,10 +112,13 @@ function renderArm(arm) {
     const rows = arm.metrics.map((m) => {
         const stat = arm.statistics.find((s) => s?.metric === m.metric);
         const bar = stat ? ciBar(stat.ci95.low, stat.ci95.high, stat.mean) : "";
-        const interval = stat ? `[${fmt(stat.ci95.low)}–${fmt(stat.ci95.high)}, n=${stat.n}]` : `[n=${m.n}, no interval]`;
+        const interval = stat ? `[${fmt(stat.ci95.low)}–${fmt(stat.ci95.high)}, n=${num(stat.n)}]` : `[n=${num(m.n)}, no interval]`;
         return `<tr><td class="mono">${escapeHtml(m.metric)}</td><td>${fmt(m.value)}${m.unit ? ` ${escapeHtml(m.unit)}` : ""}</td><td class="mono">${interval}</td><td>${bar}</td></tr>`;
     }).join("");
-    return `<div class="card"><h2>Arm: ${escapeHtml(arm.arm)} — ${arm.trials.length} trials</h2><table><tr><th>Metric</th><th>Value</th><th>Interval</th><th></th></tr>${rows}</table></div>`;
+    const agreement = arm.evaluator_agreement
+        ? `<tr><td class="mono">inter-rater κ</td><td>${arm.evaluator_agreement.cohen_kappa === null ? "n/a" : arm.evaluator_agreement.cohen_kappa.toFixed(4)}</td><td class="mono">n=${num(arm.evaluator_agreement.n)}${arm.evaluator_agreement.interpretation ? `, ${escapeHtml(arm.evaluator_agreement.interpretation)}` : ""}</td><td></td></tr>`
+        : "";
+    return `<div class="card"><h2>Arm: ${escapeHtml(arm.arm)} — ${arm.trials.length} trials</h2><table><tr><th>Metric</th><th>Value</th><th>Interval</th><th></th></tr>${rows}${agreement}</table></div>`;
 }
 function ciBar(low, high, mean) {
     const lo = Math.max(0, Math.min(1, low));
@@ -117,7 +130,7 @@ function renderTrial(t) {
     const chip = t.passed === true
         ? `<span class="chip pass">pass</span>`
         : t.passed === false ? `<span class="chip fail">fail</span>` : `<span class="chip null">unjudged</span>`;
-    return `<details class="trial"><summary>${chip} <span class="mono">${escapeHtml(t.task_id)} · ${escapeHtml(t.trial_id)} · rep ${t.repetition} · ${t.duration_ms}ms${t.score !== null ? ` · score ${fmt(Number(t.score))}` : ""}</span><br>${escapeHtml(t.output.slice(0, 160))}</summary><pre>${escapeHtml(t.output)}</pre></details>`;
+    return `<details class="trial"><summary>${chip} <span class="mono">${escapeHtml(t.task_id)} · ${escapeHtml(t.trial_id)} · rep ${num(t.repetition)} · ${num(t.duration_ms)}ms${t.score !== null ? ` · score ${fmt(Number(t.score))}` : ""}</span><br>${escapeHtml(t.output.slice(0, 160))}</summary><pre>${escapeHtml(t.output)}</pre></details>`;
 }
 function excerpt(v) {
     const s = typeof v === "string" ? v : JSON.stringify(v) ?? String(v);
@@ -129,18 +142,31 @@ function fmt(v) {
 /**
  * Regenerate the report from a bundle directory (verdict + metrics +
  * findings + statistics + results.jsonl). Used by `genesis report --html`.
+ *
+ * Arms are reconstructed from statistics.json plus the bundle's documented
+ * directory layout: `treatment/`, `baseline/`, and `ablations/<sanitized>/`
+ * (ablation + sanity arms). Every results.jsonl row is read — no silent
+ * truncation: the rendered trial count always matches the authoritative
+ * bundle, with the total shown in the Trials heading.
  */
 export function renderHtmlFromBundle(dir) {
     const read = (rel) => JSON.parse(readFileSync(join(dir, rel), "utf8"));
     const verdict = read("verdict.json");
     const findings = read("findings.json");
     const statistics = read("statistics.json");
-    const arms = [];
-    for (const armDir of ["treatment", "baseline"]) {
+    // Map arm name -> bundle directory (mirrors writeEvidenceBundle layout).
+    const armDirFor = (arm) => {
+        if (arm === "treatment")
+            return "treatment";
+        if (arm === "baseline")
+            return "baseline";
+        return join("ablations", arm.replace(/^(ablation|sanity):/, "").replace(/[^A-Za-z0-9._-]+/g, "_"));
+    };
+    const readArm = (arm, armDir) => {
         const metricsPath = join(dir, armDir, "metrics.json");
         const resultsPath = join(dir, armDir, "results.jsonl");
         if (!existsSync(metricsPath) || !existsSync(resultsPath))
-            continue;
+            return null;
         const metrics = JSON.parse(readFileSync(metricsPath, "utf8"));
         const trials = [];
         const observations = [];
@@ -148,8 +174,6 @@ export function renderHtmlFromBundle(dir) {
             const t = line.trim();
             if (!t)
                 continue;
-            if (trials.length >= 500)
-                break;
             try {
                 const row = JSON.parse(t);
                 trials.push(row.trial);
@@ -160,19 +184,40 @@ export function renderHtmlFromBundle(dir) {
                 // Skip corrupt lines; the JSONL remains authoritative.
             }
         }
-        const stats = statistics.arms.find((a) => a.arm === armDir)?.statistics ?? [];
-        arms.push({ arm: armDir, trials, observations, evidence: [], metrics, statistics: stats });
+        const stats = statistics.arms.find((a) => a.arm === arm)?.statistics ?? [];
+        const agreement = statistics.arms.find((a) => a.arm === arm)?.evaluator_agreement;
+        return {
+            arm, trials, observations, evidence: [], metrics, statistics: stats,
+            ...(agreement ? { evaluator_agreement: agreement } : {}),
+        };
+    };
+    const arms = [];
+    for (const a of statistics.arms) {
+        const arm = readArm(a.arm, armDirFor(a.arm));
+        if (arm)
+            arms.push(arm);
     }
+    // Backfill any arm directory not listed in statistics.json (forward-compat).
+    const seen = new Set(arms.map((a) => armDirFor(a.arm)));
+    const candidates = [];
     for (const entry of readdirSync(dir)) {
-        if (entry !== "treatment" && entry !== "baseline" && existsSync(join(dir, entry, "metrics.json"))) {
-            try {
-                const metrics = JSON.parse(readFileSync(join(dir, entry, "metrics.json"), "utf8"));
-                arms.push({ arm: entry, trials: [], observations: [], evidence: [], metrics, statistics: [] });
-            }
-            catch {
-                // Skip unreadable arms.
-            }
+        if (entry === "treatment" || entry === "baseline")
+            continue;
+        if (entry !== "ablations" && existsSync(join(dir, entry, "metrics.json"))) {
+            candidates.push({ arm: entry, dir: entry });
         }
+    }
+    if (existsSync(join(dir, "ablations"))) {
+        for (const entry of readdirSync(join(dir, "ablations"))) {
+            candidates.push({ arm: entry, dir: join("ablations", entry) });
+        }
+    }
+    for (const c of candidates) {
+        if (seen.has(c.dir))
+            continue;
+        const arm = readArm(c.arm, c.dir);
+        if (arm)
+            arms.push(arm);
     }
     return renderHtmlReport({
         name: `${verdict.scope.dataset} report`,
