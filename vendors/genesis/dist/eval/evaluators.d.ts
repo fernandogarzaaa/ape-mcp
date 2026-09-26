@@ -35,7 +35,7 @@ export declare class ExactEvaluator implements Evaluator {
     describe(): Record<string, unknown>;
     evaluate(task: EvalTask, output: unknown): Promise<Omit<Observation, "trial_id" | "task_id">>;
 }
-/** Regex over stringified output. */
+/** Regex over stringified output; `invert` passes when the pattern is ABSENT (e.g. injected markers). */
 export declare class RegexEvaluator implements Evaluator {
     #private;
     readonly name = "regex";
@@ -91,6 +91,16 @@ export declare class HumanEvaluator implements Evaluator {
     readonly kind: EvaluatorKind;
     constructor(spec: EvaluatorSpec);
     describe(): Record<string, unknown>;
+    /**
+     * Inter-rater agreement (Cohen's κ) between primary and secondary
+     * judgments over overlapping tasks, or null when no second rater exists.
+     * Precomputed once — no per-call file I/O.
+     */
+    agreement(): {
+        cohen_kappa: number | null;
+        n: number;
+        interpretation: string | null;
+    } | null;
     evaluate(task: EvalTask, _output: unknown): Promise<Omit<Observation, "trial_id" | "task_id">>;
 }
 /** Combine sub-evaluators: all must pass (all) or any (any); scores averaged. */

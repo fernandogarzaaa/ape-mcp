@@ -92,8 +92,10 @@ export function forecastExperience(sessions) {
             struggles.push({
                 location: stats.location,
                 struggleProbability: Number(probability.toFixed(2)),
+                struggleIndex: Number(probability.toFixed(2)),
                 signals,
                 affectedPersonas: [...stats.personas],
+                provenance: "heuristic",
             });
         }
         if (stats.confidenceDropCount > 0) {
@@ -117,6 +119,7 @@ export function forecastExperience(sessions) {
                 workflow: kind,
                 abandonmentRisk: Number(risk.toFixed(2)),
                 reason: entry.reason || "friction accumulated in this workflow",
+                provenance: "derived",
             });
         }
     }
@@ -142,7 +145,8 @@ function recommendChanges(struggles, drains, sessions) {
                 .map((s) => s.location)
                 .join(", ")}`,
             estimatedLift: Math.min(0.3, deadClickScreens.length * 0.08),
-            rationale: "Dead clicks (no visible response) are the strongest single predictor of confidence loss and re-clicking here.",
+            rationale: "Dead clicks (no visible response) are the strongest single predictor of confidence loss and re-clicking here. Lift is a heuristic scenario index, not a causal estimate.",
+            provenance: "heuristic",
         });
     }
     const errorScreens = struggles.filter((s) => s.signals.some((g) => g.includes("error")));
@@ -153,7 +157,8 @@ function recommendChanges(struggles, drains, sessions) {
                 .map((s) => s.location)
                 .join(", ")}`,
             estimatedLift: Math.min(0.35, errorScreens.length * 0.1),
-            rationale: "Perceived errors both block completion and durably damage trust across personas.",
+            rationale: "Perceived errors both block completion and durably damage trust across personas. Lift is a heuristic scenario index, not a causal estimate.",
+            provenance: "heuristic",
         });
     }
     if (drains.length > 0) {
@@ -163,7 +168,8 @@ function recommendChanges(struggles, drains, sessions) {
                 .map((d) => d.location)
                 .join(", ")}`,
             estimatedLift: 0.12,
-            rationale: "These screens drain confidence even without hard errors — usually an information-scent or hierarchy problem.",
+            rationale: "These screens drain confidence even without hard errors — usually an information-scent or hierarchy problem. Lift is a heuristic scenario index, not a causal estimate.",
+            provenance: "heuristic",
         });
     }
     const criticalCount = allFindings.filter((f) => f.severity === "critical").length;
@@ -171,7 +177,8 @@ function recommendChanges(struggles, drains, sessions) {
         out.push({
             change: `Resolve the ${criticalCount} critical finding(s) surfaced during simulation`,
             estimatedLift: 0.2,
-            rationale: "Critical findings correspond to abandonment or hard blockers in the observed runs.",
+            rationale: "Critical findings correspond to abandonment or hard blockers in the observed runs. Lift is a heuristic scenario index, not a causal estimate.",
+            provenance: "heuristic",
         });
     }
     return out.sort((a, b) => b.estimatedLift - a.estimatedLift);
@@ -184,10 +191,10 @@ function buildSummary(struggles, abandonment, sessionCount) {
     const topAbandon = abandonment[0];
     const parts = [`Based on ${sessionCount} simulated session(s):`];
     if (topStruggle) {
-        parts.push(`future users are most likely to struggle at "${topStruggle.location}" (${Math.round(topStruggle.struggleProbability * 100)}% risk).`);
+        parts.push(`simulated operators showed the highest heuristic struggle-index at "${topStruggle.location}" (index ${topStruggle.struggleIndex.toFixed(2)} — a scenario score, not a probability).`);
     }
     if (topAbandon && topAbandon.abandonmentRisk > 0) {
-        parts.push(`The "${topAbandon.workflow}" workflow carries the highest abandonment risk (${Math.round(topAbandon.abandonmentRisk * 100)}%).`);
+        parts.push(`The "${topAbandon.workflow}" workflow carries the highest observed abandonment share (${Math.round(topAbandon.abandonmentRisk * 100)}% of simulated sessions).`);
     }
     return parts.join(" ");
 }

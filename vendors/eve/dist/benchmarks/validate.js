@@ -51,8 +51,8 @@ export async function validateBenchmarks(options = {}) {
         averageVsBad: average.meanScore - bad.meanScore,
     };
     const summary = ordered
-        ? `EVE correctly ranked the benchmarks: excellent ${excellent.meanScore} > average ${average.meanScore} > bad ${bad.meanScore}. The instrument discriminates UX quality.`
-        : `Benchmark ordering FAILED: excellent ${excellent.meanScore}, average ${average.meanScore}, bad ${bad.meanScore}. EVE is not discriminating quality as expected.`;
+        ? `EVE preserved expected discrimination on reference fixtures (internal regression): excellent ${excellent.meanScore} > average ${average.meanScore} > bad ${bad.meanScore}. This is NOT human validation.`
+        : `Benchmark regression FAILED: excellent ${excellent.meanScore}, average ${average.meanScore}, bad ${bad.meanScore}. EVE is not discriminating the reference fixtures as expected.`;
     return { results, ordered, separations, summary };
 }
 //# sourceMappingURL=validate.js.map
