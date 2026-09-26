@@ -1,4 +1,4 @@
-﻿name: persona-validate
+name: persona-validate
 description: Runs EVE persona-driven experience validation with evidence, seeded for reproducibility.
 model:
   provider: auto

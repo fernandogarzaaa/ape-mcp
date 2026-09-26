@@ -1,4 +1,4 @@
-﻿// The reasoning loop â€” the Tool Orchestrator pattern with a real model in the loop.
+// The reasoning loop â€” the Tool Orchestrator pattern with a real model in the loop.
 // The host sees one tool call (ape_agent_run); everything below is APE's implementation.
 // Tool results are untrusted data: they are framed as such before re-entering the model.
 import { makeBudget } from "./budget.js";

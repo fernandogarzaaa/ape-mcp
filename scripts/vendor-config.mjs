@@ -1,4 +1,4 @@
-﻿// Shared vendor copy rules â€” single source of truth for local vendor.mjs and CI sync-vendors.mjs.
+// Shared vendor copy rules â€” single source of truth for local vendor.mjs and CI sync-vendors.mjs.
 // keep[] entries are copied verbatim; excluded dir names are never descended into.
 export const VENDOR_JOBS = [
   { name: "genesis", repo: "https://github.com/fernandogarzaaa/genesis",

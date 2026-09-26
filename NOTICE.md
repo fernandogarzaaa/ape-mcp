@@ -1,4 +1,4 @@
-﻿# NOTICE — APE license split (combined distribution)
+# NOTICE — APE license split (combined distribution)
 
 - APE code (`bin/`, `src/`, `console/`, `skills/`, `mods/`, `schemas/`): **MIT**.
 - `vendors/genesis` (MIT), `vendors/eve` (MIT), `vendors/adam` (MIT), `vendors/skein` (MIT): see each `LICENSE`.

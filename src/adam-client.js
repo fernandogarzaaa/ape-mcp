@@ -1,4 +1,4 @@
-﻿// Persistent ADAM client: ONE child process holds the vendored adam-mcp binary's
+// Persistent ADAM client: ONE child process holds the vendored adam-mcp binary's
 // JSON-RPC session open; concurrent calls multiplex over it with request-id →
 // promise mapping, and the child auto-reconnects on exit/error.
 // Fallback contract unchanged: {_adam: "unavailable"|"timeout"|"spawn-error"|...} —

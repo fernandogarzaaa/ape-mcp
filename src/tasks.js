@@ -1,4 +1,4 @@
-﻿// Background tasks (MCP Tasks-extension shape) — SQLite-backed for durability
+// Background tasks (MCP Tasks-extension shape) — SQLite-backed for durability
 // across processes. Every mutation touches only its own row (UPSERT/UPDATE by
 // primary key): concurrent writers cannot lose each other's tasks, and commits
 // are atomic (no torn tasks.json). Same function surface as the old file

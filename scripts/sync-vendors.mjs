@@ -1,4 +1,4 @@
-﻿// Re-vendor changed sources at pinned SHAs (used by CI auto-update; also runnable locally).
+// Re-vendor changed sources at pinned SHAs (used by CI auto-update; also runnable locally).
 // Usage: node scripts/sync-vendors.mjs --src-<name> <dir> --sha-<name> <sha> [--only a,b]
 //    or: node scripts/sync-vendors.mjs --check   (prints current pins)
 import { cpSync, existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync } from "node:fs";

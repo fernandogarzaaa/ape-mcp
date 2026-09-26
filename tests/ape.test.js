@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert";
 // Test workers are $0 mock forks sharing one ledger DB across parallel test
 // processes; raise the production concurrency guard so scheduling luck can't

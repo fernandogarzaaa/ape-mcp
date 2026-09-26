@@ -1,4 +1,4 @@
-﻿// Auth seam (OAuth 2.1 resource-server shape, local-only v1).
+// Auth seam (OAuth 2.1 resource-server shape, local-only v1).
 // Default: open (localhost console). Opt-in: APE_REQUIRE_AUTH=1 + APE_TOKENS=csv.
 // When enforced and no external IdP is configured, 401 points at the RFC9728
 // well-known document; a future IdP plugs in via APE_AUTH_SERVERS (JSON array).
