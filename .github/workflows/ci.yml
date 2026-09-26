@@ -1,4 +1,4 @@
-﻿name: ci
+name: ci
 on: [push, pull_request]
 concurrency:
   group: ci-${{ github.ref }}
@@ -23,6 +23,7 @@ jobs:
       - run: npm --prefix vendors/genesis install --ignore-scripts --no-audit --no-fund
       - run: npm --prefix vendors/eve install --ignore-scripts --no-audit --no-fund
       - run: node scripts/check-licenses.mjs
+      - run: node scripts/check-no-bom.mjs
       - run: node bin/ape-mcp.js doctor
       - run: node scripts/smoke.mjs
       - run: npm test

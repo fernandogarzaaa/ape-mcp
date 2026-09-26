@@ -1,4 +1,4 @@
-﻿# APE
+# APE
 
 **APE is an assistant that does multi-step jobs for you** — research, triage, validation — with budgets, receipts, and guardrails built in. Technically, it's an agent that lives inside the Model Context Protocol: instead of a host model chaining thin tools one call at a time, you invoke one tool (`ape_agent_run`) and an entire reasoning loop runs inside the server.
 

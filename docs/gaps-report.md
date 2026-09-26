@@ -1,4 +1,4 @@
-﻿# APE live-run gaps & improvements (2026-09-17)
+# APE live-run gaps & improvements (2026-09-17)
 
 Ran APE live as a plugin + MCP (stdio + HTTP) and drove all tools through the
 exact same path a plugin client uses (`scripts/live-audit.ps1`, now 17/17 green

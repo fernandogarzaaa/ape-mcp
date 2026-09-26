@@ -1,4 +1,4 @@
-﻿# ape.config.example.yaml — copy to ape.config.yaml and edit. Local-only auth v1.
+# ape.config.example.yaml — copy to ape.config.yaml and edit. Local-only auth v1.
 console: { host: "127.0.0.1", port: 0, openBrowser: true }
 dataDir: .ape
 mods: ["./mods/policy-gates"]

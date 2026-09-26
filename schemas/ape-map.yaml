@@ -1,4 +1,4 @@
-﻿# APE tool/resource/prompt map â€” every engine reachable, nothing headless
+# APE tool/resource/prompt map â€” every engine reachable, nothing headless
 # MCP 2026-07-28: stateless protocol, state in handles. All tools idempotent.
 
 tools:

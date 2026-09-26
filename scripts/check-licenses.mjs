@@ -1,4 +1,4 @@
-﻿// License gate: no AGPL-3.0 content anywhere in vendors/ is a hard failure — APE
+// License gate: no AGPL-3.0 content anywhere in vendors/ is a hard failure — APE
 // deliberately ships no AGPL component. Per-engine licenses are declared in
 // vendors/manifest.yaml and NOTICE.md (skein has no LICENSE file upstream).
 // Usage: node scripts/check-licenses.mjs

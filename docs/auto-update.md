@@ -1,4 +1,4 @@
-﻿# Auto-update setup
+# Auto-update setup
 
 APE re-vendors the 5 source repos automatically. Two triggers feed
 `.github/workflows/auto-update.yml` (cron 6h backstop + instant dispatch + manual):

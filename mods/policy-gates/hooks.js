@@ -1,4 +1,4 @@
-﻿// policy-gates hooks: confirm destructive ops; pure functions, throw-safe (loader catches).
+// policy-gates hooks: confirm destructive ops; pure functions, throw-safe (loader catches).
 export const preCall = async (name, args) => {
   if (name === "ape_evolve" && (args.action === "accept" || args.action === "apply") && args.confirm !== true) {
     // Return unchanged; server.js emits input_required elicitation. Mod only annotates.

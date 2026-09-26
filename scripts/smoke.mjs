@@ -1,4 +1,4 @@
-﻿import { dispatchCall, toolsList, discover } from "../src/server.js";
+import { dispatchCall, toolsList, discover } from "../src/server.js";
 const t = toolsList();
 if (!t.tools.find((x) => x.name === "ape_status")) throw new Error("missing ape_status");
 const d = discover();
