@@ -30,68 +30,16 @@ function openBrowser(url) {
 
 if (args.includes("--http")) {
   const port = Number(process.env.APE_PORT || args[args.indexOf("--http") + 1] || 8787);
-  const server = createServer(async (req, res) => {
-    const host = req.headers.host || `127.0.0.1:${port}`;
-    if (req.method === "GET" && req.url === "/.well-known/oauth-protected-resource") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(protectedResourceDoc(host)));
-    }
-    if (req.method === "GET" && req.url === "/.well-known/agent.json") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(agentCard(`http://${host}`)));
-    }
-    if (req.method === "POST" && req.url === "/a2a") {
-      if (!checkBearer(req).ok) return unauthorized(res, host);
-      let body = "";
-      for await (const c of req) body += c;
-      try {
-        const { id, method, params } = JSON.parse(body || "{}");
-        try {
-          const result = await handleA2A(method, params ?? {});
-          res.writeHead(200, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
-        } catch (e) {
-          const code = typeof e?.code === "number" ? e.code : -32603;
-          res.writeHead(200, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message: String(e?.message ?? e).slice(0, 300) } }));
-        }
-      } catch (e) { res.writeHead(400); return res.end(JSON.stringify({ error: String(e).slice(0, 200) })); }
-    }
-    if (req.method === "GET" && req.url === "/discover") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(discover()));
-    }
-    if (req.method === "GET" && req.url === "/tools") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(toolsList()));
-    }
-    if (req.method === "POST" && (req.url === "/call" || req.url === "/tasks/get" || req.url === "/agent")) {
-      if (!checkBearer(req).ok) return unauthorized(res, host);
-      let body = "";
-      for await (const c of req) body += c;
-      try {
-        if (req.url === "/agent") {
-          const { method, params } = JSON.parse(body || "{}");
-          res.writeHead(200, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ resultType: "complete", result: await agentMethod(method, params ?? {}) }));
-        }
-        if (req.url === "/tasks/get") {
-          const { task_id } = JSON.parse(body || "{}");
-          res.writeHead(200, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ resultType: "complete", task: taskGet(task_id) }));
-        }
-        const { name, arguments: a } = JSON.parse(body || "{}");
-        if ((req.headers["mcp-method"] && req.headers["mcp-method"] !== "tools/call")) {
-          res.writeHead(400); return res.end(JSON.stringify({ error: { code: -32020, message: "HeaderMismatch" } }));
-        }
-        const out = await dispatchCall(name, a ?? {});
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify(out));
-      } catch (e) { res.writeHead(400); return res.end(JSON.stringify({ error: String(e).slice(0, 200) })); }
-    }
-    res.writeHead(404); res.end("{}");
-  });
-  server.listen(port, "127.0.0.1", () => console.log(`ape-mcp http on http://127.0.0.1:${port}`));
+  const host = process.env.APE_HOST || "127.0.0.1";
+  const { startHttp, resolveBindConfig } = await import("../src/http.js");
+  const bind = resolveBindConfig({ host });
+  if (!bind.ok) {
+    console.error(`refusing to serve: ${bind.error}${bind.hint ? ` (${bind.hint})` : ""}`);
+    process.exit(1);
+  }
+  if (bind.warning) console.error(`WARNING: ${bind.warning}`);
+  const started = await startHttp({ port, host: bind.host });
+  console.log(`ape-mcp http on http://${started.host}:${started.port}`);
 } else if (cmd === "console" || (!cmd && process.stdin.isTTY)) {
   const { port } = await startConsole({ port: 0 });
   const url = `http://127.0.0.1:${port}/`;

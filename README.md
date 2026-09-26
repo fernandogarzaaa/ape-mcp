@@ -66,7 +66,7 @@ APE  -> agent runtime ->  Genesis, EVE, ADAM, Skein
       .ape/  runs.db, memory, ledger, trace
 ```
 
-Point your MCP host at `bin/ape-mcp.js` (stdio) or `ape-mcp --http 8787`. Manifests ship in-repo (`.claude-plugin/`, `.opencode/plugin.json`, `mcpServers.json`, `.codex/skills/ape/`).
+Point your MCP host at `bin/ape-mcp.js` (stdio) or `ape-mcp --http 8787`. Manifests ship in-repo (`.claude-plugin/`, `.opencode/plugin.json`, `mcpServers.json`, `.codex/skills/ape/`). For a remotely reachable server (`https://your-domain.com/mcp`, bearer auth, Caddy TLS), see [Remote MCP endpoint](docs/remote.md).
 
 **Use:**
 

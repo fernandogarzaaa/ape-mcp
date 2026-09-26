@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert";
+// SSRF safety net blocks loopback by default: existing tests use local
+// servers, so they opt into private egress explicitly. SSRF tests below clear
+// this flag to prove blocking.
+process.env.APE_ALLOW_PRIVATE_EGRESS = "1";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -229,4 +233,62 @@ test("connector: same-host port change is cross-origin without opt-in", async ()
     const r = await runConnectorOperation(c, c.operations[0], {}, {});
     assert.equal(r.error, "cross_origin_redirect", "port change is a different origin, got: " + JSON.stringify(r).slice(0, 120));
   } finally { a.close(); b.close(); }
+});
+
+test("connector: SSRF net blocks loopback/link-local/private spellings", async () => {
+  const prev = process.env.APE_ALLOW_PRIVATE_EGRESS;
+  delete process.env.APE_ALLOW_PRIVATE_EGRESS;
+  try {
+    const { ssrfCheck, ipBlocked } = await import("../src/connectors.js");
+    assert.ok(ipBlocked("127.0.0.1"), "loopback");
+    assert.ok(ipBlocked("10.1.2.3") && ipBlocked("172.16.0.1") && ipBlocked("192.168.1.1"), "rfc1918");
+    assert.ok(ipBlocked("169.254.169.254"), "link-local (cloud metadata)");
+    assert.ok(ipBlocked("0.0.0.0") && ipBlocked("::1") && ipBlocked("::"), "unspecified/loopback v6");
+    assert.ok(ipBlocked("fe80::1") && ipBlocked("fc00::1") && ipBlocked("ff02::1"), "v6 scoped/multicast");
+    assert.ok(!ipBlocked("8.8.8.8") && !ipBlocked("1.1.1.1"), "public passes");
+    assert.ok(await ssrfCheck("localhost"), "localhost name blocked");
+    assert.ok(await ssrfCheck("127.0.0.1"), "literal blocked");
+    assert.ok(await ssrfCheck("2130706433"), "decimal-IP trick blocked");
+    assert.ok(await ssrfCheck("0x7f.0.0.1"), "hex-quad trick blocked");
+    assert.ok(await ssrfCheck("0177.0.0.1"), "octal-quad trick blocked");
+    assert.ok(!(await ssrfCheck("example.com")), "public name passes (or unresolvable, fetch decides)");
+  } finally {
+    if (prev === undefined) delete process.env.APE_ALLOW_PRIVATE_EGRESS;
+    else process.env.APE_ALLOW_PRIVATE_EGRESS = prev;
+  }
+});
+
+test("connector: metadata endpoint refused before any request (§23)", async () => {
+  const prev = process.env.APE_ALLOW_PRIVATE_EGRESS;
+  delete process.env.APE_ALLOW_PRIVATE_EGRESS;
+  try {
+    const c = { name: "m", base_url: "http://169.254.169.254", egress_allow: ["169.254.169.254"], operations: [{ name: "get", method: "GET", path: "/latest/meta-data/" }] };
+    const r = await runConnectorOperation(c, c.operations[0], {}, {});
+    assert.equal(r.error, "ssrf_denied", "metadata never fetched");
+    assert.ok(r.reason.includes("169.254"), "reason names the block");
+  } finally {
+    if (prev === undefined) delete process.env.APE_ALLOW_PRIVATE_EGRESS;
+    else process.env.APE_ALLOW_PRIVATE_EGRESS = prev;
+  }
+});
+
+test("connector: blocked destinations send zero requests (redirect never followed)", async () => {
+  const prev = process.env.APE_ALLOW_PRIVATE_EGRESS;
+  delete process.env.APE_ALLOW_PRIVATE_EGRESS;
+  let hits = 0;
+  const launcher = await serve((req, res) => {
+    hits++;
+    res.writeHead(302, { location: `http://127.0.0.1:9/x` });
+    res.end();
+  });
+  try {
+    const c = { name: "m", base_url: `http://127.0.0.1:${launcher.port}`, egress_allow: ["127.0.0.1"], operations: [{ name: "go", method: "GET", path: "/s" }] };
+    const r = await runConnectorOperation(c, c.operations[0], {}, {});
+    assert.equal(r.error, "ssrf_denied");
+    assert.equal(hits, 0, "blocked before the first byte leaves");
+  } finally {
+    launcher.close();
+    if (prev === undefined) delete process.env.APE_ALLOW_PRIVATE_EGRESS;
+    else process.env.APE_ALLOW_PRIVATE_EGRESS = prev;
+  }
 });

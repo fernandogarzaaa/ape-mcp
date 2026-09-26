@@ -1,5 +1,10 @@
 import test from "node:test";
 import assert from "node:assert";
+// Suites share one ledger DB across parallel processes and mock spend
+// accumulates: lift both production guards for tests (unit tests cover them
+// with explicit params on isolated DBs).
+process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
+process.env.APE_MAX_DAILY_USD ??= "1000000";
 import { agentCard, handleA2A, toTask } from "../src/agent/a2a.js";
 
 test("a2a: agent card advertises skills from bundled profiles", () => {

@@ -19,13 +19,24 @@ export function protectedResourceDoc(host) {
     ape_mode: authRequired() ? "bearer-enforced" : "local-open",
   };
 }
+import { timingSafeEqual } from "node:crypto";
+
 export function checkBearer(req) {
   if (!authRequired()) return { ok: true };
   const hdr = String(req.headers["authorization"] || "");
   const tok = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
+  if (!tok) return { ok: false };
   const allowed = String(process.env.APE_TOKENS || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (tok && allowed.includes(tok)) return { ok: true };
-  return { ok: false };
+  // Constant-time comparison per candidate (§13): no early exit, no length
+  // oracle — a wrong token must be indistinguishable from a near-miss.
+  const tb = Buffer.from(tok);
+  let match = false;
+  for (const cand of allowed) {
+    const cb = Buffer.from(cand);
+    if (cb.length !== tb.length) continue;
+    if (timingSafeEqual(cb, tb)) match = true;
+  }
+  return match ? { ok: true } : { ok: false };
 }
 export function unauthorized(res, host) {
   res.writeHead(401, {

@@ -290,6 +290,11 @@ export function runningCount() {
   return d.prepare("SELECT COUNT(*) AS n FROM runs WHERE status = 'running'").get().n;
 }
 
+// Highest step row id (stream cursors start at "now" — no replay floods).
+export function maxStepId() {
+  const d = open();
+  return d.prepare("SELECT COALESCE(MAX(id), 0) AS m FROM steps").get().m;
+}
 // Steps newer than a row id, across all runs (powers the SSE push channel).
 export function stepsSince(lastId = 0, limit = 100) {
   const d = open();

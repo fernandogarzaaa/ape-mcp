@@ -65,6 +65,84 @@ function hostAllowed(conn, url) {
   } catch { return false; }
 }
 
+// SSRF safety net (§22/23): never fetch loopback, link-local (incl. cloud
+// metadata 169.254.169.254), RFC1918, multicast, or unspecified addresses —
+// even if a connector allowlists the hostname. Hostname checks alone are
+// insufficient (alternate IP spellings, DNS rebinding), so literals are
+// normalized (decimal/octal/hex quads) and names are DNS-resolved with every
+// answer checked. Residual TOCTOU (rebind between lookup and fetch) is
+// documented; full containment needs an egress proxy. Escape hatch
+// APE_ALLOW_PRIVATE_EGRESS=1 exists for local development and tests.
+import { isIP } from "node:net";
+import { lookup as dnsLookup } from "node:dns/promises";
+
+function v4Blocked(parts) {
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 127) return true;
+  if (a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a >= 224) return true; // multicast + reserved
+  return false;
+}
+function v6Blocked(ip) {
+  const h = ip.toLowerCase();
+  if (h === "::1" || h === "::") return true;
+  if (h.startsWith("fe80:") || h.startsWith("fec0:") || h.startsWith("ff00:") || h.startsWith("ff02:")) return true;
+  if (h.startsWith("fc") || h.startsWith("fd")) return true; // unique-local fc00::/7
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
+  if (m) return v4Blocked(m[1].split(".").map(Number));
+  return false;
+}
+function numPart(s) {
+  if (/^0x[0-9a-f]+$/i.test(s)) return parseInt(s, 16);
+  if (/^0[0-9]+$/.test(s) && s.length > 1) { const n = parseInt(s, 8); return Number.isNaN(n) ? null : n; }
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  return null;
+}
+function normalizeIP(host) {
+  if (isIP(host)) return host;
+  const h = String(host).toLowerCase();
+  // Single-number form (e.g. 2130706433 = 127.0.0.1).
+  if (/^\d+$/.test(h)) {
+    const n = Number(h);
+    if (Number.isSafeInteger(n) && n >= 0 && n <= 0xffffffff) {
+      return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
+    }
+    return null;
+  }
+  // Dotted quads in decimal/octal/hex spellings.
+  const parts = h.split(".");
+  if (parts.length === 4) {
+    const nums = parts.map(numPart);
+    if (nums.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return nums.join(".");
+  }
+  return null;
+}
+export function ipBlocked(ip) {
+  if (isIP(ip) === 4) return v4Blocked(ip.split(".").map(Number));
+  if (isIP(ip) === 6) return v6Blocked(ip);
+  return false;
+}
+export async function ssrfCheck(hostname) {
+  if (process.env.APE_ALLOW_PRIVATE_EGRESS === "1") return null;
+  const h = String(hostname || "").toLowerCase().replace(/\.$/, "");
+  if (!h) return "empty hostname";
+  if (h === "localhost") return "localhost resolves to loopback";
+  const lit = normalizeIP(h);
+  if (lit && ipBlocked(lit)) return `blocked address spelling (${h})`;
+  if (lit || isIP(h)) return null; // public literal
+  let addrs = [];
+  try { addrs = await dnsLookup(h, { all: true }); }
+  catch { return null; } // unresolvable: fetch fails on its own; no invented errors
+  for (const a of addrs) {
+    if (ipBlocked(a.address)) return `resolves to blocked address ${a.address}`;
+  }
+  return null;
+}
+
 function renderQuery(op, input) {
   if (!op.query) return null;
   const params = new URLSearchParams();
@@ -136,6 +214,15 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
     ...(body !== null ? { body: JSON.stringify(body) } : {}),
     signal: ctrl.signal,
   };
+  // SSRF safety net on the initial destination (redirect targets are checked
+  // per hop below, after the allowlist). No request is sent when blocked.
+  try {
+    const blocked = await ssrfCheck(new URL(url).hostname);
+    if (blocked) {
+      clearTimeout(timer);
+      return { error: "ssrf_denied", host: new URL(url).hostname, reason: blocked, url: redactUrl(url) };
+    }
+  } catch { /* unparsable: fetch fails on its own */ }
   try {
     // Egress containment must hold for EVERY actual destination, not just the
     // constructed URL: fetch() follows redirects by default, so a 302 from an
@@ -186,6 +273,15 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
           try { host = new URL(next).hostname; } catch { /* ignore */ }
           return { error: "egress_denied_redirect", host, egress_allow: conn.egress_allow, url: redactUrl(hopUrl), redirect: redactUrl(next) };
         }
+        // SSRF safety net per hop: even an allowlisted redirect target must
+        // not resolve to loopback/link-local/private space.
+        try {
+          const hopBlocked = await ssrfCheck(new URL(next).hostname);
+          if (hopBlocked) {
+            clearTimeout(timer);
+            return { error: "ssrf_denied", host: new URL(next).hostname, reason: hopBlocked, redirect: redactUrl(next), url: redactUrl(hopUrl) };
+          }
+        } catch { /* unparsable: handled as bad redirect downstream */ }
         let same = false;
         let upgrade = false;
         try {

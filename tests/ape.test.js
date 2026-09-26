@@ -4,6 +4,7 @@ import assert from "node:assert";
 // processes; raise the production concurrency guard so scheduling luck can't
 // flake worker-fork tests (the daily spend ceiling still applies).
 process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
+process.env.APE_MAX_DAILY_USD ??= "1000000";
 // W-4: test-only mock-input flag (production servers strip _mockScript).
 process.env.APE_ALLOW_MOCK_INPUT ??= "1";
 import { existsSync, readFileSync } from "node:fs";

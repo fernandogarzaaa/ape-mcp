@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — production endpoint on ape.runs-on.dev + EIP
+
+### Canonical name + static IP
+- Live endpoint is now `https://ape.runs-on.dev/mcp` (free registry A record;
+  own LE cert, verified SAN). Elastic IP freezes the address so DNS never
+  tracks instance lifecycle again. sslip.io site retired after green.
+- Full live battery re-verified on the new name (init/session/list/call/
+  stream/delete/401s/Host-Origin rejection/rate-trip).
+
+### GET /mcp streams (functional)
+- `GET /mcp` is a live event stream (was 405): session+bearer gated before
+  first byte, cursors start at connect (no replay), `ape/runs` transitions
+  and `ape/steps` records as `notifications/message` envelopes, heartbeat
+  comments on `APE_MCP_HEARTBEAT_MS` (default 15s), teardown on disconnect.
+- Fixed along the way: new-after-connect runs that finished before first
+  sighting were swallowed as baseline — now always reported.
+
+### Docs
+- `docs/remote.md` §11 is now a per-host registration matrix (ChatGPT,
+  Claude Code CLI, Cursor/VS Code/Windsurf, OpenCode/Copilot, raw) with a
+  CORS column and origin-discovery note; new stream semantics section.
+
 ## Unreleased — high-level agents, L3: planner→executor over Skein
 
 ### Planner-executor + patterns (L3)

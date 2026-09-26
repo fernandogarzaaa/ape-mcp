@@ -2,9 +2,16 @@ import test from "node:test";
 import assert from "node:assert";
 // See ape.test.js: mock workers share one ledger DB across parallel processes.
 process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
+// Mock spend accumulates in the shared dev ledger across suite runs; lift the
+// daily cap for tests (production default unchanged; admitRun unit tests use
+// explicit params on an isolated DB).
+process.env.APE_MAX_DAILY_USD ??= "1000000";
 // W-4: _mockScript travels through dispatch only with this test-only flag;
 // production servers (flag unset) strip mock controls from caller input.
 process.env.APE_ALLOW_MOCK_INPUT ??= "1";
+// SSRF safety net blocks loopback by default; the flaky-connector recovery
+// test uses a local server, so it opts into private egress explicitly.
+process.env.APE_ALLOW_PRIVATE_EGRESS ??= "1";
 import { loadProfile, listProfiles } from "../src/agent/profiles.js";
 import { resolveChain } from "../src/agent/providers.js";
 import { runAgent } from "../src/agent/loop.js";
