@@ -40,12 +40,32 @@ export function validateSpec(raw, sourceName = "<inline>") {
     if ((!subject || typeof subject !== "object") && !isBenchmark) {
         throw new SpecError(`${sourceName}: spec.subject is required (benchmarks declare it via --subject at run time)`);
     }
+    if (subject && typeof subject === "object")
+        validateSubjectSpec(subject, `${sourceName}: spec.subject`);
+    if (s.baseline !== undefined) {
+        if (!s.baseline || typeof s.baseline !== "object")
+            throw new SpecError(`${sourceName}: spec.baseline must be an object`);
+        validateSubjectSpec(s.baseline, `${sourceName}: spec.baseline`);
+    }
+    if (s.ablations !== undefined) {
+        if (!Array.isArray(s.ablations))
+            throw new SpecError(`${sourceName}: spec.ablations must be an array`);
+        for (const [i, abl] of s.ablations.entries()) {
+            if (!abl || typeof abl !== "object")
+                throw new SpecError(`${sourceName}: spec.ablations[${i}] must be an object`);
+            const a = abl;
+            if (typeof a.name !== "string" || !a.name)
+                throw new SpecError(`${sourceName}: spec.ablations[${i}].name must be a nonempty string`);
+            if (!a.subject || typeof a.subject !== "object")
+                throw new SpecError(`${sourceName}: spec.ablations[${i}].subject is required`);
+            validateSubjectSpec(a.subject, `${sourceName}: spec.ablations[${i}].subject`);
+        }
+    }
+    validateDatasetSpec(dataset, sourceName);
     const evaluator = s.evaluator;
     if (!evaluator || typeof evaluator !== "object")
         throw new SpecError(`${sourceName}: spec.evaluator is required`);
-    if (typeof evaluator.type !== "string") {
-        throw new SpecError(`${sourceName}: spec.evaluator.type is required`);
-    }
+    validateEvaluatorSpec(evaluator, `${sourceName}: spec.evaluator`);
     let claim;
     const claimRaw = s.claim;
     if (claimRaw !== undefined) {
@@ -57,6 +77,44 @@ export function validateSpec(raw, sourceName = "<inline>") {
     const repetitions = s.repetitions;
     if (repetitions !== undefined && (!Number.isInteger(repetitions) || repetitions < 1)) {
         throw new SpecError(`${sourceName}: repetitions must be an integer >= 1`);
+    }
+    if (s.seeds !== undefined) {
+        if (!Array.isArray(s.seeds) || s.seeds.length === 0) {
+            throw new SpecError(`${sourceName}: seeds must be a nonempty array`);
+        }
+        for (const seed of s.seeds) {
+            if (typeof seed !== "number" && typeof seed !== "string") {
+                throw new SpecError(`${sourceName}: seeds must contain only numbers/strings`);
+            }
+        }
+    }
+    if (s.timeout_ms !== undefined && (typeof s.timeout_ms !== "number" || !Number.isFinite(s.timeout_ms) || s.timeout_ms < 0)) {
+        throw new SpecError(`${sourceName}: timeout_ms must be a finite number >= 0`);
+    }
+    if (s.metrics !== undefined) {
+        if (!Array.isArray(s.metrics))
+            throw new SpecError(`${sourceName}: metrics must be an array of strings`);
+        for (const m of s.metrics) {
+            if (typeof m !== "string" || !m)
+                throw new SpecError(`${sourceName}: metrics must be nonempty strings`);
+        }
+    }
+    if (s.thresholds !== undefined) {
+        if (!s.thresholds || typeof s.thresholds !== "object" || Array.isArray(s.thresholds)) {
+            throw new SpecError(`${sourceName}: thresholds must be an object`);
+        }
+        for (const [k, v] of Object.entries(s.thresholds)) {
+            if (typeof v !== "string" || !/^(>=|<=|>|<|==|!=)\s*-?\d+(\.\d+)?$/.test(v.trim())) {
+                throw new SpecError(`${sourceName}: thresholds["${k}"] must look like ">= 0.8"`);
+            }
+        }
+    }
+    if (s.sanity_threshold !== undefined && (typeof s.sanity_threshold !== "number" || !Number.isFinite(s.sanity_threshold))) {
+        throw new SpecError(`${sourceName}: sanity_threshold must be a finite number`);
+    }
+    const maxTurns = s.max_turns;
+    if (maxTurns !== undefined && (!Number.isInteger(maxTurns) || maxTurns < 1)) {
+        throw new SpecError(`${sourceName}: max_turns must be an integer >= 1`);
     }
     return {
         name,
@@ -77,6 +135,7 @@ export function validateSpec(raw, sourceName = "<inline>") {
         evaluator: evaluator,
         ...(Array.isArray(s.metrics) ? { metrics: s.metrics } : {}),
         ...(repetitions !== undefined ? { repetitions: repetitions } : {}),
+        ...(maxTurns !== undefined ? { max_turns: maxTurns } : {}),
         ...(Array.isArray(s.seeds) ? { seeds: s.seeds } : {}),
         ...(typeof s.paired === "boolean" ? { paired: s.paired } : {}),
         ...(typeof s.timeout_ms === "number" ? { timeout_ms: s.timeout_ms } : {}),
@@ -88,6 +147,90 @@ export function validateSpec(raw, sourceName = "<inline>") {
         ...(Array.isArray(s.analysis) ? { analysis: s.analysis } : {}),
         ...(s.output ? { output: s.output } : {}),
     };
+}
+const EVALUATOR_TYPES = new Set([
+    "exact", "regex", "json_schema", "javascript", "command", "llm_command",
+    "human", "oracle", "composite", "pass_through", "classification",
+    "retrieval", "trajectory", "refusal",
+]);
+const DATASET_FORMATS = new Set(["json", "jsonl", "csv", "yaml", "text", "dir", "auto"]);
+function validateSubjectSpec(s, where) {
+    const transports = ["command", "http", "inline"].filter((k) => s[k] !== undefined);
+    if (transports.length === 0)
+        throw new SpecError(`${where}: one of command, http, or inline is required`);
+    if (transports.length > 1)
+        throw new SpecError(`${where}: exactly one subject transport is required (got ${transports.join(", ")})`);
+    if (s.command !== undefined && typeof s.command !== "string")
+        throw new SpecError(`${where}.command must be a string`);
+    if (s.inline !== undefined && typeof s.inline !== "string")
+        throw new SpecError(`${where}.inline must be a string`);
+    if (s.http !== undefined) {
+        if (!s.http || typeof s.http !== "object")
+            throw new SpecError(`${where}.http must be an object`);
+        const h = s.http;
+        if (typeof h.url !== "string" || !h.url)
+            throw new SpecError(`${where}.http.url must be a nonempty string`);
+    }
+    if (s.timeout_ms !== undefined && (typeof s.timeout_ms !== "number" || !Number.isFinite(s.timeout_ms) || s.timeout_ms < 0)) {
+        throw new SpecError(`${where}.timeout_ms must be a finite number >= 0`);
+    }
+}
+function validateDatasetSpec(d, sourceName) {
+    const sources = ["path", "inline", "stdin"].filter((k) => d[k] !== undefined && d[k] !== false);
+    if (sources.length === 0)
+        throw new SpecError(`${sourceName}: dataset needs one of path, inline, or stdin:true`);
+    if (sources.length > 1)
+        throw new SpecError(`${sourceName}: dataset sources are exclusive (got ${sources.join(", ")})`);
+    if (d.format !== undefined && (typeof d.format !== "string" || !DATASET_FORMATS.has(d.format))) {
+        throw new SpecError(`${sourceName}: dataset.format must be one of ${[...DATASET_FORMATS].join(", ")}`);
+    }
+}
+function validateEvaluatorSpec(e, where) {
+    if (typeof e.type !== "string")
+        throw new SpecError(`${where}.type is required`);
+    if (!EVALUATOR_TYPES.has(e.type))
+        throw new SpecError(`${where}.type must be one of ${[...EVALUATOR_TYPES].join(", ")}`);
+    const need = (field) => {
+        if (e[field] === undefined)
+            throw new SpecError(`${where}: evaluator ${e.type} requires "${field}"`);
+    };
+    switch (e.type) {
+        case "regex":
+            need("pattern");
+            break;
+        case "json_schema":
+            need("schema");
+            break;
+        case "javascript":
+            need("script");
+            break;
+        case "command":
+        case "oracle":
+        case "llm_command":
+            need("command");
+            break;
+        case "human":
+            need("judgments");
+            break;
+        case "composite": {
+            if (!Array.isArray(e.evaluators) || e.evaluators.length === 0) {
+                throw new SpecError(`${where}: evaluator composite requires nonempty evaluators[]`);
+            }
+            for (const [i, sub] of e.evaluators.entries()) {
+                if (!sub || typeof sub !== "object")
+                    throw new SpecError(`${where}.evaluators[${i}] must be an object`);
+                validateEvaluatorSpec(sub, `${where}.evaluators[${i}]`);
+            }
+            if (e.mode !== undefined && e.mode !== "all" && e.mode !== "any") {
+                throw new SpecError(`${where}.mode must be "all" or "any"`);
+            }
+            break;
+        }
+        case "trajectory":
+            break;
+        default:
+            break;
+    }
 }
 /**
  * Minimal YAML-subset parser: top-level `key: value` + nested maps/lists by
@@ -120,6 +263,11 @@ function parseYamlSubset(text, sourceName) {
             else
                 blockKey = null;
             if (content.startsWith("- ")) {
+                // Pop to the enclosing list first: sibling map items (e.g. a second
+                // `- type: ...` under `evaluators:`) otherwise strand the stack on
+                // the previous item's map and fail with "list item without parent".
+                while (stack.length > 1 && indent <= (stack[stack.length - 1]?.indent ?? -1))
+                    stack.pop();
                 const parent = stack[stack.length - 1];
                 if (!parent)
                     throw new Error("bad list");

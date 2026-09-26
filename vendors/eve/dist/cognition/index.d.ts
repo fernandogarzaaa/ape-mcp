@@ -1,5 +1,7 @@
 export type { AttentionOptions, AttentionSnapshot, Fixation } from "./attention.js";
 export { allocateAttention, attendedPercept, visualSalience, } from "./attention.js";
+export { GoalGreedyPolicy, RandomPolicy } from "./baselines.js";
+export { heuristicChoiceSet, ineligibleCandidate, utilityChoiceSet } from "./choiceSet.js";
 export type { CognitiveContext, Decision, DecisionPolicy } from "./cognition.js";
 export type { CognitiveLoadBreakdown } from "./cognitiveLoad.js";
 export { DecisionFatigue, estimateCognitiveLoad, } from "./cognitiveLoad.js";
@@ -12,6 +14,6 @@ export { comparePrediction, errorSnippets, inferAppTheory, passiveText, perceive
 export type { SalienceScore } from "./salience.js";
 export { choiceLoad, goalRelevanceOf, prominenceOf, readingLoad, riskOf, scoreAffordances, } from "./salience.js";
 export type { DecisionWeights, UtilityFeatures, UtilityScore } from "./utility.js";
-export { decisionWeights, evaluateUtilities, motorEffort, softmaxChoice, wantsVerification, } from "./utility.js";
+export { decisionWeights, evaluateUtilities, motorEffort, softmaxChoice, softmaxDistribution, wantsVerification, } from "./utility.js";
 export { UtilityCognition } from "./utilityCognition.js";
 //# sourceMappingURL=index.d.ts.map

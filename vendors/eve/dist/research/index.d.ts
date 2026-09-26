@@ -4,6 +4,8 @@
  */
 import type { PopulationStudy } from "../population/population.js";
 export { type DatasetFormat, renderOperatorCsv, renderStudy, renderStudyJson, renderStudyMarkdown, } from "./dataset.js";
+export type { DatasetSplitMethod, ExperimentDatasetSplit, ExperimentEnvironment, ExperimentPopulation, ExperimentSpec, ExperimentVariant, PopulationKind, } from "./manifest.js";
+export { renderExperimentJson, validateExperimentSpec } from "./manifest.js";
 export interface WrittenDataset {
     readonly json: string;
     readonly csv: string;
