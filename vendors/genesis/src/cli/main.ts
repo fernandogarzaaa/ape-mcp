@@ -18,9 +18,25 @@ import { ALL_DESCRIPTORS } from "../assurance/findings.js";
 import { VerifierAdapter, type AcceptRule, type Judge } from "../assurance/verifier.js";
 import type { EvalSpec } from "../eval/spec.js";
 import { SubprocessRunner } from "../evidence/runner.js";
-import { Ledger } from "../ledger/ledger.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
+
+/** Load the Ledger class, or throw a clear error if better-sqlite3 is unavailable. */
+async function loadLedger(): Promise<typeof import("../ledger/ledger.js").Ledger> {
+  try {
+    const { Ledger, isLedgerAvailable } = await import("../ledger/ledger.js");
+    if (!isLedgerAvailable()) {
+      throw new Error("better-sqlite3 is not installed or failed to load");
+    }
+    return Ledger;
+  } catch {
+    throw new Error(
+      "The ledger requires the optional 'better-sqlite3' dependency, which is not installed. " +
+      "Install it with: npm install better-sqlite3 " +
+      "(if the build fails in a restricted container, try: npm install --ignore-scripts better-sqlite3)",
+    );
+  }
+}
 
 const USAGE = `genesis ${VERSION} — universal evaluation & assurance for AI-native software
 
@@ -89,7 +105,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         return await cmdEvaluate(argv.slice(1));
 
       case "report":
-        return cmdReport(argv.slice(1));
+        return await cmdReport(argv.slice(1));
 
       case "compare":
         return await cmdCompare(argv.slice(1));
@@ -209,7 +225,8 @@ async function cmdAudit(argv: readonly string[]): Promise<number> {
 
   // The ledger is optional here. An audit is useful as a one-shot check; it
   // becomes evidence only when someone needs to prove it happened.
-  const ledger = values.ledger ? new Ledger(values.ledger) : undefined;
+  const LedgerClass = values.ledger ? await loadLedger() : undefined;
+  const ledger = LedgerClass ? new LedgerClass(values.ledger) : undefined;
 
   try {
     const record = await runAudit({
@@ -327,8 +344,8 @@ async function cmdEvaluate(argv: readonly string[]): Promise<number> {
     // Ledger is optional; an evaluation is useful as a one-shot check and
     // becomes evidence when recorded.
     if (values.ledger) {
-      const { Ledger } = await import("../ledger/ledger.js");
-      const ledger = new Ledger(values.ledger);
+      const LedgerClass = await loadLedger();
+      const ledger = new LedgerClass(values.ledger);
       try {
         ledger.recordEvaluation(
           hashCanonical({ spec_digest: result.spec_digest, dataset_digest: result.dataset.digest }),
@@ -358,11 +375,20 @@ async function cmdEvaluate(argv: readonly string[]): Promise<number> {
   }
 }
 
-function cmdReport(argv: readonly string[]): number {
-  const [dir] = argv;
+async function cmdReport(argv: readonly string[]): Promise<number> {
+  const [dir, ...rest] = argv;
   if (!dir) {
-    fail("usage: genesis report <results-dir>");
+    fail("usage: genesis report <results-dir> [--html <out.html>]");
     return AUDIT_EXIT.INTERNAL_ERROR;
+  }
+  const htmlIndex = rest.indexOf("--html");
+  if (htmlIndex >= 0) {
+    const out = rest[htmlIndex + 1];
+    if (!out) {
+      fail("usage: genesis report <results-dir> --html <out.html>");
+      return AUDIT_EXIT.INTERNAL_ERROR;
+    }
+    return cmdReportHtml(dir, out);
   }
   try {
     const verdict = JSON.parse(readFileSync(join(dir, "verdict.json"), "utf8")) as {
@@ -533,8 +559,8 @@ async function cmdAuditEvaluator(argv: readonly string[]): Promise<number> {
   try {
     const assurance = await assureEvaluator(spec, { ...(values.suite ? { suite: values.suite } : {}) });
     if (values.ledger) {
-      const { Ledger } = await import("../ledger/ledger.js");
-      const ledger = new Ledger(values.ledger);
+      const LedgerClass = await loadLedger();
+      const ledger = new LedgerClass(values.ledger);
       try {
         ledger.recordEvaluation(
           hashCanonical({ kind: "evaluator-assurance", spec_digest: specPath, dataset_digest: assurance.dataset_digest }),
@@ -589,8 +615,8 @@ async function cmdTrust(argv: readonly string[]): Promise<number> {
     const outDir = values.out ?? `${spec.name}-trust`;
     writeTrustBundle(outDir, spec, result, buildManifest(spec, result), assurance, trust);
     if (values.ledger) {
-      const { Ledger } = await import("../ledger/ledger.js");
-      const ledger = new Ledger(values.ledger);
+      const LedgerClass = await loadLedger();
+      const ledger = new LedgerClass(values.ledger);
       try {
         ledger.recordEvaluation(
           hashCanonical({ kind: "trust", spec_digest: result.spec_digest, dataset_digest: result.dataset.digest }),
@@ -662,7 +688,7 @@ async function cmdRunBenchmark(argv: readonly string[]): Promise<number> {
   const { buildManifest, writeEvidenceBundle } = await import("../eval/bundle.js");
   const { renderReport } = await import("../eval/report.js");
   const { hashCanonical } = await import("../shared/canonical.js");
-  const { Ledger } = values.ledger ? await import("../ledger/ledger.js") : { Ledger: null as never };
+  const LedgerClass = values.ledger ? await loadLedger() : null;
 
   try {
     const loaded = loadBenchmark(name, values.registry);
@@ -676,8 +702,8 @@ async function cmdRunBenchmark(argv: readonly string[]): Promise<number> {
     const result = await runExperiment(spec);
     const outDir = values.out ?? `${name}-results`;
     writeEvidenceBundle(outDir, spec, result, buildManifest(spec, result));
-    if (values.ledger && Ledger) {
-      const ledger = new Ledger(values.ledger);
+    if (values.ledger && LedgerClass) {
+      const ledger = new LedgerClass(values.ledger);
       try {
         ledger.recordBenchmark(
           hashCanonical({ benchmark: name, version: loaded.version, dataset_digest: result.dataset.digest }),
@@ -696,6 +722,19 @@ async function cmdRunBenchmark(argv: readonly string[]): Promise<number> {
     return result.verdict.verdict === "SUPPORTED" ? 0 : result.verdict.verdict === "FALSIFIED" ? 1 : 2;
   } catch (error) {
     fail((error as Error).message);
+    return AUDIT_EXIT.INTERNAL_ERROR;
+  }
+}
+
+async function cmdReportHtml(dir: string, out: string): Promise<number> {
+  try {
+    const { renderHtmlFromBundle } = await import("../eval/report-html.js");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(out, renderHtmlFromBundle(dir), "utf8");
+    process.stdout.write(`HTML report: ${out}\n`);
+    return 0;
+  } catch (error) {
+    fail(`cannot render HTML from ${dir}: ${(error as Error).message}`);
     return AUDIT_EXIT.INTERNAL_ERROR;
   }
 }
@@ -751,8 +790,8 @@ async function cmdGate(argv: readonly string[]): Promise<number> {
     const outDir = values.out ?? `${spec.name}-gate`;
     writeTrustBundle(outDir, spec, result, buildManifest(spec, result), assurance, trust, gate);
     if (values.ledger) {
-      const { Ledger } = await import("../ledger/ledger.js");
-      const ledger = new Ledger(values.ledger);
+      const LedgerClass = await loadLedger();
+      const ledger = new LedgerClass(values.ledger);
       try {
         ledger.recordEvaluation(
           hashCanonical({ kind: "gate", spec_digest: result.spec_digest, dataset_digest: result.dataset.digest }),
@@ -821,6 +860,22 @@ async function cmdVerify(argv: readonly string[]): Promise<number> {
     }
     const verification = verifyBundle(dir, keys);
     process.stdout.write(`bundle: ${verification.bundle_digest}\n`);
+    // Unsigned-tree check (v2 DIGEST covers the full bundle, not just the verdict).
+    try {
+      const { verifyEvidenceBundle } = await import("../eval/bundle.js");
+      const tree = verifyEvidenceBundle(dir);
+      process.stdout.write(`tree digest: ${tree.digest} (${tree.ok ? "match" : "MISMATCH"}; expected ${tree.expected})\n`);
+      if (tree.legacyExpected) {
+        const lm = tree.legacyDigest === tree.legacyExpected ? "match" : "MISMATCH";
+        process.stdout.write(`legacy verdict digest: ${tree.legacyDigest} (${lm})\n`);
+      }
+      if (!tree.ok) {
+        process.stdout.write("VERIFICATION FAILED\n");
+        return 1;
+      }
+    } catch {
+      // Attestation-only bundles (no evaluation tree) skip the tree check.
+    }
     if (verification.checks.length === 0) {
       process.stdout.write("no attestations found — nothing to verify\n");
     }

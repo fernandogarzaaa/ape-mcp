@@ -110,6 +110,12 @@ reg("mean_steps", "mean steps (trial metadata steps)", (i) => {
         .filter((s) => typeof s === "number");
     return steps.length > 0 ? steps.reduce((a, b) => a + b, 0) / steps.length : null;
 });
+reg("mean_turns", "mean assistant turns in multi-turn trials (null when single-shot)", (i) => {
+    const turns = i.trials
+        .map((t) => (t.transcript ? t.transcript.filter((m) => m.role === "assistant").length : null))
+        .filter((n) => typeof n === "number");
+    return turns.length > 0 ? turns.reduce((a, b) => a + b, 0) / turns.length : null;
+});
 // ── classification (binary, from predicted_bool/actual_bool pairs) ──
 //
 // Pairs are recorded by the `classification` evaluator. Binary-only metrics

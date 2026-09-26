@@ -13,6 +13,14 @@ export interface PersonaTraits {
     readingSpeedWpm: number;
     /** Motor precision: 1 = pixel-perfect clicks, 0 = frequent slips. */
     clickAccuracy: number;
+    /**
+     * Typing accuracy: 1 = near error-free (a 2% slip floor remains — even
+     * expert typists fat-finger keys), 0 = frequent typos (P1.2).
+     * Independent from pointer precision — poor mouse aim does not imply
+     * poor keyboard skill. Defaults to `clickAccuracy` when unspecified so
+     * existing persona specs keep working.
+     */
+    typingAccuracy: number;
     /** Overall movement/typing tempo: 1 = very fast, 0 = very slow. */
     motorSpeed: number;
     /** How well screens/labels are retained across steps. */

@@ -65,10 +65,13 @@ export { ALL_MODALITIES, EveRegistry } from "./core/registry.js";
 export type {
   Action,
   BoundingBox,
+  EvidenceProvenance,
   Finding,
   FindingCategory,
   FindingSeverity,
+  LatencyEvidence,
   LoopIteration,
+  ObservationSource,
   PerceivedRole,
   Percept,
   Point,
@@ -155,6 +158,8 @@ export {
   type McpConnection,
   type McpConnector,
 } from "./surface/mcpClient.js";
+// Calibration substrate: first-class experience traces (canonical trajectory primitive)
+export * from "./trace/index.js";
 // Phase-3: continuous UX regression (experience trends across builds)
 export * from "./trends/index.js";
 // Phase-3: human digital twins (persistent, evolving user models)

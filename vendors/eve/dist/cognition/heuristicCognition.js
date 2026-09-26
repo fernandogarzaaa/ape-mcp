@@ -1,7 +1,9 @@
 import { clamp01 } from "../core/random.js";
-import { screenSignature } from "../memory/memory.js";
+import { isAffordanceAvailable } from "../memory/memory.js";
+import { stableIdentityKey } from "../memory/surfaceIdentity.js";
 import { abandonmentThreshold, readingTimeMs } from "../personas/persona.js";
 import { strategyWeights, } from "../planning/strategies.js";
+import { heuristicChoiceSet } from "./choiceSet.js";
 import { predictInteraction, tokenize } from "./mentalModel.js";
 import { choiceLoad, readingLoad, scoreAffordances } from "./salience.js";
 import { synthesizeArguments } from "./toolArgs.js";
@@ -37,7 +39,7 @@ export class HeuristicCognition {
     }
     async decide(ctx) {
         const { percept, persona, emotion, memory, goals, rng } = ctx;
-        const sig = screenSignature(percept);
+        const sig = stableIdentityKey(percept);
         const effortBase = clamp01(readingLoad(percept) * 0.5 + choiceLoad(percept) * 0.5);
         const weights = strategyWeights(this.strategy);
         // 0. Kernel-native tool surface (Phase 2): one tool call is one semantic
@@ -200,12 +202,18 @@ export class HeuristicCognition {
      */
     chooseAffordance(ctx, goalKeywords, weights, effortBase, sig) {
         const { persona, emotion, memory, goals, rng } = ctx;
-        const scored = scoreAffordances(ctx, goalKeywords).filter((s) => {
-            // Anxious/low-risk personas refuse plainly destructive controls.
-            if (s.risk >= 1 && persona.traits.riskTolerance < 0.2)
-                return false;
-            return true;
-        });
+        const allScored = scoreAffordances(ctx, goalKeywords);
+        // Anxious/low-risk personas refuse plainly destructive controls.
+        // Refused controls are recorded as ineligible candidates (Phase 3):
+        // available-but-barred, distinct from never-considered.
+        const refused = allScored
+            .filter((s) => s.risk >= 1 && persona.traits.riskTolerance < 0.2)
+            .map((s) => ({
+            score: s,
+            reason: "risk-refused: destructive control below risk tolerance",
+        }));
+        const refusedSet = new Set(refused.map((r) => r.score));
+        const scored = allScored.filter((s) => !refusedSet.has(s));
         const viable = scored.filter((s) => s.total > 0.05);
         if (viable.length === 0)
             return null;
@@ -214,7 +222,15 @@ export class HeuristicCognition {
         const chosen = rng.weightedPick(considered, considered.map((s) => Math.exp(s.total * (1 + weights.goalWeight))));
         const el = chosen.element;
         memory.markTried(sig, el.text);
+        // Phase 3: record what was available and how the winner was picked.
+        // Ordering + eligibility + salience scores only — the cascade computes
+        // no probabilities and none are recorded. Pure mapping: no RNG consumed.
+        const choiceSet = heuristicChoiceSet(considered, considered.indexOf(chosen), `salience order, top-${considered.length} of ${viable.length} viable ` +
+            `(attention-limited); weighted pick exp(total*(1+goalWeight))`, refused);
         // Keyboard-first personas prefer pressing Enter on focused controls.
+        // Press actuations null the selected index (see utilityCognition):
+        // the click set was considered, the press itself was not a candidate.
+        const pressChoiceSet = { ...choiceSet, selectedIndex: null };
         if (persona.accessibility.keyboardOnly ||
             (persona.traits.keyboardPreference > 0.7 && el.focused)) {
             if (el.focused) {
@@ -223,6 +239,7 @@ export class HeuristicCognition {
                     rationale: `"${el.text.trim()}" is focused; Enter should activate it.`,
                     prediction: predictInteraction(el, "click", this.baseConfidence(ctx)),
                     effort: effortBase,
+                    choiceSet: pressChoiceSet,
                 };
             }
             if (persona.accessibility.keyboardOnly) {
@@ -236,6 +253,7 @@ export class HeuristicCognition {
                         confidence: 0.75,
                     },
                     effort: effortBase + 0.1,
+                    choiceSet: pressChoiceSet,
                 };
             }
         }
@@ -252,6 +270,7 @@ export class HeuristicCognition {
             rationale,
             prediction: predictInteraction(el, "click", this.baseConfidence(ctx)),
             effort: clamp01(effortBase + (hesitant ? 0.2 : 0)),
+            choiceSet,
         };
     }
     baseConfidence(ctx) {
@@ -856,6 +875,26 @@ export class HeuristicCognition {
         if (percept.dialogs.length === 0)
             return null;
         const dialog = percept.dialogs[0];
+        // Native dialogs (alert/confirm/prompt) have no box and no page controls:
+        // the adapter already handled them (record-then-dismiss by default) to
+        // unblock perception. Mapping them onto page controls would click an
+        // unrelated "Continue"/"OK" — so the operator only reads and reacts,
+        // never selects a page element for a native dialog.
+        if (dialog.source === "native") {
+            const words = dialog.text.split(/\s+/).filter(Boolean).length;
+            return {
+                action: { kind: "read", target: null, durationMs: readingTimeMs(persona, words) },
+                rationale: `A native dialog said "${dialog.text.slice(0, 80)}". ` +
+                    `It was already handled by the surface (${dialog.autoHandled ?? "dismissed"}) — noting it and moving on.`,
+                prediction: {
+                    description: "The dialog is already gone; the page underneath is unchanged.",
+                    expectedSignals: [],
+                    expectsChange: false,
+                    confidence: 0.8,
+                },
+                effort: 0.1,
+            };
+        }
         // Look for a control inside the dialog to dismiss/accept it.
         const dialogBox = dialog.box;
         const inDialog = percept.elements.filter((el) => el.interactive &&
@@ -886,7 +925,7 @@ export class HeuristicCognition {
     }
     handleFormSubmit(ctx) {
         const { percept, memory } = ctx;
-        const sig = screenSignature(percept);
+        const sig = stableIdentityKey(percept);
         const node = memory.knownScreens().find((s) => s.signature === sig);
         if (!node)
             return null;
@@ -899,7 +938,11 @@ export class HeuristicCognition {
             return null;
         const submitRe = /\b(submit|send|save|log ?in|sign ?(in|up)|create|continue|next|reset|search|apply|confirm|done|finish|register|update|go)\b/i;
         const buttons = percept.elements.filter((el) => el.role === "button" && el.interactive && !el.disabled && el.text.trim());
-        const untried = buttons.filter((el) => !node.triedAffordances.has(el.text.trim().toLowerCase()));
+        // Availability rule: tried-marks from the stable key only suppress a
+        // button that is available RIGHT NOW — familiarity with state A never
+        // proves availability in state B.
+        const untried = buttons.filter((el) => isAffordanceAvailable(percept, el.text) &&
+            !node.triedAffordances.has(el.text.trim().toLowerCase()));
         const submit = untried.find((el) => submitRe.test(el.text)) ??
             (untried.length === 1 ? untried[0] : undefined);
         if (!submit)
@@ -914,7 +957,7 @@ export class HeuristicCognition {
     }
     handleFormField(ctx, goalKeywords) {
         const { percept, persona, memory } = ctx;
-        const sig = screenSignature(percept);
+        const sig = stableIdentityKey(percept);
         const node = memory.knownScreens().find((s) => s.signature === sig);
         const emptyFields = percept.elements.filter((el) => el.editable &&
             !el.disabled &&

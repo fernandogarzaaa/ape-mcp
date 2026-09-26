@@ -1,4 +1,5 @@
 import type { Percept } from "../core/types.js";
+import { type QueryStatePolicy } from "../memory/surfaceIdentity.js";
 import type { WorkflowKind } from "./catalog.js";
 /**
  * The discovered workflow map of the product: which workflow-classified
@@ -33,7 +34,7 @@ export declare class WorkflowGraph {
     private readonly nodes;
     private readonly transitions;
     private lastSignature;
-    observe(percept: Percept, step: number, arrivedVia: string | null, errorPerceived: boolean): WorkflowNode;
+    observe(percept: Percept, step: number, arrivedVia: string | null, errorPerceived: boolean, queryPolicy?: QueryStatePolicy, formFill?: "empty" | "populated"): WorkflowNode;
     allNodes(): readonly WorkflowNode[];
     allTransitions(): readonly WorkflowTransition[];
     /**
