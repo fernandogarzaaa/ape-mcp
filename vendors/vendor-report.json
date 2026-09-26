@@ -25,8 +25,74 @@
         "LICENSE",
         ".claude-plugin"
       ],
-      "sha": "d85012a21aa9a6b0ce2637cddb473165fc741efe"
+      "sha": "af9c797476d8f64559a0477918be6b10d076a5ec"
+    },
+    {
+      "dest": "vendors/eve",
+      "status": "ok",
+      "copied": [
+        "src",
+        "bin",
+        "protocol",
+        "skills",
+        "docs",
+        "examples",
+        "tests",
+        "scripts",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "tsconfig.build.json",
+        "biome.jsonc",
+        "vitest.config.ts",
+        "eve.config.example.yaml",
+        "README.md",
+        "LICENSE",
+        "ROADMAP.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        ".claude",
+        ".codex",
+        ".claude-plugin"
+      ],
+      "sha": "7fe38412a67cb100b5dd3368c7513a797d231355"
+    },
+    {
+      "dest": "vendors/adam",
+      "status": "ok",
+      "copied": [
+        "crates",
+        "bin",
+        "protocol",
+        "skills",
+        "scripts",
+        "Cargo.toml",
+        "Cargo.lock",
+        "Dockerfile",
+        "README.md",
+        "ARCHITECTURE.md",
+        "DESIGN.md",
+        "ROADMAP.md",
+        "LICENSE",
+        ".claude-plugin",
+        ".mcp.json"
+      ],
+      "sha": "70b3b9788e5ba8620c2e802b7820e610fb713d65"
+    },
+    {
+      "dest": "vendors/skein",
+      "status": "ok",
+      "copied": [
+        "src",
+        "tests",
+        "docs",
+        "pyproject.toml",
+        "README.md",
+        "CHANGELOG.md",
+        ".github"
+      ],
+      "sha": "db1c4e66ec821a3c730f5d0dbe395df861f40488"
     }
   ],
-  "at": "2026-09-17T05:34:59.618Z"
+  "at": "2026-09-26T20:20:18.364Z"
 }

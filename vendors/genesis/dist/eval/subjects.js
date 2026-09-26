@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redact } from "../shared/redact.js";
+import { resolvePython } from "../shared/python.js";
 import { SubprocessRunner } from "../evidence/runner.js";
 import { mulberry32 } from "./stats.js";
 export function createSubject(spec, runner = new SubprocessRunner()) {
@@ -111,7 +112,10 @@ export class CommandSubject {
         this.#runner = runner;
     }
     describe() {
-        return { kind: "command", command: this.#spec.command, timeout_ms: this.#spec.timeout_ms };
+        const out = { kind: "command", command: this.#spec.command };
+        if (this.#spec.timeout_ms !== undefined)
+            out.timeout_ms = this.#spec.timeout_ms;
+        return out;
     }
     async run(task) {
         const started = Date.now();
@@ -120,9 +124,16 @@ export class CommandSubject {
             const taskFile = join(dir, "task.json");
             writeFileSync(taskFile, JSON.stringify(task, null, 2), "utf8");
             const input = taskInputText(task);
-            const parts = splitCommand(this.#spec.command).map((p) => p.replaceAll("{task_file}", taskFile).replaceAll("{input}", input));
-            const hasPlaceholder = this.#spec.command.includes("{task_file}") || this.#spec.command.includes("{input}");
-            const command = hasPlaceholder ? parts : [...parts, taskFile];
+            const template = this.#spec.command;
+            const parts = splitCommand(template).map((p) => p.replaceAll("{task_file}", taskFile).replaceAll("{input}", input));
+            // {python} resolves to the available interpreter (python, else python3).
+            // Resolve lazily so specs that never mention it keep working on
+            // machines without any Python interpreter.
+            const commandParts = template.includes("{python}")
+                ? parts.map((p) => p.replaceAll("{python}", resolvePython()))
+                : parts;
+            const hasPlaceholder = template.includes("{task_file}") || template.includes("{input}");
+            const command = hasPlaceholder ? commandParts : [...commandParts, taskFile];
             const result = await this.#runner.run(command, {
                 cwd: process.cwd(),
                 timeoutMs: this.#spec.timeout_ms ?? 60_000,
@@ -140,6 +151,13 @@ export class CommandSubject {
                     output: null, raw_stdout: redact(result.stdout), raw_stderr: redact(result.stderr),
                     exit_code: result.exit_code, duration_ms: Date.now() - started,
                     timed_out: true, error: `subject timed out`,
+                };
+            }
+            if (result.output_limited) {
+                return {
+                    output: null, raw_stdout: redact(result.stdout), raw_stderr: redact(result.stderr),
+                    exit_code: result.exit_code, duration_ms: Date.now() - started,
+                    timed_out: false, error: `subject output exceeded per-stream byte limit`,
                 };
             }
             const out = result.stdout.trim();
@@ -195,7 +213,18 @@ export class HttpSubject {
                 });
                 // The deadline covers the body too: headers resolving first must not
                 // disarm the timeout while a stalled body streams forever.
-                const text = await res.text();
+                // Cap HTTP bodies (default 1 MiB): unbounded res.text() is a memory-
+                // exhaustion path for adversarial endpoints.
+                const MAX_HTTP_BODY_BYTES = 1_048_576;
+                const body = await readCappedBody(res, MAX_HTTP_BODY_BYTES);
+                if (body.limited) {
+                    return {
+                        output: null, raw_stdout: "", raw_stderr: "",
+                        exit_code: res.ok ? 0 : res.status, duration_ms: Date.now() - started,
+                        timed_out: false, error: `http response body exceeded ${MAX_HTTP_BODY_BYTES} byte limit`,
+                    };
+                }
+                const text = body.text;
                 let output = text;
                 try {
                     output = JSON.parse(text);
@@ -249,5 +278,35 @@ export function splitCommand(command) {
     if (cur)
         out.push(cur);
     return out;
+}
+/** Read a fetch body up to maxBytes; reports `limited` instead of buffering forever. */
+async function readCappedBody(res, maxBytes) {
+    // Prefer streaming when available so an adversarial body can't exhaust memory.
+    const reader = res.body?.getReader();
+    if (!reader) {
+        const text = await res.text();
+        return text.length > maxBytes ? { text: text.slice(0, maxBytes), limited: true } : { text, limited: false };
+    }
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done)
+            break;
+        if (value) {
+            total += value.length;
+            if (total > maxBytes) {
+                try {
+                    await reader.cancel();
+                }
+                catch {
+                    // ignore
+                }
+                return { text: Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8").slice(0, maxBytes), limited: true };
+            }
+            chunks.push(value);
+        }
+    }
+    return { text: Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8"), limited: false };
 }
 //# sourceMappingURL=subjects.js.map
