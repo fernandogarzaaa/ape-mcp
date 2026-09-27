@@ -1,3 +1,4 @@
+import type { EvidenceProvenance } from "../core/types.js";
 import type { SessionResult } from "../engine/session.js";
 /**
  * Experience forecasting.
@@ -11,19 +12,29 @@ import type { SessionResult } from "../engine/session.js";
  * risk forecasts, weighted by how many personas hit them.
  */
 export interface StruggleForecast {
-    /** Screen title or URL where struggle is predicted. */
+    /** Screen title or URL where struggle is forecast. */
     readonly location: string;
-    /** 0..1 predicted probability a user struggles here. */
+    /**
+     * Heuristic struggle RISK INDEX 0..1 (P1.8) — a hand-weighted combination
+     * of friction events and persona breadth, NOT an empirically fitted
+     * probability and NOT a causal estimate. Kept 0..1 internally for
+     * comparability; reports must render it as an index.
+     */
     readonly struggleProbability: number;
-    /** What drives the prediction. */
+    /** Alias with honest naming; identical value. Prefer in new code. */
+    readonly struggleIndex: number;
+    /** What drives the forecast. */
     readonly signals: readonly string[];
     /** Personas that struggled here, if multi-session. */
     readonly affectedPersonas: readonly string[];
+    readonly provenance: EvidenceProvenance;
 }
 export interface AbandonmentForecast {
     readonly workflow: string;
+    /** Heuristic abandonment risk index 0..1 (observed abandonment share) — not causal. */
     readonly abandonmentRisk: number;
     readonly reason: string;
+    readonly provenance: EvidenceProvenance;
 }
 export interface ConfidenceForecast {
     readonly location: string;
@@ -32,9 +43,13 @@ export interface ConfidenceForecast {
 }
 export interface ImprovementForecast {
     readonly change: string;
-    /** Estimated completion-rate lift, 0..1. */
+    /**
+     * Heuristic estimated completion LIFT INDEX 0..1 (P1.8) — scenario
+     * arithmetic over observed friction, not a causal lift estimate.
+     */
     readonly estimatedLift: number;
     readonly rationale: string;
+    readonly provenance: EvidenceProvenance;
 }
 export interface ExperienceForecast {
     readonly struggles: readonly StruggleForecast[];
