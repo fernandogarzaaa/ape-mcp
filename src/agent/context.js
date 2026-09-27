@@ -126,3 +126,51 @@ export function compressHistory(messages, { maxHistoryTokens = 60000, keepRecent
   });
   return { messages: [...head, ...digested, ...tail], compressed, savedTokens: Math.max(0, before - estimateTokens([...head, ...digested, ...tail])) };
 }
+//
+// Proactive compression (compressHistory above) keeps history under the
+// profile cap, but the provider's real context window can still reject a
+// call: different models, different windows, and the char/4 estimator is
+// approximate. When the provider says the context is too long, the loop
+// should shrink and retry instead of halting — that is the third Strands
+// context-hygiene behavior (truncate outputs, compact the window, recover
+// from overflow inside the loop).
+
+const OVERFLOW_PATTERNS = [
+  /context_length_exceeded/i,
+  /maximum context( length)?/i,
+  /context window/i,
+  /too many tokens/i,
+  /input.*too (long|large)/i,
+  /prompt.*too long/i,
+  /reduce the length of/i,
+  /context.{0,20}limit/i,
+];
+
+// True when err looks like a provider context-length rejection rather than
+// any other model failure. Conservative on purpose: unknown errors keep the
+// old halt behavior instead of triggering a shrink-and-retry loop.
+export function isContextOverflowError(err) {
+  if (!err) return false;
+  const status = err.status ?? err.statusCode ?? err.code;
+  const msg = String(err.message ?? err ?? "");
+  if ((status === 400 || status === 413) && OVERFLOW_PATTERNS.some((p) => p.test(msg))) return true;
+  if (typeof status === "string" && /context_length_exceeded/i.test(status)) return true;
+  return OVERFLOW_PATTERNS.some((p) => p.test(msg));
+}
+
+export const MAX_OVERFLOW_RECOVERIES = 2;
+
+// Aggressively shrink messages after an overflow rejection: halve the
+// estimated token budget and keep only the 2 most recent turns intact.
+// Returns null when nothing more can be digested (already at the floor),
+// signalling the caller to halt honestly instead of retrying forever.
+export function recoverFromOverflow(messages) {
+  const before = estimateTokens(messages);
+  const c = compressHistory(messages, {
+    maxHistoryTokens: Math.max(1000, Math.floor(before / 2)),
+    keepRecentTurns: 2,
+  });
+  if (c.compressed === 0) return null;
+  return { messages: c.messages, compressed: c.compressed, savedTokens: c.savedTokens ?? 0, before, after: estimateTokens(c.messages) };
+
+}
