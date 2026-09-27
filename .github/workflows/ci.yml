@@ -24,6 +24,7 @@ jobs:
       - run: npm --prefix vendors/eve install --ignore-scripts --no-audit --no-fund
       - run: node scripts/check-licenses.mjs
       - run: node scripts/check-no-bom.mjs
+      - run: node scripts/check-skill-mirrors.mjs
       - run: node bin/ape-mcp.js doctor
       - run: node scripts/smoke.mjs
       - run: npm test
