@@ -39,6 +39,7 @@ export interface McpAdapterOptions {
 }
 export declare class McpAdapter implements BrowserAdapter, KernelSurface {
     readonly name = "mcp";
+    readonly version = "0.5.0";
     readonly capabilities: {
         spatial: boolean;
         modality: import("../core/registry.js").Modality;

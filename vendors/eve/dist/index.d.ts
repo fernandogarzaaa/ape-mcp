@@ -31,7 +31,7 @@ export type { Rng } from "./core/random.js";
 export { createRng, seedFromString } from "./core/random.js";
 export type { ActionVerbEntry, EveRegistries, FindingCategoryEntry, Modality, RegistryEntry, ScoreDimensionEntry, } from "./core/registry.js";
 export { ALL_MODALITIES, EveRegistry } from "./core/registry.js";
-export type { Action, BoundingBox, Finding, FindingCategory, FindingSeverity, LoopIteration, PerceivedRole, Percept, Point, Prediction, PredictionOutcome, Score, ScoreDimension, SessionUsage, Viewport, VisibleDialog, VisibleElement, } from "./core/types.js";
+export type { Action, BoundingBox, EvidenceProvenance, Finding, FindingCategory, FindingSeverity, LatencyEvidence, LoopIteration, ObservationSource, PerceivedRole, Percept, Point, Prediction, PredictionOutcome, Score, ScoreDimension, SessionUsage, Viewport, VisibleDialog, VisibleElement, } from "./core/types.js";
 export { describeAction, FINDING_CATEGORIES, SCORE_DIMENSIONS } from "./core/types.js";
 export * from "./emotion/index.js";
 export type { CognitiveConfig, CognitiveLoadTimeline } from "./engine/cognitiveSuite.js";
@@ -64,6 +64,7 @@ export { CONVERSATION_VERBS, CONVERSATIONAL_SURFACE, DOCUMENT_SURFACE, DOCUMENT_
 export { CliAdapter, type CliAdapterOptions } from "./surface/cli.js";
 export { McpAdapter, type McpAdapterOptions } from "./surface/mcp.js";
 export { connectMcpInProcess, connectMcpServer, type McpCallOutcome, type McpConnection, type McpConnector, } from "./surface/mcpClient.js";
+export * from "./trace/index.js";
 export * from "./trends/index.js";
 export * from "./twins/index.js";
 export * from "./vision/index.js";
