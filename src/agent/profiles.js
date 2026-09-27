@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
+import { validateContextLayer } from "./context.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -106,6 +107,9 @@ export function loadProfile(name) {
     ...(profile.policy?.dedup_window_sec !== undefined && Number.isFinite(Number(profile.policy.dedup_window_sec)) && Number(profile.policy.dedup_window_sec) >= 0
       ? { dedup_window_sec: Number(profile.policy.dedup_window_sec) }
       : {}),
+    // Context hygiene overrides (global defaults live in ape.config.yaml;
+    // every field here is optional and wins over the global value).
+    context: validateContextLayer(profile.policy?.context),
   };
   return profile;
 }

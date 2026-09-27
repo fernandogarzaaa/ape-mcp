@@ -83,6 +83,7 @@ policy:                         # loop policy
   evidence: any                 # any (presence passes) | agree (verdicts must agree, no refutations)
   eve_threshold: 50             # EVE score at/above this counts as supporting evidence
   routing: true                 # task-based model routing (default on for provider:auto; explicit provider/model bypasses it)
+  context: {}                   # truncation/retrieval knobs; see "Context hygiene" (global defaults in ape.config.yaml)
 stop_conditions:
   - no_tool_call_in_step
   - explicit_final_answer
@@ -218,6 +219,36 @@ into `runs.db`. A stopped or failed run with a checkpoint can be resumed with
 `ape_agent_resume {run_id}` (or `agent/resume`), which forks a replacement worker
 from the last step. Completed runs refuse; live workers must be cancelled first;
 resumes are capped (`APE_MAX_RESUMES`, default 3).
+
+## Context hygiene
+
+Bulky tool results are never silently sliced. When a result exceeds the
+truncation budget, the loop stores the full text in `runs.db` (a per-run
+stash) and the model sees a head-tail preview with an explicit
+`[truncated ...]` marker naming a ref. The agent recovers the original on
+demand through the auto-added `context.retrieve` tool, which returns bounded
+pages (max 8000 chars per call) so a page can never re-create the overflow
+truncation was meant to prevent. Every field is optional; precedence is
+built-in defaults < `ape.config.yaml` `context:` < profile `policy.context`
+< per-tool overrides.
+
+```yaml
+policy:
+  context:
+    max_result_tokens: 1500   # truncate results over ~this many tokens
+    preview_tokens: 750       # preview budget kept in context
+    mode: head-tail           # head | tail | head-tail
+    retrieve: true            # expose context.retrieve (false disables it)
+    max_stash_chars: 100000   # cap on the full text kept per result
+    per_tool:                 # per-tool overrides, e.g. noisy tools
+      skein.orchestrate: { max_result_tokens: 500 }
+```
+
+Truncations are counted in `receipt.tool_truncations` (also top-level on the
+result), ledger tool steps are tagged `trunc:<ref>:~<tokens>t`, and the
+counter survives checkpoint/resume. Refs are per-run: a ref from one run
+cannot read another run's stash. Stash rows older than 7 days are pruned on
+write.
 
 ## The reasoning loop
 
