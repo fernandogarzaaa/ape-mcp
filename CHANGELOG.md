@@ -2,6 +2,28 @@
 
 ## Unreleased — high-level agents, L3: planner→executor over Skein
 
+### Closed: 2026-09-17 live-run gaps session (was docs/gaps-report.md)
+- Live plugin + MCP run (stdio + HTTP) drove every tool through the real
+  plugin-client path (`scripts/live-audit.ps1`, 17/17 green with payload
+  verification). Fixed that session: `ape_beliefs`/`ape_genome` registered
+  against the real vendored `adam-mcp` binary; memory tools made real via
+  `src/adam-client.js` (line-delimited JSON-RPC over the vendored binary,
+  state under `$APE_DATA_DIR`); `ape_mcp_eval` surfaced from vendored EVE;
+  Skein dispatch auto-injects `PYTHONPATH=vendors/skein/src`; ledger surface
+  went live (`audit_claim` appends to `.ape/ledger.jsonl`, console Ledger tab
+  renders it); `live-audit.ps1` `$args` shadowing fixed with payload
+  assertions; ADAM client `child.stderr`/hardcoded request-id bugs fixed.
+- Follow-ups queued that session (world-simulate/MIRO venv setup,
+  `ape_compare` wiring, `ape_evolve` accept path, large-result handling,
+  static console tabs, cross-platform ADAM binaries, dev re-vendor rebuild
+  note) are open work items, no longer a standalone dated report.
+
+### Host skill mirrors are CI-guarded
+- `.codex/skills/ape/SKILL.md` is a byte-identical mirror of the canonical
+  `skills/ape/SKILL.md` (Codex requires that exact host path).
+  `scripts/check-skill-mirrors.mjs` fails CI on drift; edit the canonical
+  file only.
+
 ### Context hygiene (truncation with recoverable previews)
 - Tool results are no longer silently sliced at 8000 chars. Over-budget
   results are truncated to a token-budget preview (head/tail/head-tail,
