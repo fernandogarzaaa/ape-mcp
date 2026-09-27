@@ -7,7 +7,7 @@ import { internalTools, invokeTool, isDestructiveCall, frameToolOutput } from ".
 import { isRetryable, fingerprint, lookupImmunity, recordImmunity, selectRepair, shrinkArgs } from "./recovery.js";
 import { DEFAULT_VERIFY_TOOLS } from "./profiles.js";
 import { correlateEvidence, buildEvidence } from "./evidence.js";
-import { compressHistory, estimateTokens, truncateToolOutput, resolveHygiene } from "./context.js";
+import { compressHistory, estimateTokens, truncateToolOutput, resolveHygiene, isContextOverflowError, recoverFromOverflow, MAX_OVERFLOW_RECOVERIES } from "./context.js";
 import { stashResult } from "./stash.js";
 import { loadGlobalConfig } from "../globalConfig.js";
 import { shaShort, emitTrace } from "../trace.js";
@@ -121,6 +121,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   let compressions = initial?.compressions ?? 0;
   let tokensSavedEstimate = initial?.tokensSavedEstimate ?? 0;
   let truncations = initial?.truncations ?? 0;
+  let overflowRecoveries = initial?.overflowRecoveries ?? 0;
   const driftState = initial?.driftState ?? initDrift();
   // Evidence artifacts: full verifier results for the grounding gate (the gate
   // consumes these, never the truncated ledger summaries). Restored on resume
@@ -282,6 +283,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       // run instead of spending past the cap.
       let resp = null;
       let lastErr = null;
+      let overflowErr = null;
       let cappedSkips = 0;
       const modelT0 = Date.now();
       // Wall-time abort: a stalled provider call cannot outlive the run.
@@ -299,7 +301,13 @@ export async function runAgent({ profile, objective, organism_id = "default", on
           usedResolution = p.resolution ?? null;
           fallbackUsed = fallbackUsed || pi > 0;
           break;
-        } catch (e) { lastErr = e; }
+        } catch (e) {
+          lastErr = e;
+          // A context-overflow rejection will hit every provider in the chain
+          // the same way (same messages), so remember it and stop trying
+          // further providers: the recovery below shrinks and retries instead.
+          if (isContextOverflowError(e)) { overflowErr = e; break; }
+        }
       }
       const modelDur = Date.now() - modelT0;
       if (!resp) {
@@ -308,6 +316,22 @@ export async function runAgent({ profile, objective, organism_id = "default", on
           outcome = `halted: provider spend caps reached (${Object.entries(spendByProvider).map(([k, v]) => `${k}=$${Number(v).toFixed(4)}`).join(", ") || "no spend yet"})`;
           record({ step: budget.steps + 1, kind: "model", tool: null, durationMs: 0, tokens: 0, cost: 0, resultSummary: outcome });
           break;
+        }
+        // Context-overflow recovery: the provider rejected the message set
+        // as too long. Shrink aggressively and retry the model call inside
+        // the loop (bounded: each recovery at least halves the estimate).
+        // When nothing more can be digested, halt honestly.
+        if (overflowErr && overflowRecoveries < MAX_OVERFLOW_RECOVERIES) {
+          const rec = recoverFromOverflow(messages);
+          if (rec) {
+            overflowRecoveries++;
+            tokensSavedEstimate += rec.savedTokens ?? 0;
+            messages.length = 0;
+            messages.push(...rec.messages);
+            record({ step: budget.steps + 1, kind: "model", tool: null, durationMs: modelDur, tokens: 0, cost: 0, resultSummary: `context overflow: shrunk history ${rec.before}->${rec.after} tokens (${rec.compressed} turns digested), retrying model call (recovery ${overflowRecoveries}/${MAX_OVERFLOW_RECOVERIES})` });
+            emitTrace("context_overflow_recovery", { before: rec.before, after: rec.after, recovery: overflowRecoveries });
+            continue;
+          }
         }
         stopReason = "model_error";
         outcome = { error: String(lastErr?.message ?? lastErr ?? "model call failed").slice(0, 400) };
@@ -471,7 +495,7 @@ const toolCalls = resp.toolCalls ?? [];
       try {
         onCheckpoint?.({
           messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd },
-          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, truncations, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider, repairLog, delegationLog,
+          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, truncations, overflowRecoveries, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider, repairLog, delegationLog,
         });
       } catch { /* checkpointing never breaks the loop */ }
     }
@@ -499,6 +523,7 @@ const toolCalls = resp.toolCalls ?? [];
     total_cost: budget.usd,
     duration_ms: Date.now() - startedAt,
     compressions,
+    overflow_recoveries: overflowRecoveries,
     tokens_saved_estimate: tokensSavedEstimate,
     tool_truncations: truncations,
     destructive_used: destructiveUsed,
@@ -515,6 +540,7 @@ const toolCalls = resp.toolCalls ?? [];
       spend_by_provider: spendByProvider,
       duration_ms: Date.now() - startedAt,
       compressions,
+      overflow_recoveries: overflowRecoveries,
       tokens_saved_estimate: tokensSavedEstimate,
       tool_truncations: truncations,
       destructive_used: destructiveUsed,

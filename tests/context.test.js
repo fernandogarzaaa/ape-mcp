@@ -277,3 +277,47 @@ test("context: oversized tool results truncate inside the loop with ledger tags"
   assert.ok(back.text && !back.error, "stashed full text recoverable by ref");
   assert.ok(back.text.includes("z".repeat(100)), "recovered text is the retrieve page");
 });
+
+// --- isContextOverflowError ---
+
+test("context: overflow detector matches provider context-length rejections", async () => {
+  const { isContextOverflowError } = await import("../src/agent/context.js");
+  assert.equal(isContextOverflowError(new Error("This model's maximum context length is 8192 tokens")), true);
+  assert.equal(isContextOverflowError(new Error("context_length_exceeded: too long")), true);
+  assert.equal(isContextOverflowError({ status: 400, message: "context_length_exceeded" }), true);
+  assert.equal(isContextOverflowError({ statusCode: 413, message: "input too large, reduce the length of the messages" }), true);
+  assert.equal(isContextOverflowError(new Error("Prompt is too long for the context window")), true);
+});
+
+test("context: overflow detector rejects non-overflow failures", async () => {
+  const { isContextOverflowError } = await import("../src/agent/context.js");
+  assert.equal(isContextOverflowError(new Error("rate limit exceeded, retry later")), false);
+  assert.equal(isContextOverflowError(new Error("no anthropic credential")), false);
+  assert.equal(isContextOverflowError({ status: 500, message: "internal server error" }), false);
+  assert.equal(isContextOverflowError({ status: 400, message: "invalid tool schema" }), false);
+  assert.equal(isContextOverflowError(null), false);
+  assert.equal(isContextOverflowError(undefined), false);
+});
+
+// --- recoverFromOverflow ---
+
+test("context: recoverFromOverflow halves estimate and keeps the tail", async () => {
+  const { recoverFromOverflow, estimateTokens } = await import("../src/agent/context.js");
+  const messages = [{ role: "system", content: "sys" }];
+  for (let i = 0; i < 8; i++) {
+    messages.push({ role: "assistant", toolCalls: [{ name: "t" }], content: "a".repeat(400) });
+    messages.push({ role: "tool", toolCallId: `x${i}`, content: "b".repeat(2000) });
+  }
+  const before = estimateTokens(messages);
+  const rec = recoverFromOverflow(messages);
+  assert.ok(rec, "expected a recovery plan");
+  assert.equal(rec.before, before);
+  assert.ok(rec.after < rec.before, `after (${rec.after}) < before (${rec.before})`);
+  assert.ok(rec.compressed > 0, "digested at least one turn");
+  assert.equal(rec.messages[0].role, "system", "system head preserved");
+});
+
+test("context: recoverFromOverflow returns null at the digest floor", async () => {
+  const { recoverFromOverflow } = await import("../src/agent/context.js");
+  assert.equal(recoverFromOverflow([{ role: "system", content: "s" }, { role: "user", content: "hi" }]), null);
+});
