@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "ape-mcp",
   "version": "1.0.0",
   "description": "APE — hybrid-native MCP server with an embedded, user-configurable agent: multi-engine orchestration (Genesis + EVE + ADAM + Skein), declarative connectors, task-graph execution, audit ledger, memory. No 5-repo clone required.",
