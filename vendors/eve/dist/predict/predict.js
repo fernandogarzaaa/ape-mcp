@@ -1,12 +1,17 @@
 /**
- * Predictive UX — extrapolate from a simulated population to what the broader
- * user base will experience, with confidence intervals. Predicts future
- * confusion, abandonment, onboarding failure, support contacts, and
- * accessibility issues.
+ * Predictive UX — simulation estimates from a simulated population, with
+ * HONEST uncertainty labels (P1.5–P1.7).
  *
- * Proportion predictions use the Wilson score interval (better than the normal
- * approximation at small n and near 0/1), treating the simulated population as
- * a sample. Modeled rates (support contacts) carry an explicit heuristic band.
+ * What these numbers are:
+ * - Simulation estimates: Wilson intervals quantify uncertainty about the
+ *   SIMULATION sample (25 simulated operators), NOT a 95% confidence
+ *   interval for real users. Simulated personas are not a random sample of
+ *   the human population, so no population inference is claimed.
+ * - Heuristic operational estimates (support contacts, confusion indices):
+ *   hand-weighted formulas, explicitly labeled, with an explicit ±30% band
+ *   that is a display convention, not a fitted variance.
+ * - Human-calibrated estimates: null until fitted against real human data
+ *   (see `humanCalibratedEstimate` + `calibrationStatus`).
  */
 const round = (v, p = 3) => Math.round(v * 10 ** p) / 10 ** p;
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
@@ -21,7 +26,12 @@ export function wilsonInterval(successes, n, z = 1.96) {
     const margin = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
     return { low: clamp01((center - margin) / denom), high: clamp01((center + margin) / denom) };
 }
-/** Build an observed-proportion prediction with a 95% Wilson interval. */
+/** Build a simulation-sample proportion with a 95% Wilson interval.
+ *
+ * The interval quantifies uncertainty about the SIMULATION sample only —
+ * it is NOT a confidence interval for real-user behavior (P1.6). The note
+ * says so explicitly so reports cannot overclaim.
+ */
 function proportion(metric, successes, n, note) {
     const ci = wilsonInterval(successes, n);
     return {
@@ -31,7 +41,10 @@ function proportion(metric, successes, n, note) {
         high: round(ci.high),
         unit: "proportion",
         basis: "observed-proportion",
-        note: `${note} (n=${n}, 95% CI)`,
+        note: `${note} Simulation estimate from ${n} simulated operators (95% Wilson interval over the simulation sample — not a real-user CI).`,
+        provenance: "derived",
+        calibrationStatus: "uncalibrated-heuristic",
+        humanCalibratedEstimate: null,
     };
 }
 /** Short, human-facing screen name (last path segment). */
@@ -43,7 +56,10 @@ const isFirstTimer = (op) => /first-?time|new-?user|onboard/i.test(op.persona);
 const isAccessibility = (op) => /accessib|elderly|low-?vision|screen-?reader/i.test(op.persona);
 const isConfused = (op) => op.segment === "confused-wanderers" || op.emotions.confusion >= 0.5;
 /**
- * Predict the UX the wider user base will experience from a population study.
+ * Heuristic simulation estimates from a population study.
+ *
+ * Produces simulation-sample ranges and heuristic scenario scores with
+ * explicit provenance — never population inference about real users.
  */
 export function predictUX(study) {
     const ops = study.operators;
@@ -74,24 +90,32 @@ export function predictUX(study) {
             high: round(Math.min(1, worst * 1.3)),
             unit: "proportion",
             basis: "modeled",
-            note: `Modeled from the most prevalent accessibility/visual finding (${a11yFindings.length} recurring).`,
+            note: `Heuristic simulation estimate modeled from the most prevalent accessibility/visual finding (${a11yFindings.length} recurring). Not human-calibrated.`,
+            provenance: "heuristic",
+            calibrationStatus: "uncalibrated-heuristic",
+            humanCalibratedEstimate: null,
         });
     }
-    // Modeled support-contact rate: driven by frustration, abandonment, and the
-    // prevalence of broken/silent interactions. Heuristic → explicit ±30% band.
+    // Heuristic support-contact operational estimate (P1.7): a hand-weighted
+    // combination (0.3 frustration + 0.5 abandonment + 0.2 broken-interaction)
+    // with an explicit ±30% display band. There is NO empirical model linking
+    // these variables to real support contacts — the label and metadata say so.
     const brokenPrevalence = study.topFindings
         .filter((f) => f.category === "error-recovery" || /no visible response/i.test(f.title))
         .reduce((m, f) => Math.max(m, f.prevalence), 0);
     const perUser = 0.3 * study.frustration.mean + 0.5 * study.dropoffRate + 0.2 * brokenPrevalence;
     const per100 = perUser * 100;
     predictions.push({
-        metric: "Support contacts",
+        metric: "Support contacts (heuristic operational estimate)",
         estimate: round(per100, 1),
         low: round(per100 * 0.7, 1),
         high: round(per100 * 1.3, 1),
         unit: "per-100-users",
         basis: "modeled",
-        note: "Modeled from frustration, abandonment, and broken-interaction prevalence (±30% band).",
+        note: "Heuristic operational estimate from frustration, abandonment, and broken-interaction prevalence (±30% display band, not a fitted variance). Not empirically validated; replace via a calibration interface once real support data exists.",
+        provenance: "heuristic",
+        calibrationStatus: "uncalibrated-heuristic",
+        humanCalibratedEstimate: null,
     });
     // Predicted struggle points: friction screens (revisits / drop-offs).
     const maxRevisit = Math.max(1, ...study.navigationHeatmap.map((e) => (e.operators ? e.visits / e.operators : 0)));
@@ -109,6 +133,7 @@ export function predictUX(study) {
             screen: shortName(e.screen),
             predictedConfusion,
             reason: reasons.join(", ") || "high traffic",
+            provenance: "heuristic",
         };
     })
         .filter((s) => s.predictedConfusion > 0)
