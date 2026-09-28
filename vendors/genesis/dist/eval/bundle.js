@@ -12,15 +12,18 @@
  * ├── statistics.json    — per-arm stats + paired comparisons
  * ├── findings.json
  * ├── evidence/          — evidence.jsonl (every record, digested)
- * └── verdict.json       — verdict with claim boundaries
+ * ├── verdict.json       — verdict with claim boundaries
+ * └── report.html        — offline single-file report rendered from the bundle
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { canonicalize } from "../shared/canonical.js";
-import { redact } from "../shared/redact.js";
+import { renderHtmlReport } from "./report-html.js";
+import { canonicalize, hashCanonicalExcluding } from "../shared/canonical.js";
+import { redact, redactDeep } from "../shared/redact.js";
 import { computeEnvDigest } from "../evidence/runner.js";
-export const GENESIS_VERSION = "0.2.0";
+export const GENESIS_VERSION = "0.3.0";
+export const BUNDLE_DIGEST_VERSION = 2;
 export function buildManifest(spec, result, options = {}) {
     return {
         genesis_version: GENESIS_VERSION,
@@ -37,11 +40,14 @@ export function buildManifest(spec, result, options = {}) {
         ledger_entry: options.ledgerEntry ?? null,
     };
 }
-export function writeEvidenceBundle(dir, spec, result, manifest) {
+export function writeEvidenceBundle(dir, spec, result, manifest, options = {}) {
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(dir, "evidence"), { recursive: true });
+    // Deep-redact structured values BEFORE serialization so header names like
+    // `Authorization` and nested credential fields never survive (string-level
+    // redaction on serialized JSON misses them).
     const write = (rel, value) => {
-        const text = redact(JSON.stringify(value, null, 2));
+        const text = JSON.stringify(redactDeep(value), null, 2);
         writeFileSync(join(dir, rel), text, "utf8");
     };
     write("manifest.json", manifest);
@@ -58,38 +64,135 @@ export function writeEvidenceBundle(dir, spec, result, manifest) {
         mkdirSync(join(dir, armDir), { recursive: true });
         const lines = arm.trials.map((t) => {
             const obs = arm.observations.find((o) => o.trial_id === t.trial_id);
-            return JSON.stringify({ trial: t, observation: obs });
+            return JSON.stringify(redactDeep({ trial: t, observation: obs }));
         });
-        writeFileSync(join(dir, armDir, "results.jsonl"), `${redact(lines.join("\n"))}\n`, "utf8");
+        writeFileSync(join(dir, armDir, "results.jsonl"), `${lines.join("\n")}\n`, "utf8");
         write(join(armDir, "metrics.json"), arm.metrics);
     }
     write("statistics.json", {
-        arms: result.arms.map((a) => ({ arm: a.arm, statistics: a.statistics })),
+        arms: result.arms.map((a) => ({
+            arm: a.arm,
+            statistics: a.statistics,
+            ...(a.evaluator_agreement ? { evaluator_agreement: a.evaluator_agreement } : {}),
+        })),
         comparisons: result.comparisons,
     });
     write("findings.json", result.findings);
-    const evidenceLines = result.arms.flatMap((a) => a.evidence).map((e) => JSON.stringify(e));
-    writeFileSync(join(dir, "evidence", "evidence.jsonl"), `${redact(evidenceLines.join("\n"))}\n`, "utf8");
+    const evidenceLines = result.arms.flatMap((a) => a.evidence).map((e) => JSON.stringify(redactDeep(e)));
+    writeFileSync(join(dir, "evidence", "evidence.jsonl"), `${evidenceLines.join("\n")}\n`, "utf8");
     write("verdict.json", result.verdict);
+    try {
+        // Render from a deep-redacted copy: in-memory trial output may carry
+        // secrets that JSON artifacts redact but raw HTML would expose.
+        writeFileSync(join(dir, "report.html"), renderHtmlReport(redactDeep(result)), "utf8");
+    }
+    catch {
+        // HTML is a lens, never load-bearing: a render failure must not fail the run.
+    }
     if (spec.analysis && spec.analysis.length > 0) {
-        // External cross-checks (e.g. interpretability notes): copied verbatim
-        // into the bundle so the verdict cites exactly what was reviewed.
+        // Analysis attachments are NOT copied verbatim anymore: textual files are
+        // scanned/redacted, binaries require explicit opt-in. Verbatim copy was a
+        // secret-leak path (PEM keys landed under analysis/ unredacted).
         mkdirSync(join(dir, "analysis"), { recursive: true });
         for (const file of spec.analysis) {
-            const full = file;
             let content;
             try {
-                content = readFileSync(full);
+                content = readFileSync(file);
             }
             catch {
                 throw new Error(`analysis attachment not found: ${file}`);
             }
             const base = file.split(/[\\/]/).pop();
-            writeFileSync(join(dir, "analysis", base), content);
+            const out = sanitizeAttachment(content, base, options.allowRawAnalysis ?? false);
+            writeFileSync(join(dir, "analysis", base), out);
         }
     }
-    const bundleDigest = createHash("sha256").update(canonicalize(result.verdict)).digest("hex");
+    // Bundle digest v2 covers the complete tree (verdict + manifest + spec +
+    // dataset + arms + evidence + findings + statistics), excluding only DIGEST
+    // itself. Legacy verdict-only digest is preserved for historic verification.
+    const legacyDigest = createHash("sha256").update(canonicalize(result.verdict)).digest("hex");
+    const tree = collectBundleTree(dir);
+    const bundleDigest = hashCanonicalExcluding({ version: BUNDLE_DIGEST_VERSION, files: tree }, []);
     writeFileSync(join(dir, "DIGEST"), `sha256:${bundleDigest}\n`, "utf8");
+    writeFileSync(join(dir, "DIGEST.legacy"), `sha256:${legacyDigest}\n`, "utf8");
+}
+/** Redact/sanitize a single analysis attachment. */
+function sanitizeAttachment(content, base, allowRaw) {
+    if (isProbablyText(content)) {
+        return redact(content.toString("utf8"));
+    }
+    if (!allowRaw) {
+        throw new Error(`analysis attachment "${base}" looks binary; refusing verbatim copy (secret-leak path). ` +
+            `Pass allowRawAnalysis to opt in, or attach a redacted text note instead.`);
+    }
+    return content;
+}
+function isProbablyText(content) {
+    if (content.length === 0)
+        return true;
+    const sample = content.subarray(0, Math.min(content.length, 8000));
+    // NUL byte or high control-char density → binary.
+    let controls = 0;
+    for (const b of sample) {
+        if (b === 0)
+            return false;
+        if (b < 9 || (b > 13 && b < 32))
+            controls++;
+    }
+    return controls / sample.length < 0.05;
+}
+/** Hash every file in the bundle tree (sorted, sha256 per file). */
+function collectBundleTree(dir) {
+    const out = {};
+    const walk = (rel) => {
+        const full = join(dir, rel);
+        let st;
+        try {
+            st = statSync(full);
+        }
+        catch {
+            return;
+        }
+        if (st.isDirectory()) {
+            for (const e of readdirSync(full).sort())
+                walk(rel ? `${rel}/${e}` : e);
+        }
+        else if (st.isFile()) {
+            if (rel === "DIGEST" || rel === "DIGEST.legacy")
+                return;
+            out[rel] = `sha256:${createHash("sha256").update(readFileSync(full)).digest("hex")}`;
+        }
+    };
+    walk("");
+    return out;
+}
+/** Verify an unsigned bundle: recompute v2 tree digest (+ legacy) and compare. */
+export function verifyEvidenceBundle(dir) {
+    const tree = collectBundleTree(dir);
+    const digest = hashCanonicalExcluding({ version: BUNDLE_DIGEST_VERSION, files: tree }, []);
+    let expected = "";
+    try {
+        expected = readFileSync(join(dir, "DIGEST"), "utf8").trim();
+    }
+    catch {
+        expected = "";
+    }
+    let legacyExpected = null;
+    try {
+        legacyExpected = readFileSync(join(dir, "DIGEST.legacy"), "utf8").trim();
+    }
+    catch {
+        legacyExpected = null;
+    }
+    let legacyDigest = "";
+    try {
+        const verdict = JSON.parse(readFileSync(join(dir, "verdict.json"), "utf8"));
+        legacyDigest = `sha256:${createHash("sha256").update(canonicalize(verdict)).digest("hex")}`;
+    }
+    catch {
+        legacyDigest = "";
+    }
+    return { ok: expected === `sha256:${digest}`, digest: `sha256:${digest}`, legacyDigest, expected, legacyExpected };
 }
 export function readEvidenceBundle(dir) {
     return {
@@ -114,10 +217,10 @@ function tryRead(path) {
  * <dir>/trust.json       (combined TRUSTED | UNTRUSTED | INCONCLUSIVE)
  * <dir>/gate.json        (release-gate decision, when `genesis gate` ran)
  */
-export function writeTrustBundle(dir, spec, result, manifest, assurance, trust, gate) {
-    writeEvidenceBundle(join(dir, "evaluation"), spec, result, manifest);
+export function writeTrustBundle(dir, spec, result, manifest, assurance, trust, gate, options = {}) {
+    writeEvidenceBundle(join(dir, "evaluation"), spec, result, manifest, options);
     const write = (rel, value) => {
-        writeFileSync(join(dir, rel), redact(JSON.stringify(value, null, 2)), "utf8");
+        writeFileSync(join(dir, rel), JSON.stringify(redactDeep(value), null, 2), "utf8");
     };
     mkdirSync(dir, { recursive: true });
     write("assurance.json", assurance);

@@ -1,9 +1,12 @@
+import { ADAPTER_VERSION } from "../core/versions.js";
 import { VISUAL_SURFACE } from "../surface/capabilities.js";
 import { importDriver } from "./driverLoader.js";
+import { mergeNativeDialogs, recordNativeDialog, } from "./nativeDialog.js";
 import { perceiveAcrossNavigation } from "./navigationRetry.js";
 import { PERCEPTION_SCRIPT } from "./perceptionScript.js";
 export class SeleniumAdapter {
     name = "selenium";
+    version = ADAPTER_VERSION;
     capabilities = VISUAL_SURFACE;
     driver = null;
     origin = null;
@@ -30,7 +33,11 @@ export class SeleniumAdapter {
      * system-installed Chrome) entirely.
      */
     constructor(options = {}) {
-        this.options = { headless: options.headless ?? true, settleMs: options.settleMs ?? 400 };
+        this.options = {
+            headless: options.headless ?? true,
+            settleMs: options.settleMs ?? 400,
+            nativeDialogAction: options.nativeDialogAction ?? "dismiss",
+        };
         this.browserName = options.browser ?? "chrome";
         this.launchArgs = options.args ?? [];
         this.chromeBinaryPath = options.chromeBinaryPath;
@@ -82,10 +89,16 @@ export class SeleniumAdapter {
         const driver = this.requireDriver();
         const dialogs = [];
         // Native alerts block script execution in Selenium: drain them first.
+        // Record-then-dismiss safe default (P0.2) — never auto-accept unless
+        // `nativeDialogAction: "accept"` was explicitly opted into.
         try {
             const alert = await driver.switchTo().alert();
-            dialogs.push({ text: await alert.getText(), box: null });
-            await alert.accept();
+            recordNativeDialog(dialogs, await alert.getText(), this.options.nativeDialogAction);
+            const autoHandled = dialogs.at(-1).autoHandled;
+            if (autoHandled === "accepted")
+                await alert.accept();
+            else
+                await alert.dismiss();
         }
         catch {
             /* no alert open */
@@ -104,7 +117,7 @@ export class SeleniumAdapter {
         // line as `return`, so ASI never applies.
         const snap = await perceiveAcrossNavigation(() => driver.executeScript(`return (${PERCEPTION_SCRIPT})`), sleep);
         if (dialogs.length > 0)
-            snap.dialogs = [...snap.dialogs, ...dialogs];
+            snap.dialogs = mergeNativeDialogs(snap.dialogs, dialogs);
         return snap;
     }
     async screenshot() {

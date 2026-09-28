@@ -12,11 +12,13 @@
  * ├── statistics.json    — per-arm stats + paired comparisons
  * ├── findings.json
  * ├── evidence/          — evidence.jsonl (every record, digested)
- * └── verdict.json       — verdict with claim boundaries
+ * ├── verdict.json       — verdict with claim boundaries
+ * └── report.html        — offline single-file report rendered from the bundle
  */
 import type { ExperimentResult } from "./runner.js";
 import type { EvalSpec } from "./spec.js";
-export declare const GENESIS_VERSION = "0.2.0";
+export declare const GENESIS_VERSION = "0.3.0";
+export declare const BUNDLE_DIGEST_VERSION = 2;
 export interface Manifest {
     readonly genesis_version: string;
     readonly created_at: string;
@@ -32,7 +34,17 @@ export declare function buildManifest(spec: EvalSpec, result: ExperimentResult, 
     ledgerEntry?: string | null;
     repoPath?: string;
 }): Manifest;
-export declare function writeEvidenceBundle(dir: string, spec: EvalSpec, result: ExperimentResult, manifest: Manifest): void;
+export declare function writeEvidenceBundle(dir: string, spec: EvalSpec, result: ExperimentResult, manifest: Manifest, options?: {
+    allowRawAnalysis?: boolean;
+}): void;
+/** Verify an unsigned bundle: recompute v2 tree digest (+ legacy) and compare. */
+export declare function verifyEvidenceBundle(dir: string): {
+    readonly ok: boolean;
+    readonly digest: string;
+    readonly legacyDigest: string;
+    readonly expected: string;
+    readonly legacyExpected: string | null;
+};
 export declare function readEvidenceBundle(dir: string): {
     verdict: unknown;
     manifest: unknown;
@@ -46,5 +58,7 @@ export declare function readEvidenceBundle(dir: string): {
  * <dir>/trust.json       (combined TRUSTED | UNTRUSTED | INCONCLUSIVE)
  * <dir>/gate.json        (release-gate decision, when `genesis gate` ran)
  */
-export declare function writeTrustBundle(dir: string, spec: EvalSpec, result: ExperimentResult, manifest: Manifest, assurance: unknown, trust: unknown, gate?: unknown): void;
+export declare function writeTrustBundle(dir: string, spec: EvalSpec, result: ExperimentResult, manifest: Manifest, assurance: unknown, trust: unknown, gate?: unknown, options?: {
+    allowRawAnalysis?: boolean;
+}): void;
 //# sourceMappingURL=bundle.d.ts.map
