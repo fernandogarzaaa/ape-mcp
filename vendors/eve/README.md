@@ -89,6 +89,13 @@ Three principles make it a simulation rather than automation:
 - **Mobile web** — real device emulation with genuine touch actuation (fat-
   finger tap scatter, swipe momentum, soft-keyboard cadence and occlusion),
   not just a resized viewport. See [docs/mobile-web.md](docs/mobile-web.md).
+- **Calibration substrate** — first-class experience traces with genuine
+  terminal states, stable task ids, recorded choice sets, canonical
+  human/EVE/agent state identity, a read-only parameter registry, and
+  deterministic trajectory alignment — the infrastructure for future
+  human calibration, not a claim of it. See
+  [docs/architecture.md](docs/architecture.md) and
+  [docs/human-calibration.md](docs/human-calibration.md).
 - **MCP server evaluation** — EVE speaks MCP natively (it *is* an MCP
   server), so it can evaluate other MCP servers: personas operate them
   through the session loop (`eve run "mcp:node server.js"`), and a
@@ -237,7 +244,7 @@ See the [Integration Guide](docs/integrations.md) for per-platform config
 | [Product Intelligence (Phase 3)](docs/product-intelligence.md) | Infer personas, workflows, business goals, feature importance, friction, and drop-off causes |
 | [Continuous UX Regression (Phase 3)](docs/continuous-regression.md) | Trend experience across builds; catch UX regressions functional tests miss |
 | [Application Map (Phase 3)](docs/application-map.md) | Autonomous exploration → screens, nav graph (Mermaid), IA, hubs, dead-ends |
-| [Predictive UX (Phase 3)](docs/predictive-ux.md) | Predict abandonment / confusion / support / a11y issues with confidence intervals |
+| [Predictive UX (Phase 3)](docs/predictive-ux.md) | Heuristic simulation estimates (abandonment / confusion / support / a11y) with explicit provenance — not population inference |
 | [Digital Twins (Phase 3)](docs/digital-twins.md) | Persistent, named user models that evolve (expertise, confidence, memory) across sessions |
 | [Human Validation (Phase 3)](docs/human-calibration.md) | Calibrate EVE against anonymized human traces; a 0–100 realism similarity score |
 | [Multimodal Perception (Phase 3)](docs/multimodal-perception.md) | Recognize icons, charts, loading, toasts, motion; flag unlabeled visuals |
@@ -255,7 +262,6 @@ See the [Integration Guide](docs/integrations.md) for per-platform config
 | [API Reference](docs/api-reference.md) | Public surface |
 | [API Stability](docs/api-stability.md) | What you can build on: stable, provisional, and experimental tiers |
 | [Examples](docs/examples.md) | Runnable examples and CI recipes |
-| [Continuous review](docs/continuous-review.md) | Automated code review on every PR, and why it does not depend on a third-party bot |
 | [Roadmap](ROADMAP.md) | Where this is going |
 | [Contributing](CONTRIBUTING.md) | How to help |
 | [Security](SECURITY.md) | Reporting a vulnerability; what EVE executes |

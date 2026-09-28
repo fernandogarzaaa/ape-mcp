@@ -15,6 +15,12 @@
  * Every write goes through `#append`. There is no other path — the
  * choke-point discipline `adam-governance` documents and v1 lacked.
  */
+/**
+ * True when the optional better-sqlite3 dependency is installed and its
+ * native binding loads. Ledger-backed tests and CLI paths use this to
+ * degrade gracefully instead of failing at module load.
+ */
+export declare function isLedgerAvailable(): boolean;
 /** An assurance audit of a verifier, or a recorded evaluation/benchmark run. */
 export type EntryType = "VERIFIER_AUDITED" | "EVALUATION_RECORDED" | "BENCHMARK_RECORDED";
 export interface LedgerEntry {

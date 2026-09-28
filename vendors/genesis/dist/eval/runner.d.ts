@@ -18,6 +18,12 @@ export interface ArmResult {
     readonly evidence: EvidenceRecord[];
     readonly metrics: MetricValue[];
     readonly statistics: (StatisticalResult | null)[];
+    /** Inter-rater agreement when the evaluator reports it (human + second rater). */
+    readonly evaluator_agreement?: {
+        readonly cohen_kappa: number | null;
+        readonly n: number;
+        readonly interpretation: string | null;
+    } | null;
 }
 export interface ExperimentResult {
     readonly name: string;
@@ -34,4 +40,24 @@ export declare function runExperiment(spec: EvalSpec, options?: {
     stdinData?: string;
     runner?: Runner;
 }): Promise<ExperimentResult>;
+/** Legacy alias (kept for external callers): size-bounded output. */
+export declare function redactUnknown(v: unknown): unknown;
+/** Fail-closed execution gate: any error/timeout/nonzero exit is failed. */
+export declare function isFailedExecution(out: {
+    readonly error: string | null;
+    readonly timed_out: boolean;
+    readonly exit_code: number | null;
+}): boolean;
+/**
+ * Size-bounded output carrier. Strings/JSON above the cap become a valid
+ * envelope {truncated, excerpt, byte_count, digest} instead of `[object
+ * Object]` (old JSON.parse(slice) fallback) — evidence is preserved and the
+ * full content stays addressable by digest.
+ */
+export declare function truncateOutput(v: unknown): unknown;
+/**
+ * Recursively drop `undefined` (canonical JSON rejects it — stringify would
+ * silently drop those fields and produce colliding digests). Keeps nulls.
+ */
+export declare function stripUndefined<T>(v: T): T;
 //# sourceMappingURL=runner.d.ts.map
