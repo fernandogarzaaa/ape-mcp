@@ -105,7 +105,7 @@ function applyCors(req, res) {
 export const MCP_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MCP_SESSION_HEADER = "mcp-session-id";
 export const MCP_SESSION_NOT_FOUND = -32001;
-const mcpSessions = new Map(); // id -> { createdAt, lastSeen }
+const mcpSessions = new Map(); // id -> { createdAt, lastSeen, clientInfo }
 export function sweepSessions(nowMs = Date.now()) {
   let swept = 0;
   for (const [id, s] of mcpSessions) {
@@ -188,10 +188,10 @@ function takeSession(req) {
   s.lastSeen = Date.now();
   return { id, ...s };
 }
-function newSession() {
+function newSession(clientInfo = null) {
   const id = randomUUID();
   const now = Date.now();
-  mcpSessions.set(id, { createdAt: now, lastSeen: now });
+  mcpSessions.set(id, { createdAt: now, lastSeen: now, clientInfo });
   return id;
 }
 
@@ -203,7 +203,7 @@ function mcpOk(id, result) {
   return { jsonrpc: "2.0", id, result };
 }
 
-async function handleMcpMessage(msg) {
+async function handleMcpMessage(msg, session = null) {
   if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
     return { response: mcpError(msg?.id, -32600, "invalid request") };
   }
@@ -219,13 +219,15 @@ async function handleMcpMessage(msg) {
         // supported, pin on unknown. Real clients (e.g. capped at 2025-11-25)
         // fail closed to dead fallback transports when handed a version they
         // cannot accept — so the pin must never be unconditional.
+        // The client-declared identity is retained on the session for the
+        // claim identity fallback (claimant = clientInfo.name + session hash).
         const result = {
           protocolVersion: negotiateProtocolVersion(params?.protocolVersion),
           capabilities: discover().capabilities,
           serverInfo: { name: "ape-mcp", version: "1.0.0" },
         };
         if (isNotif) return { notification: true };
-        return { response: mcpOk(id, result), newSession: true };
+        return { response: mcpOk(id, result), newSession: true, clientInfo: params?.clientInfo ?? null };
       }
       case "ping": {
         if (isNotif) return { notification: true };
@@ -243,7 +245,9 @@ async function handleMcpMessage(msg) {
       }
       case "tools/call": {
         if (isNotif) return { notification: true };
-        const out = await dispatchCall(params?.name, params?.arguments ?? {});
+        // The session retains the client's declared identity from
+        // initialize, so claim resolution can fall back to it.
+        const out = await dispatchCall(params?.name, params?.arguments ?? {}, { clientInfo: session?.clientInfo ?? null, sessionId: session?.id ?? null });
         if (out?.resultType === "input_required") {
           const reqs = out.inputRequests ?? [];
           return {
@@ -334,16 +338,17 @@ async function handleMcpPost(req, res) {
   let newSessionId = null;
   for (const msg of batch) {
     const needsSession = !(msg && typeof msg === "object" && !Array.isArray(msg) && msg.method === "initialize");
+    let session = null;
     if (needsSession) {
-      const session = takeSession(req);
+      session = takeSession(req);
       if (!session) {
         responses.push(mcpError(msg?.id, MCP_SESSION_NOT_FOUND, "session-not-found: initialize first and send mcp-session-id"));
         continue;
       }
     }
-    const handled = await handleMcpMessage(msg);
+    const handled = await handleMcpMessage(msg, session);
     if (handled.newSession) {
-      newSessionId = newSession();
+      newSessionId = newSession(handled.clientInfo);
     }
     if (handled.response) responses.push(handled.response);
   }

@@ -91,6 +91,14 @@ function open() {
       ensureColumn("profile_hash", "profile_hash TEXT");
       ensureColumn("env_hash", "env_hash TEXT");
       ensureColumn("parent_run_id", "parent_run_id TEXT");
+      // Phase 1 (stateful protocol): run claims. claimant is the operator
+      // identity holding a live run (explicit --claim-as / APE_CLAIM_AS /
+      // clientInfo fallback); claimed_at is when the claim was taken or
+      // refreshed. resumed_from_step records the checkpoint step the latest
+      // resume restarted from (resume is in-place; NULL when never resumed).
+      ensureColumn("claimant", "claimant TEXT");
+      ensureColumn("claimed_at", "claimed_at TEXT");
+      ensureColumn("resumed_from_step", "resumed_from_step INTEGER");
       handle.exec("CREATE INDEX IF NOT EXISTS idx_runs_family ON runs(outcome_family)");
       // Variant deprecation: marks a family's outcome variant as dead with a reason.
       handle.exec(`CREATE TABLE IF NOT EXISTS deprecated_variants (
@@ -163,7 +171,15 @@ export function getRun(runId) {
   const run = d.prepare("SELECT * FROM runs WHERE run_id = ?").get(runId);
   if (!run) return { run_id: runId, status: "not_found", outcome_status: "not_found" };
   const steps = d.prepare("SELECT * FROM steps WHERE run_id = ? ORDER BY step").all(runId);
-  return { ...run, steps, outcome_status: outcomeStatus(run) };
+  return {
+    ...run,
+    steps,
+    outcome_status: outcomeStatus(run),
+    // Resume lineage: resume is in-place (same run_id), so the chain is the
+    // count plus the step the latest resume restarted from.
+    resume_count: run.resumes ?? 0,
+    resumed_from: run.resumed_from_step ?? null,
+  };
 }
 
 // Lifecycle vs outcome: status says whether the run is over; outcome_status
@@ -213,6 +229,82 @@ export function updateRun(runId, patch) {
   if (!keys.length) return;
   const cols = keys.map((k) => `${k} = ?`).join(", ");
   d.prepare(`UPDATE runs SET ${cols} WHERE run_id = ?`).run(...keys.map((k) => patch[k]), runId);
+}
+
+// Run claims (stateful protocol, phase 1): ownership without accounts.
+// - Live run held by someone else -> claim_conflict (409-class); only the
+//   holder (or nobody, when unclaimed) may drive it.
+// - Unclaimed run -> claim granted.
+// - Terminal run (done/stopped/failed) -> claim is advisory: anyone may take
+//   it (previous holder reported), because nothing is being driven.
+// Claims never bypass admission ceilings; they only gate cancel/resume.
+export function claimRun(runId, claimant) {
+  const d = open();
+  const run = d.prepare("SELECT run_id, status, claimant FROM runs WHERE run_id = ?").get(runId);
+  if (!run) return { error: "run_not_found", run_id: runId };
+  const now = new Date().toISOString();
+  if (run.claimant && run.claimant !== claimant && run.status === "running") {
+    return {
+      error: "claim_conflict", status: 409, run_id: runId, holder: run.claimant,
+      hint: "this live run is claimed by another operator; ask the holder to release it, or re-run with the holder's --claim-as name",
+    };
+  }
+  const previous = run.claimant && run.claimant !== claimant ? run.claimant : null;
+  const advisory = run.status !== "running";
+  d.prepare("UPDATE runs SET claimant = ?, claimed_at = ? WHERE run_id = ?").run(claimant, now, runId);
+  return { run_id: runId, claimant, claimed_at: now, advisory, previous_holder: previous };
+}
+
+// Release requires the holder's identity. Unclaimed -> no-op success.
+// (Terminal-run handoff goes through claimRun's advisory overwrite, not release.)
+export function releaseRun(runId, claimant) {
+  const d = open();
+  const run = d.prepare("SELECT run_id, status, claimant FROM runs WHERE run_id = ?").get(runId);
+  if (!run) return { error: "run_not_found", run_id: runId };
+  if (!run.claimant) return { run_id: runId, released: false, note: "run is not claimed" };
+  if (run.claimant !== claimant) {
+    return { error: "not_claim_holder", status: 403, run_id: runId, holder: run.claimant, hint: "only the holder can release a claim" };
+  }
+  d.prepare("UPDATE runs SET claimant = NULL, claimed_at = NULL WHERE run_id = ?").run(runId);
+  return { run_id: runId, released: true, previous_holder: claimant };
+}
+
+// Filtered run discovery for cross-client handoff: any client holding a
+// run_id (or ape://runs/<id> URI) can find runs it did not start.
+// updated_at is derived: finished_at for terminal runs, otherwise the last
+// recorded step timestamp, otherwise started_at.
+export function queryRuns({ status, profile, parent_run_id, limit = 20 } = {}) {
+  const d = open();
+  const lim = Math.min(Math.max(Number(limit) || 20, 1), 100);
+  const conds = [];
+  const params = [];
+  if (status) { conds.push("runs.status = ?"); params.push(status); }
+  if (profile) { conds.push("runs.profile = ?"); params.push(profile); }
+  if (parent_run_id) { conds.push("runs.parent_run_id = ?"); params.push(parent_run_id); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  return d.prepare(`SELECT runs.run_id, runs.profile, runs.status, runs.stop_reason, runs.unverified,
+      runs.step_count, runs.total_cost, runs.started_at, runs.finished_at,
+      runs.parent_run_id, runs.claimant, runs.claimed_at, runs.resumes,
+      COALESCE(runs.finished_at,
+        (SELECT MAX(ts) FROM steps WHERE steps.run_id = runs.run_id),
+        runs.started_at) AS updated_at
+    FROM runs ${where} ORDER BY runs.started_at DESC LIMIT ?`)
+    .all(...params, lim)
+    .map((r) => ({
+      run_id: r.run_id,
+      uri: `ape://runs/${r.run_id}`,
+      profile: r.profile,
+      status: r.status,
+      outcome_status: outcomeStatus(r),
+      started_at: r.started_at,
+      updated_at: r.updated_at,
+      claimant: r.claimant ?? null,
+      claimed_at: r.claimed_at ?? null,
+      step_count: r.step_count ?? 0,
+      cost_usd: r.total_cost ?? 0,
+      parent_run_id: r.parent_run_id ?? null,
+      resume_count: r.resumes ?? 0,
+    }));
 }
 
 // Dedup lookup, fail-closed: a prior run is reusable ONLY when ALL hold —
