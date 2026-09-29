@@ -4,6 +4,7 @@
 // no streaming or push notifications in v1. Maps 1:1 onto the run ledger, so
 // every A2A task is a fully audited APE run.
 import { agentMethod } from "../server.js";
+import { APE_VERSION } from "../version.js";
 import { listProfiles, describeProfile } from "./profiles.js";
 import { outcomeStatus } from "../runs.js";
 
@@ -21,7 +22,7 @@ export function agentCard(baseUrl) {
   return {
     name: "ape-mcp",
     description: "APE: hybrid-native agent runtime. Send a message to start an agent run; poll the task for steps, cost, and outcome.",
-    version: "1.0.0",
+    version: APE_VERSION,
     url: baseUrl,
     capabilities: { streaming: false, pushNotifications: false },
     defaultInputModes: ["text"],

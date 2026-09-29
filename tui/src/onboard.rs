@@ -4,9 +4,12 @@
 //!
 //! ```text
 //! Doctor --enter--> Provider --enter--> Profile --enter--> Demo --done--> Done
-//!    ^                  ^                  ^   (Esc goes back anywhere safe)
-//!    └────── LoadDoctor    └─ LoadStatus    └─ LoadProfiles + SaveDefault
+//!   ^ (Esc)            ^ (Esc)            ^ (Esc)    ^ (Esc cancels watch)
+//!   └─ welcome      └─ Doctor          └─ Provider   └─ menu (run continues)
 //! ```
+//! Esc always goes back somewhere safe; no step is a trap. A failed demo
+//! returns to Profile so the user can retry instead of being stuck.
+use super::input::Key;
 
 /// One parsed `ape-mcp doctor` line.
 #[derive(Debug, Clone, PartialEq)]
@@ -175,54 +178,82 @@ impl Onboard {
         }
     }
 
-    /// Key handling. Returns (effects, finished-entire-flow).
-    pub fn on_key(&mut self, c: char) -> (Vec<Effect>, bool) {
+    /// Key handling. Returns (effects, flow).
+    /// Arrows are primary; `j`/`k` are secondary aliases on the profile pick.
+    pub fn on_key(&mut self, key: Key) -> (Vec<Effect>, Flow) {
         match self.step {
-            Step::Doctor => match c {
-                '\r' => {
+            Step::Doctor => match key {
+                Key::Enter => {
                     self.step = Step::Provider;
-                    (self.effects(), false)
+                    (self.effects(), Flow::Stay)
                 }
-                _ => (vec![], false),
+                Key::Esc => (vec![], Flow::ToWelcome),
+                _ => (vec![], Flow::Stay),
             },
-            Step::Provider => match c {
-                '\r' => {
+            Step::Provider => match key {
+                Key::Enter => {
                     self.step = Step::Profile;
-                    (self.effects(), false)
+                    (self.effects(), Flow::Stay)
                 }
-                _ => (vec![], false),
+                Key::Esc => {
+                    self.step = Step::Doctor;
+                    (vec![], Flow::Stay)
+                }
+                _ => (vec![], Flow::Stay),
             },
-            Step::Profile => match c {
-                'k' if self.selected > 0 => {
+            Step::Profile => match key {
+                Key::Up | Key::Char('k') if self.selected > 0 => {
                     self.selected -= 1;
-                    (vec![], false)
+                    (vec![], Flow::Stay)
                 }
-                'j' if self.selected + 1 < self.profiles.len() => {
+                Key::Down | Key::Char('j') if self.selected + 1 < self.profiles.len() => {
                     self.selected += 1;
-                    (vec![], false)
+                    (vec![], Flow::Stay)
                 }
-                '\r' => {
+                Key::Enter => {
                     if let Some((name, _)) = self.profiles.get(self.selected).cloned() {
                         self.step = Step::Demo;
                         let mut fx = vec![Effect::SaveDefault(name)];
                         fx.extend(self.effects());
-                        (fx, false)
+                        (fx, Flow::Stay)
                     } else {
-                        (vec![], false)
+                        (vec![], Flow::Stay)
                     }
                 }
-                _ => (vec![], false),
-            },
-            Step::Demo => match (&self.demo, c) {
-                (DemoState::Finished { .. }, '\r') => {
-                    self.step = Step::Done;
-                    (vec![Effect::Complete], true)
+                Key::Esc => {
+                    self.step = Step::Provider;
+                    (vec![], Flow::Stay)
                 }
-                _ => (vec![], false),
+                _ => (vec![], Flow::Stay),
             },
-            Step::Done => (vec![], true),
+            Step::Demo => match (&self.demo, key) {
+                (DemoState::Finished { .. }, Key::Enter | Key::Esc) => {
+                    self.step = Step::Done;
+                    (vec![Effect::Complete], Flow::Done)
+                }
+                // Esc stops watching; the run keeps going server-side and the
+                // main loop deletes the throwaway demo profile (already loaded).
+                (DemoState::Polling { .. }, Key::Esc) => (vec![], Flow::ToMenu),
+                // A failed demo is recoverable: back to Profile to retry.
+                (DemoState::Failed(_), Key::Enter | Key::Esc) => {
+                    self.step = Step::Profile;
+                    (vec![], Flow::Stay)
+                }
+                _ => (vec![], Flow::Stay),
+            },
+            Step::Done => (vec![], Flow::Done),
         }
     }
+}
+
+/// Where the flow goes after a keypress. `ToWelcome`/`ToMenu` unwind the
+/// whole onboarding stack; the main loop owns that transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Stay,
+    Done,
+    ToWelcome,
+    ToMenu,
 }
 
 impl Default for Onboard {
@@ -273,10 +304,70 @@ mod tests {
         assert_eq!(o.effects(), vec![Effect::LoadDoctor]);
         o.apply_doctor("ok    x\n");
         assert_eq!(o.effects(), vec![]);
-        let (fx, done) = o.on_key('\r');
-        assert!(!done);
+        let (fx, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Stay);
         assert_eq!(o.step, Step::Provider);
         assert_eq!(fx, vec![Effect::LoadStatus]);
+    }
+
+    #[test]
+    fn esc_walks_back_to_welcome() {
+        let mut o = Onboard::new();
+        let (_, flow) = o.on_key(Key::Esc);
+        assert_eq!(flow, Flow::ToWelcome);
+        o.step = Step::Provider;
+        let (_, flow) = o.on_key(Key::Esc);
+        assert_eq!(flow, Flow::Stay);
+        assert_eq!(o.step, Step::Doctor);
+        o.step = Step::Profile;
+        let (_, flow) = o.on_key(Key::Esc);
+        assert_eq!(o.step, Step::Provider);
+        assert_eq!(flow, Flow::Stay);
+    }
+
+    #[test]
+    fn arrows_move_profile_selection() {
+        let mut o = Onboard::new();
+        o.step = Step::Profile;
+        o.profiles = vec![("a".into(), "".into()), ("b".into(), "".into())];
+        o.on_key(Key::Down);
+        assert_eq!(o.selected, 1);
+        o.on_key(Key::Down);
+        assert_eq!(o.selected, 1, "clamps at the end");
+        o.on_key(Key::Up);
+        assert_eq!(o.selected, 0);
+        o.on_key(Key::Char('j'));
+        assert_eq!(o.selected, 1, "vim alias still works");
+    }
+
+    #[test]
+    fn esc_during_polling_exits_to_menu() {
+        let mut o = Onboard::new();
+        o.step = Step::Demo;
+        o.demo = DemoState::Polling { run_id: "r".to_string() };
+        let (_, flow) = o.on_key(Key::Esc);
+        assert_eq!(flow, Flow::ToMenu);
+        // ...but Enter while polling does nothing (no accidental finish).
+        let mut o2 = Onboard::new();
+        o2.step = Step::Demo;
+        o2.demo = DemoState::Polling { run_id: "r".to_string() };
+        let (_, flow2) = o2.on_key(Key::Enter);
+        assert_eq!(flow2, Flow::Stay);
+    }
+
+    #[test]
+    fn failed_demo_returns_to_profile() {
+        let mut o = Onboard::new();
+        o.step = Step::Demo;
+        o.demo = DemoState::Failed("boom".to_string());
+        let (_, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Stay);
+        assert_eq!(o.step, Step::Profile);
+        o.step = Step::Demo;
+        o.demo = DemoState::Failed("boom".to_string());
+        let (_, flow) = o.on_key(Key::Esc);
+        assert_eq!(o.step, Step::Profile);
+        assert_eq!(flow, Flow::Stay);
     }
 
     #[test]
@@ -285,8 +376,8 @@ mod tests {
         o.step = Step::Profile;
         o.profiles = vec![("repo-triage".to_string(), "triage".to_string())];
         o.profiles_loaded = true;
-        let (fx, done) = o.on_key('\r');
-        assert!(!done);
+        let (fx, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Stay);
         assert_eq!(o.step, Step::Demo);
         assert!(fx.contains(&Effect::SaveDefault("repo-triage".to_string())));
         assert!(fx.contains(&Effect::DemoStart));
@@ -306,14 +397,14 @@ mod tests {
         let mut o = Onboard::new();
         o.step = Step::Demo;
         o.demo = DemoState::Finished { summary: "s".to_string() };
-        let (fx, done) = o.on_key('\r');
-        assert!(done);
+        let (fx, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Done);
         assert_eq!(fx, vec![Effect::Complete]);
         // Polling demo does not finish on Enter.
         let mut o2 = Onboard::new();
         o2.step = Step::Demo;
         o2.demo = DemoState::Polling { run_id: "r".to_string() };
-        let (_, done2) = o2.on_key('\r');
-        assert!(!done2);
+        let (_, flow2) = o2.on_key(Key::Enter);
+        assert_eq!(flow2, Flow::Stay);
     }
 }

@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dispatchCall, toolsList, discover, agentMethod, resourcesList, promptsList, readResource, getPrompt, negotiateProtocolVersion } from "../src/server.js";
+import { APE_VERSION } from "../src/version.js";
 import { agentCard, handleA2A } from "../src/agent/a2a.js";
 import { taskGet } from "../src/tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "../src/auth.js";
@@ -29,6 +30,32 @@ const args = process.argv.slice(2);
   }
 }
 const [cmd, ...rest] = args;
+// Flags first: unknown flags must fail fast with usage (exit 2), never fall
+// through to the stdio server below — that fallthrough used to hang forever
+// waiting on stdin (`ape-mcp --version` was the classic victim).
+const USAGE = `ape-mcp ${APE_VERSION} — agent runtime over MCP (stdio) + operator CLI
+usage:
+  ape-mcp [--version|--help]
+  ape-mcp [console|serve [--no-open]]      browser console (default on a TTY)
+  ape-mcp --http [port]                    MCP over HTTP (default 8787)
+  ape-mcp run <tool> '<json-args>'         one tool call, JSON out
+  ape-mcp run <tool> k=v [...]            same, shell-friendly args
+  ape-mcp doctor                           environment checks, exit 1 on FAIL
+  ape-mcp templates [list|install <id>]    starter agent profiles
+  ape-mcp trace | mods                     engine state | mod policy gates
+  ape-mcp (piped stdin)                    MCP stdio server (JSON-RPC)`;
+if (cmd === "--version" || cmd === "-V" || cmd === "-v") {
+  console.log(APE_VERSION);
+  process.exit(0);
+}
+if (cmd === "--help" || cmd === "-h" || cmd === "help") {
+  console.log(USAGE);
+  process.exit(0);
+}
+if (cmd && cmd.startsWith("-") && cmd !== "--http" && cmd !== "--claim-as") {
+  console.error(`unknown flag: ${cmd}\n\n${USAGE}`);
+  process.exit(2);
+}
 // stdio is one client per process: remember its clientInfo from initialize so
 // tool calls can resolve the automatic claim identity fallback.
 let stdioClientInfo = null;
@@ -128,8 +155,18 @@ if (args.includes("--http")) {
   if (!sub || sub === "list") {
     const all = listTemplates();
     if (!all.length) console.log("no templates (profiles/templates/ is empty or missing)");
-    for (const t of all) {
-      console.log(`${t.id} — ${t.pitch || "no pitch"}${t.budget ? ` [${t.budget}]` : ""}${t.needs && t.needs !== "nothing" ? ` (needs: ${t.needs})` : ""}`);
+    else {
+      // Scannable rows: id + budget tier + one-line pitch. Pitches stay
+      // whole (they are written short); the per-line `needs` suffix was
+      // noise on every row, so it moved to the template file itself.
+      console.log("starter agent profiles — install one with: ape-mcp templates install <id>");
+      const width = Math.max(...all.map((t) => t.id.length));
+      const tierWidth = Math.max(...all.map((t) => ((t.budget || "").split(" ")[0] || "—").length));
+      for (const t of all) {
+        const tier = ((t.budget || "").split(" ")[0] || "—").padEnd(tierWidth);
+        const pitch = t.pitch && t.pitch.length > 96 ? t.pitch.slice(0, 95) + "…" : (t.pitch || "no pitch");
+        console.log(`  ${t.id.padEnd(width)}  [${tier}]  ${pitch}`);
+      }
     }
   } else if (sub === "install") {
     if (!id) {
@@ -170,7 +207,7 @@ if (args.includes("--http")) {
             // clients capped at older versions (observed: fallback to dead
             // transports after rejecting 2026-07-28).
             stdioClientInfo = params?.clientInfo ?? null;
-            result = { protocolVersion: negotiateProtocolVersion(params?.protocolVersion), capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
+            result = { protocolVersion: negotiateProtocolVersion(params?.protocolVersion), capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: APE_VERSION } };
           } else if (method === "ping") {
             result = {};
           } else if (method === "server/discover") result = discover();

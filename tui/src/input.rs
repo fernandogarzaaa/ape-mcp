@@ -1,5 +1,22 @@
 //! Single-line text editor for prompts (objective, run id, ...).
 //! Pure logic, no I/O: fully unit-tested.
+
+/// Terminal input normalized by the main loop: arrow keys are first-class
+/// citizens (Up/Down move selection, Left/Right move the editor cursor);
+/// printable characters fall through as `Char`. `j`/`k` are handled by each
+/// screen as secondary (vim-style) aliases, never the only way to move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Up,
+    Down,
+    Left,
+    Right,
+    Enter,
+    Esc,
+    Backspace,
+    Char(char),
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct LineEditor {
     chars: Vec<char>,

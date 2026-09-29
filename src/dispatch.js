@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { APE_VERSION } from "./version.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const V = (p) => join(root, "vendors", p);
@@ -82,7 +83,7 @@ export function auditDestructive(entry) {
 export const dispatch = {
   status({ organism_id = "default" } = {}) {
     return {
-      version: "1.0.0", protocol: "2026-07-28", organism_id,
+      version: APE_VERSION, protocol: "2026-07-28", organism_id,
       engines: {
         genesis: genesisEntry() ? "vendored" : "vendored-unbuilt",
         eve: eveEntry() ? "vendored" : "vendored-unbuilt",

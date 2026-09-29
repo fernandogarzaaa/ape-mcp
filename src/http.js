@@ -8,6 +8,7 @@ import { listRuns, stepsSince, maxStepId } from "./runs.js";
 import { agentCard, handleA2A } from "./agent/a2a.js";
 import { taskGet } from "./tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "./auth.js";
+import { APE_VERSION } from "./version.js";
 
 // --- Host allowlist (§14: DNS-rebinding protection) ---
 // When APE_ALLOWED_HOSTS is set (comma-separated, port-insensitive), any
@@ -224,7 +225,7 @@ async function handleMcpMessage(msg, session = null) {
         const result = {
           protocolVersion: negotiateProtocolVersion(params?.protocolVersion),
           capabilities: discover().capabilities,
-          serverInfo: { name: "ape-mcp", version: "1.0.0" },
+          serverInfo: { name: "ape-mcp", version: APE_VERSION },
         };
         if (isNotif) return { notification: true };
         return { response: mcpOk(id, result), newSession: true, clientInfo: params?.clientInfo ?? null };

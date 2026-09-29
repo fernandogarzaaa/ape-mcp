@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { APE_VERSION } from "./version.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -111,7 +112,7 @@ function makeSession(bin) {
     const id = s.nextId++;
     const timer = setTimeout(() => { teardown("timeout"); resolve(null); }, 15000);
     s.pending.set(id, { resolve: (r) => { clearTimeout(timer); resolve(r); }, tool: "initialize", timer });
-    s.send("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "ape-mcp", version: "1.0.0" } }, id);
+    s.send("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "ape-mcp", version: APE_VERSION } }, id);
   });
   return s;
 }

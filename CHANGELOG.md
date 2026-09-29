@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.3
+
+TUI usability overhaul + audit fixes.
+
+TUI (`ape`): arrow keys are primary everywhere (up/down move, left/right move
+the text cursor; j/k kept as aliases), GHOST ASCII banner, every footer now
+shows the real bindings. Bug fixes: `q` quits from the menu, Esc goes back on
+every onboarding step, failed demos return to the profile pick instead of
+trapping, Esc stops demo/run watching (throwaway profile cleaned up), the
+editor cursor draws at its true column, stray control characters can no longer
+discard typed text, profile-list scroll resets on reload, crash paths leave
+the alternate screen. Doctor step explains non-blocking FAIL lines.
+
+CLI: `--version`/`--help` answer and exit (unknown flags exit 2) instead of
+falling through to the stdio server and hanging forever. One version source
+(`src/version.js` reads package.json): stdio + HTTP serverInfo, discover(),
+status, A2A card, and ADAM clientInfo all report the real version.
+`templates list` prints aligned id/tier/pitch rows with a header. All 31 tool
+schemas fully described; `ape_agent_import` bundle typed. Lenient argument
+handling declared as contract in docs/agent-instructions.md.
+
 ## 1.0.2
 
 Ship the `ape` terminal interface: native Rust TUI (banner, guided

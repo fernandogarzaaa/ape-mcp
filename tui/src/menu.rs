@@ -1,6 +1,6 @@
 //! Main menu + run/check flows. Pure state machine; the main loop executes
 //! [`MenuEffect`]s (subprocess calls) and feeds results back via `apply_*`.
-use super::input::LineEditor;
+use super::input::{Key, LineEditor};
 use crate::ape;
 
 pub const MENU_ITEMS: [&str; 6] = [
@@ -83,19 +83,21 @@ impl Menu {
     }
 
     /// Key handling. Returns (effects, quit_app).
-    /// Text-entry views consume printable chars into their editors.
-    pub fn on_key(&mut self, c: char) -> (Vec<MenuEffect>, bool) {
+    /// Arrows are primary; `j`/`k` are secondary aliases. Text-entry views
+    /// consume printable chars into their editors; only Esc navigates back,
+    /// so stray control characters can never discard typed text.
+    pub fn on_key(&mut self, key: Key) -> (Vec<MenuEffect>, bool) {
         match &mut self.view {
-            MenuView::Main { selected } => match c {
-                'j' => {
+            MenuView::Main { selected } => match key {
+                Key::Down | Key::Char('j') => {
                     Self::move_sel(selected, MENU_ITEMS.len(), true);
                     (vec![], false)
                 }
-                'k' => {
+                Key::Up | Key::Char('k') => {
                     Self::move_sel(selected, MENU_ITEMS.len(), false);
                     (vec![], false)
                 }
-                '\r' => match *selected {
+                Key::Enter => match *selected {
                     0 => {
                         self.view = MenuView::RunProfile { profiles: vec![], selected: 0 };
                         (vec![MenuEffect::LoadProfiles], false)
@@ -115,54 +117,64 @@ impl Menu {
                     }
                     _ => (vec![], true),
                 },
+                Key::Char('q') | Key::Char('Q') => (vec![], true),
                 _ => (vec![], false),
             },
-            MenuView::RunProfile { profiles, selected } => match c {
-                'j' => {
+            MenuView::RunProfile { profiles, selected } => match key {
+                Key::Down | Key::Char('j') => {
                     Self::move_sel(selected, profiles.len(), true);
                     (vec![], false)
                 }
-                'k' => {
+                Key::Up | Key::Char('k') => {
                     Self::move_sel(selected, profiles.len(), false);
                     (vec![], false)
                 }
-                '\r' => {
+                Key::Enter => {
                     if let Some((name, _)) = profiles.get(*selected).cloned() {
                         self.view = MenuView::RunObjective { profile: name, editor: LineEditor::new() };
                     }
                     (vec![], false)
                 }
-                _ => {
+                Key::Esc => {
                     self.view = MenuView::Main { selected: 0 };
                     (vec![], false)
                 }
+                _ => (vec![], false),
             },
-            MenuView::RunObjective { profile, editor } => match c {
-                '\r' => {
+            MenuView::RunObjective { profile, editor } => match key {
+                Key::Enter => {
                     if editor.is_empty() {
                         return (vec![], false);
                     }
                     let objective = editor.text();
                     (vec![MenuEffect::StartRun { profile: profile.clone(), objective }], false)
                 }
-                '\x08' | '\x7f' => {
+                Key::Backspace => {
                     editor.backspace();
                     (vec![], false)
                 }
-                _ if !c.is_control() => {
+                Key::Left => {
+                    editor.move_left();
+                    (vec![], false)
+                }
+                Key::Right => {
+                    editor.move_right();
+                    (vec![], false)
+                }
+                Key::Char(c) if !c.is_control() => {
                     editor.insert(c);
                     (vec![], false)
                 }
-                _ => {
+                Key::Esc => {
                     self.view = MenuView::RunProfile { profiles: self.profiles_cache.clone(), selected: 0 };
                     (vec![], false)
                 }
+                _ => (vec![], false),
             },
             MenuView::RunProgress { .. } => {
-                // Esc handled by the main loop via Nav-ish convention: any key
-                // except nothing... polling continues; Esc abandons polling and
-                // the run keeps going server-side.
-                if c == '\x1b' {
+                // Polling continues; Esc abandons watching and the run keeps
+                // going server-side.
+                if key == Key::Esc {
                     self.view = MenuView::Main { selected: 0 };
                 }
                 (vec![], false)
@@ -174,39 +186,49 @@ impl Menu {
                 self.view = MenuView::Main { selected: 0 };
                 (vec![], false)
             }
-            MenuView::ProfilesList { profiles, offset } => match c {
-                'j' => {
+            MenuView::ProfilesList { profiles, offset } => match key {
+                Key::Down | Key::Char('j') => {
                     *offset = (*offset + 1).min(profiles.len().saturating_sub(1));
                     (vec![], false)
                 }
-                'k' => {
+                Key::Up | Key::Char('k') => {
                     *offset = offset.saturating_sub(1);
                     (vec![], false)
                 }
-                _ => {
+                Key::Esc => {
                     self.view = MenuView::Main { selected: 0 };
                     (vec![], false)
                 }
+                _ => (vec![], false),
             },
-            MenuView::CheckId { editor } => match c {
-                '\r' => {
+            MenuView::CheckId { editor } => match key {
+                Key::Enter => {
                     if editor.is_empty() {
                         return (vec![], false);
                     }
                     (vec![MenuEffect::FetchStatus(editor.text())], false)
                 }
-                '\x08' | '\x7f' => {
+                Key::Backspace => {
                     editor.backspace();
                     (vec![], false)
                 }
-                _ if !c.is_control() => {
+                Key::Left => {
+                    editor.move_left();
+                    (vec![], false)
+                }
+                Key::Right => {
+                    editor.move_right();
+                    (vec![], false)
+                }
+                Key::Char(c) if !c.is_control() => {
                     editor.insert(c);
                     (vec![], false)
                 }
-                _ => {
+                Key::Esc => {
                     self.view = MenuView::Main { selected: 0 };
                     (vec![], false)
                 }
+                _ => (vec![], false),
             },
         }
     }
@@ -221,8 +243,9 @@ impl Menu {
                     .and_then(|d| p.iter().position(|(n, _)| n == &d))
                     .unwrap_or(0);
             }
-            MenuView::ProfilesList { profiles: p, .. } => {
+            MenuView::ProfilesList { profiles: p, offset } => {
                 *p = profiles;
+                *offset = 0;
             }
             _ => {}
         }
@@ -274,48 +297,94 @@ mod tests {
     #[test]
     fn main_navigation_moves_and_selects() {
         let mut m = Menu::new();
-        m.on_key('j');
+        m.on_key(Key::Down);
         assert!(matches!(m.view, MenuView::Main { selected: 1 }));
-        let (fx, quit) = m.on_key('\r');
+        m.on_key(Key::Up);
+        assert!(matches!(m.view, MenuView::Main { selected: 0 }));
+        // vim aliases still work.
+        m.on_key(Key::Char('j'));
+        assert!(matches!(m.view, MenuView::Main { selected: 1 }));
+        let (fx, quit) = m.on_key(Key::Enter);
         assert!(!quit);
         assert!(matches!(m.view, MenuView::CheckId { .. }));
         assert_eq!(fx, vec![]);
     }
 
     #[test]
+    fn q_quits_from_main() {
+        let mut m = Menu::new();
+        let (_, quit) = m.on_key(Key::Char('q'));
+        assert!(quit);
+        let mut m2 = Menu::new();
+        let (_, quit2) = m2.on_key(Key::Char('Q'));
+        assert!(quit2);
+    }
+
+    #[test]
     fn quit_entry_quits() {
         let mut m = Menu::new();
         for _ in 0..5 {
-            m.on_key('j');
+            m.on_key(Key::Char('j'));
         }
-        let (_, quit) = m.on_key('\r');
+        let (_, quit) = m.on_key(Key::Enter);
         assert!(quit);
+    }
+
+    #[test]
+    fn esc_leaves_subviews_but_q_types_in_editors() {
+        let mut m = Menu::new();
+        m.view = MenuView::CheckId { editor: LineEditor::new() };
+        m.on_key(Key::Char('q'));
+        match &m.view {
+            MenuView::CheckId { editor } => assert_eq!(editor.text(), "q"),
+            other => panic!("q must type into the editor, got {other:?}"),
+        }
+        m.on_key(Key::Esc);
+        assert!(matches!(m.view, MenuView::Main { .. }));
+    }
+
+    #[test]
+    fn stray_control_chars_keep_editor_text() {
+        let mut m = Menu::new();
+        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("do it") };
+        // A stray control char (e.g. Ctrl-S) must not nuke the typed text.
+        m.on_key(Key::Char('\x13'));
+        assert!(matches!(m.view, MenuView::RunObjective { .. }));
+        if let MenuView::RunObjective { editor, .. } = &m.view {
+            assert_eq!(editor.text(), "do it");
+        }
+    }
+
+    #[test]
+    fn profiles_reload_resets_scroll() {
+        let mut m = Menu::new();
+        m.view = MenuView::ProfilesList { profiles: vec![("a".into(), "".into())], offset: 3 };
+        m.apply_profiles(vec![("a".into(), "".into()), ("b".into(), "".into())]);
+        assert!(matches!(m.view, MenuView::ProfilesList { offset: 0, .. }));
     }
 
     #[test]
     fn run_flow_stages_profile_then_objective() {
         let mut m = Menu::new();
-        let (fx, _) = m.on_key('\r'); // Run an agent
+        let (fx, _) = m.on_key(Key::Enter); // Run an agent
         assert_eq!(fx, vec![MenuEffect::LoadProfiles]);
         m.apply_profiles(vec![("repo-triage".to_string(), "t".to_string())]);
         assert!(matches!(m.view, MenuView::RunProfile { .. }));
-        m.on_key('\r');
+        m.on_key(Key::Enter);
         assert!(matches!(m.view, MenuView::RunObjective { .. }));
         // Empty objective does not start.
-        let (fx2, _) = m.on_key('\r');
+        let (fx2, _) = m.on_key(Key::Enter);
         assert_eq!(fx2, vec![]);
-        // Esc from empty states goes back without effects.
-        let mut m2 = Menu::new();
-        m2.view = MenuView::RunProfile { profiles: vec![], selected: 0 };
-        m2.on_key('x');
-        assert!(matches!(m2.view, MenuView::Main { .. }));
+        // Esc from the objective goes back to the profile list.
+        m.on_key(Key::Esc);
+        assert!(matches!(m.view, MenuView::RunProfile { .. }));
     }
 
     #[test]
     fn objective_enter_starts_run() {
         let mut m = Menu::new();
         m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("do it") };
-        let (fx, _) = m.on_key('\r');
+        let (fx, _) = m.on_key(Key::Enter);
         assert_eq!(fx, vec![MenuEffect::StartRun { profile: "p".to_string(), objective: "do it".to_string() }]);
     }
 

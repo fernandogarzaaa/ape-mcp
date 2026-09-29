@@ -14,6 +14,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use input::{Key, LineEditor};
 use menu::{Menu, MenuEffect, MenuView};
 use onboard::{Effect as OnboardEffect, Onboard};
 use ratatui::{
@@ -64,6 +65,8 @@ fn main() {
     let force_onboard = args.iter().any(|a| a == "--onboard");
     if let Err(e) = run(force_onboard) {
         disable_raw_mode().ok();
+        // Never strand the user in the alternate screen on a crash path.
+        execute!(io::stdout(), LeaveAlternateScreen).ok();
         eprintln!("ape error: {e}");
         std::process::exit(1);
     }
@@ -98,20 +101,22 @@ fn run(force_onboard: bool) -> io::Result<()> {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     break;
                 }
-                match key.code {
-                    KeyCode::Left => handle_arrow(&mut top, false),
-                    KeyCode::Right => handle_arrow(&mut top, true),
-                    KeyCode::Enter => quit = handle_key(&mut top, &ctx, '\r', force_onboard),
-                    KeyCode::Char(c) => {
-                        quit = handle_key(&mut top, &ctx, c, force_onboard);
-                    }
-                    KeyCode::Backspace => {
-                        quit = handle_key(&mut top, &ctx, '\x08', force_onboard);
-                    }
-                    KeyCode::Esc => {
-                        quit = handle_key(&mut top, &ctx, '\x1b', force_onboard);
-                    }
-                    _ => {}
+                // Normalize once: arrows are first-class, characters pass
+                // through, everything else is ignored (never a trap).
+                let input = match key.code {
+                    KeyCode::Up => Some(Key::Up),
+                    KeyCode::Down => Some(Key::Down),
+                    KeyCode::Left => Some(Key::Left),
+                    KeyCode::Right => Some(Key::Right),
+                    KeyCode::Enter => Some(Key::Enter),
+                    KeyCode::Esc => Some(Key::Esc),
+                    KeyCode::Backspace => Some(Key::Backspace),
+                    KeyCode::Delete => Some(Key::Backspace),
+                    KeyCode::Char(c) => Some(Key::Char(c)),
+                    _ => None,
+                };
+                if let Some(k) = input {
+                    quit = handle_key(&mut top, &ctx, k, force_onboard);
                 }
             }
         }
@@ -123,25 +128,11 @@ fn run(force_onboard: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn handle_arrow(top: &mut Top, right: bool) {
-    if let Top::Menu(menu) = top {
-        match &mut menu.view {
-            MenuView::RunObjective { editor, .. } | MenuView::CheckId { editor } => {
-                if right {
-                    editor.move_right();
-                } else {
-                    editor.move_left();
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Returns true when the app should quit.
-fn handle_key(top: &mut Top, ctx: &Ctx, code: char, force_onboard: bool) -> bool {
+fn handle_key(top: &mut Top, ctx: &Ctx, key: Key, force_onboard: bool) -> bool {
+    use onboard::Flow;
     match top {
-        Top::Welcome => match welcome_input(code) {
+        Top::Welcome => match welcome_input(key) {
             Nav::Quit => true,
             Nav::Goto(Screen::Onboard) => {
                 if force_onboard || !ape::is_onboarded() {
@@ -160,17 +151,32 @@ fn handle_key(top: &mut Top, ctx: &Ctx, code: char, force_onboard: bool) -> bool
             Nav::Stay => false,
         },
         Top::Onboard(ob) => {
-            let (fx, done) = ob.on_key(code);
+            let (fx, flow) = ob.on_key(key);
             for f in fx {
                 exec_onboard_effect(ob, ctx, f);
             }
-            if done {
-                *top = Top::Menu(Menu::new());
+            match flow {
+                Flow::Stay => false,
+                Flow::Done => {
+                    *top = Top::Menu(Menu::new());
+                    false
+                }
+                Flow::ToWelcome => {
+                    *top = Top::Welcome;
+                    false
+                }
+                Flow::ToMenu => {
+                    // Stop watching a running demo: the throwaway profile was
+                    // already loaded server-side, so deleting it is safe and
+                    // avoids leaking one file per abandoned watch.
+                    ob.apply_demo_finished();
+                    *top = Top::Menu(Menu::new());
+                    false
+                }
             }
-            false
         }
         Top::Menu(menu) => {
-            let (fx, quit) = menu.on_key(code);
+            let (fx, quit) = menu.on_key(key);
             for f in fx {
                 exec_menu_effect(menu, ctx, f);
             }
@@ -374,9 +380,20 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
     let title = match ob.step {
         Step::Doctor => "Onboarding 1/4 · Doctor",
         Step::Provider => "Onboarding 2/4 · Provider",
-        Step::Profile => "Onboarding 3/4 · Default profile (j/k + Enter)",
+        Step::Profile => "Onboarding 3/4 · Default profile (↑/↓ + Enter)",
         Step::Demo => "Onboarding 4/4 · Demo run",
         Step::Done => "Onboarding complete",
+    };
+    let footer = match ob.step {
+        Step::Doctor | Step::Provider => "[Enter] continue   [Esc] back   [Ctrl-C] quit",
+        Step::Profile => "[↑/↓] move   [Enter] choose   [Esc] back",
+        Step::Demo => match &ob.demo {
+            onboard::DemoState::Polling { .. } => "[Esc] stop watching (run keeps going)",
+            onboard::DemoState::Failed(_) => "[Enter] back to profiles, pick again",
+            onboard::DemoState::Finished { .. } => "[Enter] finish",
+            onboard::DemoState::Idle => "starting…",
+        },
+        Step::Done => "",
     };
     let mut lines: Vec<Line> = vec![];
     match ob.step {
@@ -394,6 +411,16 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
                         Span::raw(format!(" {}", d.text)),
                     ]));
                 }
+                let fails = ob.doctor.iter().filter(|d| !d.ok).count();
+                if fails > 0 {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "{fails} check(s) failing — you can continue; run `ape-mcp doctor` later for details."
+                        ),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
             }
         }
         Step::Provider => {
@@ -409,7 +436,11 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
                 lines.push(Line::from(Span::styled(format!("  {name} — {desc}"), style)));
             }
             if ob.profiles.is_empty() {
-                lines.push(Line::from("loading profiles…"));
+                lines.push(Line::from(if ob.profiles_loaded {
+                    "no profiles reported — Esc goes back, Enter does nothing here."
+                } else {
+                    "loading profiles…"
+                }));
             }
         }
         Step::Demo => {
@@ -420,10 +451,15 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
                     lines.push(Line::from(format!("demo running: {run_id}")));
                     lines.push(Line::from("watching status — Esc cancels watching (the run keeps going)"));
                 }
-                Failed(e) => lines.push(Line::from(Span::styled(
-                    format!("demo failed: {e}"),
-                    Style::default().fg(Color::Red),
-                ))),
+                Failed(e) => {
+                    lines.push(Line::from(Span::styled(
+                        format!("demo failed: {e}"),
+                        Style::default().fg(Color::Red),
+                    )));
+                    lines.push(Line::from(
+                        "the demo needs a working provider — press Enter to go back and pick again.",
+                    ));
+                }
                 Finished { summary } => {
                     lines.push(Line::from(Span::styled(
                         "demo finished — you have seen the whole loop:",
@@ -442,7 +478,7 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
         chunks[0],
     );
     f.render_widget(
-        Paragraph::new("[Enter] continue   [Esc] back   [Ctrl-C] quit").alignment(Alignment::Center),
+        Paragraph::new(footer).alignment(Alignment::Center),
         chunks[1],
     );
 }
@@ -455,7 +491,7 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
         .constraints([Constraint::Min(0), Constraint::Length(3)])
         .split(area);
     let mut lines: Vec<Line> = vec![];
-    let mut footer = "[Enter] select   [q] quit";
+    let mut footer = "[Enter] select   [Esc] back   [q] quit";
     match &menu.view {
         Main { selected } => {
             for (i, item) in menu::MENU_ITEMS.iter().enumerate() {
@@ -466,7 +502,7 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
                 };
                 lines.push(Line::from(Span::styled(format!("  {item}"), style)));
             }
-            footer = "[j/k] move   [Enter] select   [q] quit";
+            footer = "[↑/↓] move   [Enter] select   [q] quit";
         }
         RunProfile { profiles, selected } => {
             lines.push(Line::from("pick a profile (Esc back):"));
@@ -478,38 +514,44 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
                 };
                 lines.push(Line::from(Span::styled(format!("  {name} — {desc}"), style)));
             }
+            if profiles.is_empty() {
+                lines.push(Line::from("loading profiles…"));
+            }
+            footer = "[↑/↓] move   [Enter] choose   [Esc] back";
         }
         RunObjective { profile, editor } => {
             lines.push(Line::from(format!("objective for {profile} (Enter runs, Esc back):")));
-            lines.push(Line::from(Span::styled(
-                format!("> {}█", editor.text()),
-                Style::default().fg(Color::Cyan),
-            )));
+            lines.push(editor_line(editor));
+            footer = "[←/→] move in text   [Enter] run   [Esc] back";
         }
         RunProgress { run_id, profile, lines: log } => {
             lines.push(Line::from(format!("run {run_id} [{profile}] — Esc stops watching (run continues):")));
             for l in log.iter() {
                 lines.push(Line::from(l.as_str()));
             }
+            footer = "[Esc] stop watching (run keeps going)";
         }
         RunDone { summary } => {
             lines.push(Line::from(Span::styled("done:", Style::default().fg(Color::Green))));
             lines.push(Line::from(summary.as_str()));
+            footer = "[any key] back to menu";
         }
         CheckId { editor } => {
             lines.push(Line::from("run id (Enter checks, Esc back):"));
-            lines.push(Line::from(format!("> {}█", editor.text())));
+            lines.push(editor_line(editor));
+            footer = "[←/→] move in text   [Enter] check   [Esc] back";
         }
         CheckShow { text } => {
             for l in text.lines().take(30) {
                 lines.push(Line::from(l.to_string()));
             }
+            footer = "[any key] back to menu";
         }
         ProfilesList { profiles, offset } => {
             for (name, desc) in profiles.iter().skip(*offset).take(20) {
                 lines.push(Line::from(format!("  {name} — {desc}")));
             }
-            footer = "[j/k] scroll   [any] back";
+            footer = "[↑/↓] scroll   [Esc] back";
         }
         DoctorShow { text } => {
             for l in text.lines().take(30) {
@@ -520,10 +562,12 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
                 };
                 lines.push(Line::from(Span::styled(l.to_string(), style)));
             }
+            footer = "[any key] back to menu";
         }
         ConsoleInfo => {
             lines.push(Line::from("browser console: run `ape-mcp serve` in another terminal,"));
             lines.push(Line::from("then open the printed URL (Live Trace, Runs, Ledger)."));
+            footer = "[any key] back to menu";
         }
     }
     f.render_widget(
@@ -531,4 +575,26 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
         chunks[0],
     );
     f.render_widget(Paragraph::new(footer).alignment(Alignment::Center), chunks[1]);
+}
+
+/// Text-entry line with the cursor block drawn at the real cursor column
+/// (char-safe split), so ←/→ movement is visible instead of implied.
+fn editor_line(editor: &LineEditor) -> Line<'static> {
+    let col = editor.cursor();
+    let mut before = String::new();
+    let mut after = String::new();
+    for (i, c) in editor.text().chars().enumerate() {
+        if i < col {
+            before.push(c);
+        } else {
+            after.push(c);
+        }
+    }
+    let style = Style::default().fg(Color::Cyan);
+    Line::from(vec![
+        Span::raw("> "),
+        Span::styled(before, style),
+        Span::styled("█", style.add_modifier(Modifier::BOLD)),
+        Span::styled(after, style),
+    ])
 }

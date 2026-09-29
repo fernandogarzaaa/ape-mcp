@@ -72,7 +72,8 @@ test("background task runs to done with result", async () => {
     if (t.status === "done" || t.status === "failed") break;
   }
   assert.equal(t.status, "done");
-  assert.equal(t.result.structuredContent.result.version, "1.0.0");
+  const wantVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+  assert.equal(t.result.structuredContent.result.version, wantVersion);
 });
 test("task_start rejects unknown tools (no nesting)", async () => {
   const r = await dispatchCall("ape_task_start", { tool: "nope_x" });

@@ -26,6 +26,14 @@ object normally — e.g. `{"profile": "repo-triage", "objective": "..."}` — an
 handles the rest. If you get `profile_not_found` but the profile is listed, the args
 shape was not parsed; retry once with the same object.
 
+Argument handling is **lenient by design, not lax by accident**: optional arguments
+fall back to documented defaults (`top_k` → 5, `kind` → `episodic`, `window` → 20),
+wrong-typed scalars are coerced where the meaning is unambiguous, and missing
+*required* arguments produce a named error (`profile_not_found`, `run_not_found`,
+`invalid_bundle`, …) — never a silent default that changes what the call means.
+Fuzz harnesses will observe coercion; that is the contract, and this paragraph is
+its documentation.
+
 ## Tool inventory (what to call, when)
 
 | Task | Tool |
