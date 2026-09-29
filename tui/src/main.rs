@@ -290,7 +290,7 @@ fn exec_onboard_effect(ob: &mut Onboard, ctx: &Ctx, fx: OnboardEffect) {
             }
         },
         // Polling and completion are driven by drive_effects / on_key.
-        DemoPoll(_) | DemoFinish { .. } | Complete => {}
+        Complete => {}
     }
 }
 
@@ -336,7 +336,6 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
                 }
             }
         }
-        PollRun(_) => {} // drive_effects polls
         FetchStatus(run_id) => {
             match ctx.tool("ape_agent_status", &format!(r#"{{"run_id":{run_id:?}}}"#)) {
                 Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
@@ -356,10 +355,6 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
     }
 }
 
-/// Profiles helper shared by onboard + menu (same envelope shape).
-fn profiles_from_input(result: &serde_json::Value) -> Vec<(String, String)> {
-    onboard::profile_list(result)
-}
 
 fn render(top: &Top, f: &mut Frame) {
     match top {
@@ -420,7 +415,7 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
         Step::Demo => {
             use onboard::DemoState::*;
             match &ob.demo {
-                Idle | Starting => lines.push(Line::from("starting demo run…")),
+                Idle => lines.push(Line::from("starting demo run…")),
                 Polling { run_id } => {
                     lines.push(Line::from(format!("demo running: {run_id}")));
                     lines.push(Line::from("watching status — Esc cancels watching (the run keeps going)"));

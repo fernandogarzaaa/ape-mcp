@@ -84,15 +84,12 @@ pub enum Effect {
     LoadProfiles,
     SaveDefault(String),
     DemoStart,
-    DemoPoll(String),
-    DemoFinish { run_id: String },
     Complete,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DemoState {
     Idle,
-    Starting,
     Polling { run_id: String },
     Failed(String),
     Finished { summary: String },

@@ -1,6 +1,7 @@
 //! Main menu + run/check flows. Pure state machine; the main loop executes
 //! [`MenuEffect`]s (subprocess calls) and feeds results back via `apply_*`.
 use super::input::LineEditor;
+use crate::ape;
 
 pub const MENU_ITEMS: [&str; 6] = [
     "Run an agent",
@@ -30,7 +31,6 @@ pub enum MenuEffect {
     LoadProfiles,
     LoadDoctor,
     StartRun { profile: String, objective: String },
-    PollRun(String),
     FetchStatus(String),
 }
 
@@ -216,7 +216,10 @@ impl Menu {
         match &mut self.view {
             MenuView::RunProfile { profiles: p, selected } => {
                 *p = profiles;
-                *selected = 0;
+                // Preselect the onboarded default so repeat runs are one Enter.
+                *selected = ape::load_default_profile()
+                    .and_then(|d| p.iter().position(|(n, _)| n == &d))
+                    .unwrap_or(0);
             }
             MenuView::ProfilesList { profiles: p, .. } => {
                 *p = profiles;

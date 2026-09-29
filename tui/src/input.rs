@@ -11,6 +11,9 @@ impl LineEditor {
         Self::default()
     }
 
+    /// Prefilled editor. Only exercised by tests today; kept as the obvious
+    /// constructor for pre-filled prompts (retained deliberately).
+    #[allow(dead_code)]
     pub fn with_text(s: &str) -> Self {
         let chars: Vec<char> = s.chars().collect();
         let cursor = chars.len();
@@ -47,13 +50,11 @@ impl LineEditor {
         self.chars.is_empty()
     }
 
+    /// Cursor column (chars, not bytes). Test-covered; render uses it once
+    /// positional cursor drawing lands.
+    #[allow(dead_code)]
     pub fn cursor(&self) -> usize {
         self.cursor
-    }
-
-    pub fn clear(&mut self) {
-        self.chars.clear();
-        self.cursor = 0;
     }
 }
 

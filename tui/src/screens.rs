@@ -12,15 +12,15 @@ use ratatui::{
 pub const BANNER: &str = include_str!("../assets/ape.txt");
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[allow(dead_code)] // Welcome/Menu are navigation vocabulary for future flows.
 pub enum Screen {
     Welcome,
-    /// Milestone 2: onboarding gallery + guided demo.
     Onboard,
-    /// Milestone 2: main menu.
     Menu,
 }
 
 #[derive(Debug, PartialEq)]
+#[allow(dead_code)] // Stay is the explicit do-nothing transition.
 pub enum Nav {
     Stay,
     Quit,
