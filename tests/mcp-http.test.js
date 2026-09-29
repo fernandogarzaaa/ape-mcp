@@ -160,6 +160,18 @@ test("mcp: tool-level errors stay tool-level (isError), transport errors stay tr
   assert.equal(transportErr.json.error.code, -32601, "unknown method is a transport error");
 });
 
+test("mcp: tools/call on a missing tool is a transport error (-32602), not a result", async () => {
+  const { sid } = await initSession();
+  const r = await post(
+    { jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "nope_tool", arguments: {} } },
+    { headers: { "mcp-session-id": sid } }
+  );
+  assert.equal(r.status, 200, "transport fine");
+  assert.ok(!("result" in r.json), "no success-shaped result");
+  assert.equal(r.json.error.code, -32602, "invalid params: unknown tool");
+  assert.match(r.json.error.message, /unknown_tool: nope_tool/);
+});
+
 test("mcp: resources and prompts round-trip", async () => {
   const { sid } = await initSession();
   const h = { headers: { "mcp-session-id": sid } };

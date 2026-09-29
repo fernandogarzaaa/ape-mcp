@@ -452,9 +452,14 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         result = await (await import("./connectors.js")).runConnectorOperation(conn, op, a.input ?? {}, { ...ctx, confirm: a.confirm === true });
         break;
       }
-      default: result = { error: "unknown_tool", name };
+      default: throw Object.assign(new Error(`unknown_tool: ${name}`), { code: -32602 });
     }
   } catch (e) {
+    // A coded throw from the switch above (unknown tool) is a protocol-level
+    // rejection, not a handler failure: let it reach the transport, which
+    // maps numeric codes to JSON-RPC errors. Everything else becomes an
+    // honest handler_failed envelope (tool-level, isError).
+    if (typeof e?.code === "number") throw e;
     result = { error: "handler_failed", message: String(e).slice(0, 300) };
   }
   for (const m of mods) { try { if (m.hooks?.postCall) result = (await m.hooks.postCall(name, a, result, ctx)) ?? result; } catch { /* mods never break core */ } }

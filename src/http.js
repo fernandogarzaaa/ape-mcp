@@ -296,7 +296,11 @@ async function handleMcpMessage(msg, session = null) {
     }
   } catch (e) {
     if (isNotif) return { notification: true };
-    return { response: mcpError(id, -32603, String(e?.message ?? e)) };
+    // Coded throws (unknown tool -32602, unknown prompt -32602, ...) are
+    // protocol errors with their own codes; only truly unexpected failures
+    // become -32603 internal errors.
+    const code = typeof e?.code === "number" ? e.code : -32603;
+    return { response: mcpError(id, code, String(e?.message ?? e).slice(0, 300)) };
   }
 }
 

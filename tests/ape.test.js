@@ -34,9 +34,12 @@ test("destructive evolve requires confirm (MRTR)", async () => {
   assert.equal(r.resultType, "input_required");
   assert.ok(r.requestState);
 });
-test("unknown tooldutifully reported", async () => {
-  const r = await dispatchCall("nope_x", {});
-  assert.equal(r.structuredContent.result.error, "unknown_tool");
+test("unknown tool throws a coded protocol error (transport maps to JSON-RPC)", async () => {
+  await assert.rejects(dispatchCall("nope_x", {}), (e) => {
+    assert.equal(e.code, -32602);
+    assert.match(e.message, /unknown_tool: nope_x/);
+    return true;
+  });
 });
 test("well-known doc advertises local-open by default", () => {
   const d = protectedResourceDoc("127.0.0.1:1");

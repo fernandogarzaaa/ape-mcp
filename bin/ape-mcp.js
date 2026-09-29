@@ -124,7 +124,14 @@ if (args.includes("--http")) {
       else if (v === "false") a[k] = false;
     }
   }
-  const out = await dispatchCall(tool, a, { headlessBypass: rest.includes("--yes") });
+  let out;
+  try {
+    out = await dispatchCall(tool, a, { headlessBypass: rest.includes("--yes") });
+  } catch (e) {
+    // Unknown tool is a CLI error (exit 1, stderr), not a crash dump.
+    console.error(`error: ${e?.message ?? e}`);
+    process.exit(1);
+  }
   console.log(JSON.stringify(out, null, 2));
 } else if (cmd === "doctor") {
   const { egressHosts } = await import("../src/agent/providers.js");

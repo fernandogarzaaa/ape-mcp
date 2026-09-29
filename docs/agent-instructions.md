@@ -34,6 +34,12 @@ wrong-typed scalars are coerced where the meaning is unambiguous, and missing
 Fuzz harnesses will observe coercion; that is the contract, and this paragraph is
 its documentation.
 
+Two error levels, do not confuse them: a *known* tool that fails returns a result
+with `isError` and a named error (`connector_not_found`, `run_not_found`, …) —
+read the name and adapt. An *unknown* tool name is a transport error (JSON-RPC
+-32602 `unknown_tool: <name>`), which means the tool does not exist: check
+`ape_agent_profiles` / `tools/list` for the real inventory instead of retrying.
+
 ## Tool inventory (what to call, when)
 
 | Task | Tool |

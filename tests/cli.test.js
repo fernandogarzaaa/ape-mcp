@@ -49,6 +49,22 @@ test("cli: stdio initialize reports the package version", () => {
   assert.equal(msg.result.serverInfo.version, pkg.version);
 });
 
+test("cli: stdio tools/call on a missing tool is a JSON-RPC error, not a result", () => {
+  const req = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "nope_x", arguments: {} } }) + "\n";
+  const r = spawnSync("node", [bin], { input: req, encoding: "utf8", timeout: 15000 });
+  assert.equal(r.status, 0, "transport itself is fine");
+  const msg = JSON.parse(r.stdout.trim().split("\n").find(Boolean));
+  assert.ok(!("result" in msg), "no success-shaped result");
+  assert.equal(msg.error.code, -32602);
+  assert.match(msg.error.message, /unknown_tool: nope_x/);
+});
+
+test("cli: run with a missing tool exits 1 with the name on stderr", () => {
+  const r = spawnSync("node", [bin, "run", "nope_x", "{}"], { encoding: "utf8", timeout: 15000 });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /unknown_tool: nope_x/);
+});
+
 test("cli: templates list is header + scannable id/tier/pitch rows", () => {
   const out = execFileSync("node", [bin, "templates", "list"], { encoding: "utf8", timeout: 15000, env: { ...process.env } });
   const lines = out.trim().split("\n");

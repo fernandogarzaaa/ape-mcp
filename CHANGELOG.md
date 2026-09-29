@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Protocol fix: `tools/call` for a nonexistent tool now returns JSON-RPC error
+-32602 (`unknown_tool: <name>`) on both transports instead of a
+success-shaped result envelope. `dispatchCall` throws the coded error (same
+convention as unknown prompts/methods); stdio already mapped codes, the HTTP
+catch now preserves them too (also fixes `prompts/get` misses reporting as
+-32603). `ape-mcp run <missing>` exits 1 with the name on stderr. Tool-level
+failures (bad connector, missing run, …) are unchanged: still `isError`
+results, never transport errors.
+
 ## 1.0.3
 
 TUI usability overhaul + audit fixes.
