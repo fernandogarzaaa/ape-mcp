@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — `ape` visual terminal interface (Rust TUI)
+
+### Native TUI frontend (no runtime changes)
+- New first-party crate `tui/` (`ape-tui`, ratatui + crossterm): ASCII banner,
+  guided onboarding (doctor → provider → default profile → mock demo run with
+  real receipt), and menu (run with live polling, check, profiles, doctor,
+  console info). Frontend only — every action shells out to `bin/ape-mcp.js`.
+- New `ape` bin alias (`bin/ape.js` shim): bare TTY boots the TUI
+  (prebuilt → cargo fallback → clear error); with arguments it forwards
+  verbatim to `ape-mcp`; piped bare invocation refuses with guidance.
+- Prebuilt layout `vendors/ape-tui/<platform>/` (mirrors `adam-mcp`); user
+  config in `.ape/config.json` (default profile), onboarded marker, throwaway
+  mock demo profile (created + deleted by the flow).
+
 ## Unreleased — protocol negotiation fix (real-client interop)
 
 ### Negotiated versions (not unconditional pin)

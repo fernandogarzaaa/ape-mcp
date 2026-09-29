@@ -8,7 +8,8 @@
     "node": ">=22.5.0"
   },
   "bin": {
-    "ape-mcp": "./bin/ape-mcp.js"
+    "ape-mcp": "./bin/ape-mcp.js",
+    "ape": "./bin/ape.js"
   },
   "main": "./src/index.js",
   "files": [

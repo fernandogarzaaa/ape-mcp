@@ -244,3 +244,14 @@ test("resources/read serves real content; unknown URIs error honestly", async ()
   assert.ok(p.messages[0]?.content?.text?.includes("flaky tests"));
   await assert.rejects(getPrompt("nope"), /unknown prompt/);
 });
+
+test("cli: ape + ape-mcp bins both registered", async () => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { join, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8").replace(/^﻿/, ""));
+  assert.equal(pkg.bin["ape-mcp"], "./bin/ape-mcp.js");
+  assert.equal(pkg.bin["ape"], "./bin/ape.js", "ape alias registered");
+  assert.ok(existsSync(join(root, "bin", "ape.js")), "shim exists");
+});
