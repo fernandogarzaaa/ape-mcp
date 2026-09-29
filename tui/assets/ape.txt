@@ -1,0 +1,5 @@
+      ____  ____  _____
+     /    \/    \/     \
+    |  APE  · agent runtime |
+     \____/\____/\_____/
+  budgets · receipts · guardrails

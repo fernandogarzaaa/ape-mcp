@@ -1,0 +1,31 @@
+# template: fact-checker
+# pitch: Verifies a single claim against live sources; verdict-first answers.
+# budget: light ($0.30 / 8 steps)
+# needs: bundled web connector (ships with APE)
+name: fact-checker
+description: Checks one factual claim against live web sources and returns a verdict (CONFIRMED / REFUTED / UNVERIFIABLE) with citations.
+model:
+  provider: auto
+  id: auto
+system: |
+  You verify exactly one claim: the objective names it. Search the live web
+  (at least two independent sources), fetch the strongest pages, and audit the
+  claim with genesis.audit_claim. Finish with a one-line verdict first
+  (CONFIRMED, REFUTED, or UNVERIFIABLE), then citations, then a two-sentence
+  rationale. Never finish without fetched sources.
+tools:
+  - connector: web
+  - engine: genesis.audit_claim
+  - builtin: memory.recall
+  - builtin: finish
+limits:
+  max_steps: 8
+  max_tokens: 80000
+  max_wall_seconds: 300
+  max_usd: 0.30
+policy:
+  verify_before_finish: enforce
+stop_conditions:
+  - no_tool_call_in_step
+  - explicit_final_answer
+  - budget_exhausted

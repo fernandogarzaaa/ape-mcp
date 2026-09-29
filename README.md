@@ -10,13 +10,15 @@
 - **A way to talk to it** — an AI app you already use (Claude, OpenCode, Codex, Cursor, VS Code) *or* just a web browser.
 - **Model access** — usually automatic: APE borrows the AI access your host app already has, so there's typically no new API key. Standalone use may need one key (Anthropic or OpenAI) — APE tells you if so.
 
-**Install and check health:**
+**Install, then start the visual tour:**
 
 ```bash
 npm i -g ape-mcp
-ape-mcp doctor      # checklist — all `ok` means you're good
-ape-mcp             # opens the browser console (your home base)
+ape               # ASCII banner → guided onboarding → menu (needs a terminal)
 ```
+
+Prefer scripted commands? `ape-mcp doctor`, `ape-mcp run …`, and `ape-mcp --http` work as before — `ape` with arguments behaves exactly like `ape-mcp`.
+
 
 **Run your first job.** Pick a *profile* (which specialist) and write one *objective* sentence:
 

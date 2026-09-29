@@ -46,3 +46,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build adam-mcp from vendored source + handshake
         run: node scripts/verify-adam.mjs --build-if-missing
+  # First-party Rust TUI: unit tests on Linux; release binaries per platform
+  # ship via the tag-triggered flow (mirrors adam-binaries.yml) once cut.
+  tui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: ape-tui unit tests
+        run: cargo test --manifest-path tui/Cargo.toml

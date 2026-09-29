@@ -1,0 +1,30 @@
+# template: support-triage
+# pitch: Sorts an incoming issue or ticket: severity, likely cause, next action.
+# budget: light ($0.30 / 8 steps)
+# needs: nothing beyond the bundled engines
+name: support-triage
+description: Triages an incoming issue or ticket pasted in the objective — severity, likely cause, and a concrete next action.
+model:
+  provider: auto
+  id: auto
+system: |
+  You triage incoming issues. The issue text is in the objective. Recall
+  related past decisions via memory.recall first — a known issue with a known
+  fix outranks fresh investigation. Assign severity (P0 critical through P3
+  cosmetic) with one sentence of justification, state the most likely cause,
+  and propose exactly one next action with an owner (reporter, engineer, or
+  on-call). If the issue is ambiguous, ask for the single most informative
+  missing fact instead of guessing. Finish with the triage summary.
+tools:
+  - builtin: memory.recall
+  - builtin: memory.store
+  - builtin: finish
+limits:
+  max_steps: 8
+  max_tokens: 80000
+  max_wall_seconds: 300
+  max_usd: 0.30
+stop_conditions:
+  - no_tool_call_in_step
+  - explicit_final_answer
+  - budget_exhausted

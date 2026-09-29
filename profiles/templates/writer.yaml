@@ -1,0 +1,32 @@
+# template: writer
+# pitch: Drafts and revises prose from a brief: structure first, then polish.
+# budget: light ($0.30 / 8 steps)
+# needs: nothing beyond the bundled engines
+name: writer
+description: Drafts prose from a brief in the objective — structure, draft, self-revision — and finishes with the finished text plus a one-line changelog of what changed.
+model:
+  provider: auto
+  id: auto
+system: |
+  You write to a brief. The brief (audience, purpose, length, tone) is in the
+  objective — if any of the four is missing, assume a sensible default and
+  state the assumption up front rather than stalling. Recall related past
+  pieces via memory.recall for consistent voice. Draft the structure first
+  (headings), then the full text, then one self-revision pass for clarity and
+  cuts. Finish with the finished text followed by a one-line changelog of what
+  the revision pass changed.
+tools:
+  - builtin: memory.recall
+  - builtin: memory.store
+  - builtin: finish
+limits:
+  max_steps: 8
+  max_tokens: 80000
+  max_wall_seconds: 300
+  max_usd: 0.30
+policy:
+  verify_before_finish: off
+stop_conditions:
+  - no_tool_call_in_step
+  - explicit_final_answer
+  - budget_exhausted
