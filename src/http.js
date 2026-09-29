@@ -3,7 +3,7 @@
 // and calls startHttp({ port, host }).
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { dispatchCall, toolsList, discover, agentMethod, resourcesList, readResource, promptsList, getPrompt, PROTOCOL } from "./server.js";
+import { dispatchCall, toolsList, discover, agentMethod, resourcesList, readResource, promptsList, getPrompt, negotiateProtocolVersion } from "./server.js";
 import { listRuns, stepsSince, maxStepId } from "./runs.js";
 import { agentCard, handleA2A } from "./agent/a2a.js";
 import { taskGet } from "./tasks.js";
@@ -215,9 +215,12 @@ async function handleMcpMessage(msg) {
   try {
     switch (method) {
       case "initialize": {
-        // Pinned version (same policy as stdio): never echo the client.
+        // Negotiated version (same policy as stdio): newest mutually
+        // supported, pin on unknown. Real clients (e.g. capped at 2025-11-25)
+        // fail closed to dead fallback transports when handed a version they
+        // cannot accept — so the pin must never be unconditional.
         const result = {
-          protocolVersion: PROTOCOL,
+          protocolVersion: negotiateProtocolVersion(params?.protocolVersion),
           capabilities: discover().capabilities,
           serverInfo: { name: "ape-mcp", version: "1.0.0" },
         };

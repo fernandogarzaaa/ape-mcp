@@ -58,6 +58,20 @@ test("mcp: initialize ignores client version games", async () => {
   assert.equal(r.json.result.protocolVersion, "2026-07-28", "pin wins over client claim");
 });
 
+test("mcp: initialize negotiates down to client-supported versions", async () => {
+  const { negotiateProtocolVersion, SUPPORTED_PROTOCOL_VERSIONS } = await import("../src/server.js");
+  assert.deepEqual(SUPPORTED_PROTOCOL_VERSIONS.slice(0, 2), ["2026-07-28", "2025-11-25"]);
+  assert.equal(negotiateProtocolVersion("2025-11-25"), "2025-11-25", "client-capped version honored");
+  assert.equal(negotiateProtocolVersion("2024-11-05"), "2024-11-05");
+  assert.equal(negotiateProtocolVersion("1999-01-01"), "2026-07-28", "unknown falls back to pin");
+  assert.equal(negotiateProtocolVersion(undefined), "2026-07-28", "absent falls back to pin");
+  // Over the wire: a 2025-11-25 client (e.g. current OpenCode) gets a version
+  // it accepts instead of failing over to dead transports.
+  const r = await post({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2025-11-25" } });
+  assert.equal(r.json.result.protocolVersion, "2025-11-25");
+  assert.ok(r.headers.get("mcp-session-id"), "session still issued on negotiated version");
+});
+
 test("mcp: session enforcement — missing/unknown/expired rejected", async () => {
   const noSession = await post({ jsonrpc: "2.0", id: 3, method: "ping" }, { headers: { Authorization: "Bearer mcp-test-token", "mcp-session-id": "" } });
   // Empty header is treated as missing.

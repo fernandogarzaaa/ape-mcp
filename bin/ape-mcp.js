@@ -9,7 +9,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dispatchCall, toolsList, discover, agentMethod, resourcesList, promptsList, readResource, getPrompt, PROTOCOL } from "../src/server.js";
+import { dispatchCall, toolsList, discover, agentMethod, resourcesList, promptsList, readResource, getPrompt, negotiateProtocolVersion } from "../src/server.js";
 import { agentCard, handleA2A } from "../src/agent/a2a.js";
 import { taskGet } from "../src/tasks.js";
 import { protectedResourceDoc, checkBearer, unauthorized } from "../src/auth.js";
@@ -122,10 +122,11 @@ if (args.includes("--http")) {
         try {
           let result;
           if (method === "initialize") {
-            // Honest negotiation: the server speaks its pinned version with the
-            // dual-era wire declared in discover().transport. It does NOT echo
-            // arbitrary client versions (claiming a wire it cannot speak).
-            result = { protocolVersion: PROTOCOL, capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
+            // Negotiated version (same policy as /mcp): newest mutually
+            // supported, pin on unknown. Unconditional pins break real
+            // clients capped at older versions (observed: fallback to dead
+            // transports after rejecting 2026-07-28).
+            result = { protocolVersion: negotiateProtocolVersion(params?.protocolVersion), capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
           } else if (method === "ping") {
             result = {};
           } else if (method === "server/discover") result = discover();
