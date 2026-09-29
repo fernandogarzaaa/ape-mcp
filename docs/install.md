@@ -18,7 +18,13 @@ VSCode with one config entry.
 npm i -g ape-mcp
 ape-mcp doctor        # engine build state + every sanctioned egress host
 ape-mcp               # opens the browser console on 127.0.0.1 (auto port)
+ape                   # terminal UI (needs a terminal; same as `ape-mcp tui`)
+ape-mcp tui           # terminal UI via the operator CLI
 ```
+
+The TUI ships as a prebuilt binary for win-x64 (`vendors/ape-tui/win-x64/`);
+on macOS/Linux it builds once from source on first launch (needs a Rust
+toolchain), and CI prebuilts per platform are still open (M5 packaging).
 
 ## From source
 

@@ -17,6 +17,7 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
                   [Enter] continue   [Esc] back   [Ctrl-C] quit
+
+           provider: using opencode (opencode session) · ape-mcp 0.1.0

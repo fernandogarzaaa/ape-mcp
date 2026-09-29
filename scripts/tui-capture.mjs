@@ -13,6 +13,8 @@ const bin = join(root, "bin", "ape-mcp.js");
 const env = {
   ...process.env,
   APE_ALLOW_MOCK_INPUT: "1",
+  // Stretch the mock run so several polls land on genuine `running` frames.
+  APE_MOCK_STEP_DELAY_MS: "400",
   APE_DATA_DIR: mkdtempSync(join(tmpdir(), "ape-tui-snap-")),
   APE_MAX_CONCURRENT_RUNS: "32",
   APE_MAX_DAILY_USD: "1000000",

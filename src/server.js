@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, openSync, closeSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fork } from "node:child_process";
+import { spawn } from "node:child_process";
 import { dispatch, engineFail, eveEntry, runNode, failEve, genesisEntry } from "./dispatch.js";
 import { emitTrace, newTraceId, shaShort, dataDir } from "./trace.js";
 import { loadMods } from "./mods.js";
@@ -16,6 +16,29 @@ import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 import { APE_VERSION } from "./version.js";
 
 const runningAgents = new Map();
+
+// Worker spawn: detached with NO ipc channel and stdout/stderr to a per-run
+// log file — never inherited pipes. An inherited stdout pipe (or fork's ipc
+// channel) kept the pipe/channel open and made `ape-mcp run ape_agent_run`
+// — and any caller waiting on it, including the TUI — hang until the whole
+// run finished. Nothing uses IPC with workers, so spawn (not fork) is exact.
+// The log preserves crash diagnostics; the parent closes its copy at once
+// (no fd leak in long-lived servers). Callers keep worker_pid bookkeeping.
+function spawnWorker(runId, optsJson) {
+  const dir = join(dataDir(), "workers");
+  mkdirSync(dir, { recursive: true });
+  const logFd = openSync(join(dir, `${runId}.log`), "a");
+  try {
+    const child = spawn(process.execPath, [join(root, "src", "agent", "worker.js"), runId, optsJson], {
+      stdio: ["ignore", logFd, logFd, "ignore"],
+      detached: true,
+    });
+    child.unref();
+    return child;
+  } finally {
+    closeSync(logFd);
+  }
+}
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROTOCOL = "2026-07-28";
@@ -211,7 +234,7 @@ function resumeRun(runId, workerOpts = {}, ctx = {}) {
     claimant: caller,
     claimed_at: now,
   });
-  const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ ...workerOpts, resume: true })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
+  const worker = spawnWorker(runId, JSON.stringify({ ...workerOpts, resume: true }));
   worker.unref();
   updateRun(runId, { worker_pid: worker.pid });
   worker.on("exit", () => runningAgents.delete(runId));
@@ -338,7 +361,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         const admitted = admitRun({ profile: a.profile, model: profile.model.id, objective: a.objective, organism_id: a.organism_id ?? "default", outcome_family: familyOf(a.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()), maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4), dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25) });
         if (admitted.error) { result = admitted; break; }
         const runId = admitted.run_id;
-        const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
+        const worker = spawnWorker(runId, JSON.stringify({ mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model }));
         worker.unref();
         updateRun(runId, { worker_pid: worker.pid });
         worker.on("exit", () => runningAgents.delete(runId));
@@ -575,7 +598,7 @@ export async function agentMethod(method, params = {}) {
       const admitted = admitRun({ profile: params.profile, model: profile.model.id, objective: params.objective, organism_id: params.organism_id ?? "default", outcome_family: familyOf(params.objective), profile_hash: profileHash(profile), env_hash: envFingerprint(connectorList()), maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4), dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25) });
       if (admitted.error) return admitted;
       const runId = admitted.run_id;
-      const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
+      const worker = spawnWorker(runId, JSON.stringify({ mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model }));
       worker.unref();
       updateRun(runId, { worker_pid: worker.pid });
       worker.on("exit", () => runningAgents.delete(runId));

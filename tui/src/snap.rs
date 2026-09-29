@@ -237,6 +237,14 @@ mod snap_impl {
         let mut m = Menu::new();
         m.view = MenuView::DoctorShow { text: "ok    node>=22.5\nFAIL  vendors/adam".to_string() };
         shot("menu-doctor", 80, 24, |f| render_menu(&m, f));
+        // --- Status view (real shape, canned values).
+        let mut m = Menu::new();
+        let status: serde_json::Value = serde_json::from_str(
+            r#"{"version":"1.0.4","protocol":"2026-07-28","active_provider":{"provider":"opencode","source":"opencode session"},"engines":{"genesis":"vendored","eve":"vendored","adam":"vendored","skein":"vendored"},"detected_providers":["opencode"]}"#,
+        )
+        .unwrap();
+        m.apply_status(&status);
+        shot("menu-status", 80, 24, |f| render_menu(&m, f));
         let mut m = Menu::new();
         m.view = MenuView::ConsoleInfo;
         shot("menu-console", 80, 24, |f| render_menu(&m, f));

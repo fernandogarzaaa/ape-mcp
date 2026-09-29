@@ -4,9 +4,8 @@
 │  Profiles                                                                    │
 │  Doctor                                                                      │
 │  Console info                                                                │
+│  Status                                                                      │
 │  Quit                                                                        │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -20,3 +19,5 @@
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
                      [↑/↓] move   [Enter] select   [q] quit
+
+                    provider: … · profile: … · ape-mcp 0.1.0

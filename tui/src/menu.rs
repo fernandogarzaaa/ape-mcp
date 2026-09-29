@@ -3,12 +3,13 @@
 use super::input::{Key, LineEditor};
 use crate::ape;
 
-pub const MENU_ITEMS: [&str; 6] = [
+pub const MENU_ITEMS: [&str; 7] = [
     "Run an agent",
     "Check a run",
     "Profiles",
     "Doctor",
     "Console info",
+    "Status",
     "Quit",
 ];
 
@@ -23,6 +24,7 @@ pub enum MenuView {
     CheckShow { text: String },
     ProfilesList { profiles: Vec<(String, String)>, offset: usize },
     DoctorShow { text: String },
+    StatusShow { text: String },
     ConsoleInfo,
 }
 
@@ -30,12 +32,16 @@ pub enum MenuView {
 pub enum MenuEffect {
     LoadProfiles,
     LoadDoctor,
+    LoadStatus,
     StartRun { profile: String, objective: String },
     FetchStatus(String),
 }
 
 /// One-line human summary of an `ape_agent_status` result object.
-/// Strings render bare (no JSON quotes); other JSON renders compact.
+/// Human copy, not raw fields: `done` renders as "finished", a missing
+/// stop reason is omitted (never `stop=null`), and an empty outcome adds
+/// no trailing blank line. Strings render bare (no JSON quotes); other
+/// JSON renders compact.
 pub fn status_text(result: &serde_json::Value) -> String {
     fn show(v: Option<&serde_json::Value>) -> String {
         match v {
@@ -44,6 +50,16 @@ pub fn status_text(result: &serde_json::Value) -> String {
             Some(other) => other.to_string(),
         }
     }
+    fn human_status(s: &str) -> &str {
+        match s {
+            "done" => "finished",
+            "running" => "running",
+            "stopped" => "stopped",
+            "failed" => "failed",
+            other => other,
+        }
+    }
+    let status = result.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
     let outcome = result
         .get("outcome")
         .and_then(|o| o.as_str())
@@ -51,24 +67,94 @@ pub fn status_text(result: &serde_json::Value) -> String {
         .chars()
         .take(400)
         .collect::<String>();
-    format!(
-        "status={} stop={} steps={} cost_usd={}\n{}",
-        show(result.get("status")),
-        show(result.get("stop_reason")),
+    let mut head = format!(
+        "{} · {} steps · ${} · {} tokens",
+        human_status(status),
         show(result.get("step_count")),
         show(result.get("total_cost")),
-        outcome
-    )
+        show(result.get("total_tokens")),
+    );
+    let stop = result.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("");
+    if !stop.is_empty() {
+        head.push_str(&format!(" · stopped: {stop}"));
+    }
+    if outcome.is_empty() {
+        head
+    } else {
+        format!("{head}\n{outcome}")
+    }
+}
+
+/// Human-readable `ape_status` body: version, provider, engine build state.
+/// Missing pieces render as "?" — never raw nulls. Pure for testability.
+pub fn status_body(status: &serde_json::Value) -> String {
+    fn show(v: Option<&serde_json::Value>) -> String {
+        match v {
+            Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+            Some(other) => other.to_string(),
+            _ => "?".to_string(),
+        }
+    }
+    let version = show(status.get("version"));
+    let provider = status
+        .get("active_provider")
+        .and_then(|a| a.get("provider"))
+        .and_then(|p| p.as_str())
+        .filter(|p| *p != "none")
+        .unwrap_or("?");
+    let source = status
+        .get("active_provider")
+        .and_then(|a| a.get("source"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("unconfigured");
+    let mut lines = vec![
+        format!("ape-mcp {version}"),
+        format!("provider: {provider} ({source})"),
+    ];
+    if let Some(engines) = status.get("engines").and_then(|e| e.as_object()) {
+        let states: Vec<String> = ["genesis", "eve", "adam", "skein"]
+            .iter()
+            .map(|k| format!("{k} {}", engines.get(*k).and_then(|v| v.as_str()).unwrap_or("?")))
+            .collect();
+        lines.push(format!("engines: {}", states.join(", ")));
+    }
+    if let Some(detected) = status.get("detected_providers").and_then(|d| d.as_array()) {
+        let names: Vec<String> = detected.iter().filter_map(|d| d.as_str().map(str::to_string)).collect();
+        if !names.is_empty() {
+            lines.push(format!("detected: {}", names.join(", ")));
+        }
+    }
+    lines.join("\n")
 }
 
 pub struct Menu {
     pub view: MenuView,
     profiles_cache: Vec<(String, String)>,
+    provider_cache: Option<String>,
+    default_profile: Option<String>,
 }
 
 impl Menu {
     pub fn new() -> Self {
-        Self { view: MenuView::Main { selected: 0 }, profiles_cache: Vec::new() }
+        Self {
+            view: MenuView::Main { selected: 0 },
+            profiles_cache: Vec::new(),
+            provider_cache: None,
+            // Local state, read once: the onboarded default, if any.
+            default_profile: ape::load_default_profile(),
+        }
+    }
+
+    /// One-line chrome for the status line: provider when a Status view has
+    /// loaded it this session, default profile from local state, always
+    /// truthful about what is (not) known yet.
+    pub fn status_line(&self, version: &str) -> String {
+        format!(
+            "provider: {} · profile: {} · ape-mcp {}",
+            self.provider_cache.as_deref().unwrap_or("…"),
+            self.default_profile.as_deref().unwrap_or("…"),
+            version,
+        )
     }
 
     fn move_sel(selected: &mut usize, len: usize, down: bool) {
@@ -115,6 +201,7 @@ impl Menu {
                         self.view = MenuView::ConsoleInfo;
                         (vec![], false)
                     }
+                    5 => (vec![MenuEffect::LoadStatus], false),
                     _ => (vec![], true),
                 },
                 Key::Char('q') | Key::Char('Q') => (vec![], true),
@@ -182,6 +269,7 @@ impl Menu {
             MenuView::RunDone { .. }
             | MenuView::CheckShow { .. }
             | MenuView::DoctorShow { .. }
+            | MenuView::StatusShow { .. }
             | MenuView::ConsoleInfo => {
                 self.view = MenuView::Main { selected: 0 };
                 (vec![], false)
@@ -275,12 +363,22 @@ impl Menu {
         false
     }
 
-    pub fn apply_status(&mut self, status: &serde_json::Value) {
+    pub fn apply_check_status(&mut self, status: &serde_json::Value) {
         self.view = MenuView::CheckShow { text: status_text(status) };
     }
 
     pub fn apply_doctor(&mut self, text: String) {
         self.view = MenuView::DoctorShow { text };
+    }
+
+    pub fn apply_status(&mut self, status: &serde_json::Value) {
+        self.provider_cache = status
+            .get("active_provider")
+            .and_then(|a| a.get("provider"))
+            .and_then(|p| p.as_str())
+            .filter(|p| *p != "none")
+            .map(str::to_string);
+        self.view = MenuView::StatusShow { text: status_body(status) };
     }
 }
 
@@ -323,11 +421,39 @@ mod tests {
     #[test]
     fn quit_entry_quits() {
         let mut m = Menu::new();
-        for _ in 0..5 {
+        for _ in 0..6 {
             m.on_key(Key::Char('j'));
         }
         let (_, quit) = m.on_key(Key::Enter);
         assert!(quit);
+    }
+
+    #[test]
+    fn status_entry_loads_status_view() {
+        let mut m = Menu::new();
+        for _ in 0..5 {
+            m.on_key(Key::Down);
+        }
+        let (fx, quit) = m.on_key(Key::Enter);
+        assert!(!quit);
+        assert_eq!(fx, vec![MenuEffect::LoadStatus]);
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"version":"1.0.4","active_provider":{"provider":"opencode","source":"opencode session"},"engines":{"genesis":"vendored","eve":"vendored","adam":"vendored","skein":"vendored"},"detected_providers":["opencode"]}"#,
+        )
+        .unwrap();
+        m.apply_status(&v);
+        assert!(matches!(m.view, MenuView::StatusShow { .. }));
+        assert_eq!(m.provider_cache.as_deref(), Some("opencode"));
+        assert!(m.status_line("1.0.4").contains("provider: opencode"));
+        assert!(m.status_line("1.0.4").contains("ape-mcp 1.0.4"));
+    }
+
+    #[test]
+    fn status_body_never_shows_raw_nulls() {
+        let v: serde_json::Value = serde_json::from_str("{}").unwrap();
+        let t = status_body(&v);
+        assert!(!t.contains("null"), "got: {t}");
+        assert!(t.contains("ape-mcp ?"), "got: {t}");
     }
 
     #[test]
@@ -401,9 +527,20 @@ mod tests {
 
     #[test]
     fn status_text_shapes() {
-        let v: serde_json::Value = serde_json::from_str(r#"{"status":"done","stop_reason":"explicit_final_answer","step_count":3,"total_cost":0.02,"outcome":"fine"}"#).unwrap();
+        let v: serde_json::Value = serde_json::from_str(r#"{"status":"done","stop_reason":"explicit_final_answer","step_count":3,"total_cost":0.02,"total_tokens":120,"outcome":"fine"}"#).unwrap();
         let t = status_text(&v);
-        assert!(t.contains("status=done"));
+        assert!(t.contains("finished"), "done renders as finished, got: {t}");
+        assert!(t.contains("explicit_final_answer"));
         assert!(t.contains("fine"));
+        assert!(!t.contains("null"), "no raw nulls, got: {t}");
+    }
+
+    #[test]
+    fn status_text_omits_missing_stop_and_empty_outcome() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"status":"running","step_count":2,"total_cost":0}"#).unwrap();
+        let t = status_text(&v);
+        assert!(!t.contains("null"), "got: {t}");
+        assert!(!t.ends_with('\n'), "no trailing blank line, got: {t:?}");
+        assert!(t.contains("running"), "got: {t}");
     }
 }

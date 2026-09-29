@@ -36,6 +36,7 @@ const [cmd, ...rest] = args;
 const USAGE = `ape-mcp ${APE_VERSION} — agent runtime over MCP (stdio) + operator CLI
 usage:
   ape-mcp [--version|--help]
+  ape-mcp tui                            terminal UI (same as the ape command)
   ape-mcp [console|serve [--no-open]]      browser console (default on a TTY)
   ape-mcp --http [port]                    MCP over HTTP (default 8787)
   ape-mcp run <tool> '<json-args>'         one tool call, JSON out
@@ -91,6 +92,12 @@ if (args.includes("--http")) {
   console.log(`MCP: stdio via 'ape-mcp' | http via 'ape-mcp --http 8787'`);
   openBrowser(url);
   setInterval(() => {}, 1 << 30);
+} else if (cmd === "tui") {
+  // Thin launcher: same binary resolution as the `ape` shim (prebuilt, else
+  // one-time cargo build), with the package version passed through so the
+  // TUI status line reports the real release, not the TUI crate version.
+  const { runTui } = await import("./tui-bin.js");
+  process.exit(runTui(rest, { ...process.env, APE_TUI_VERSION: APE_VERSION }));
 } else if (cmd === "serve") {
   const noOpen = rest.includes("--no-open");
   const { port, host } = await startConsole({ port: 0 });

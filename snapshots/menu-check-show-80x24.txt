@@ -1,5 +1,5 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│status=done stop=explicit_final_answer steps=8 cost_usd=0                     │
+│finished · 8 steps · $0 · 16 tokens · stopped: explicit_final_answer          │
 │snapshot ok                                                                   │
 │[unverified: no-evidence]                                                     │
 │                                                                              │
@@ -17,6 +17,7 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
                              [any key] back to menu
+
+                    provider: … · profile: … · ape-mcp 0.1.0

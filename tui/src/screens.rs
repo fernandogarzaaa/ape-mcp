@@ -43,18 +43,16 @@ pub fn render_welcome(f: &mut Frame, version: &str) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
         .split(area);
-    let body = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            BANNER.trim_end(),
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("ape-mcp {version} · budgets · receipts · guardrails"),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
+    // One Line per art line: a single multi-line Line gets *wrapped* by
+    // ratatui instead of split, which collapsed the banner to ~1.5 lines.
+    let cyan = Style::default().fg(Color::Cyan);
+    let mut body = vec![Line::from("")];
+    body.extend(BANNER.lines().map(|l| Line::from(Span::styled(l, cyan))));
+    body.push(Line::from(""));
+    body.push(Line::from(Span::styled(
+        format!("ape-mcp {version} · budgets · receipts · guardrails"),
+        Style::default().fg(Color::DarkGray),
+    )));
     f.render_widget(
         Paragraph::new(body).alignment(Alignment::Center).block(
             Block::default()

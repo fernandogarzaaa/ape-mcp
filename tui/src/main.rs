@@ -32,7 +32,14 @@ use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION_CRATE: &str = env!("CARGO_PKG_VERSION");
+
+/// Display version: the release version passed by the `ape-mcp tui`
+/// launcher (`APE_TUI_VERSION` from package.json), falling back to the TUI
+/// crate version when launched some other way (cargo, direct binary).
+fn tui_version() -> String {
+    std::env::var("APE_TUI_VERSION").unwrap_or_else(|_| VERSION_CRATE.to_string())
+}
 
 struct Ctx {
     node_bin: String,
@@ -320,6 +327,13 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
             };
             menu.apply_doctor(text);
         }
+        LoadStatus => match ctx.tool("ape_status", "{}") {
+            Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                Some(r) => menu.apply_status(r),
+                None => menu.apply_status(&serde_json::Value::Null),
+            },
+            _ => menu.apply_status(&serde_json::Value::Null),
+        },
         StartRun { profile, objective } => {
             let args = serde_json::json!({ "profile": profile, "objective": objective }).to_string();
             match ctx.tool("ape_agent_run", &args) {
@@ -347,13 +361,13 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
         FetchStatus(run_id) => {
             match ctx.tool("ape_agent_status", &format!(r#"{{"run_id":{run_id:?}}}"#)) {
                 Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
-                    Some(r) => menu.apply_status(r),
-                    None => menu.apply_status(&serde_json::json!({
+                    Some(r) => menu.apply_check_status(r),
+                    None => menu.apply_check_status(&serde_json::json!({
                         "status": "unknown", "stop_reason": null,
                         "step_count": 0, "total_cost": 0, "outcome": "no result envelope"
                     })),
                 },
-                Err(e) => menu.apply_status(&serde_json::json!({
+                Err(e) => menu.apply_check_status(&serde_json::json!({
                     "status": "error", "stop_reason": null,
                     "step_count": 0, "total_cost": 0, "outcome": e
                 })),
@@ -366,7 +380,7 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
 
 fn render(top: &Top, f: &mut Frame) {
     match top {
-        Top::Welcome => render_welcome(f, VERSION),
+        Top::Welcome => render_welcome(f, &tui_version()),
         Top::Onboard(ob) => render_onboard(ob, f),
         Top::Menu(menu) => render_menu(menu, f),
     }
@@ -377,7 +391,7 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .constraints([Constraint::Min(0), Constraint::Length(2), Constraint::Length(2)])
         .split(area);
     let title = match ob.step {
         Step::Doctor => "Onboarding 1/4 · Doctor",
@@ -483,6 +497,16 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
         Paragraph::new(footer).alignment(Alignment::Center),
         chunks[1],
     );
+    // Status line: provider once known this session, always the real version.
+    f.render_widget(
+        Paragraph::new(format!(
+            "provider: {} · ape-mcp {}",
+            ob.provider.as_deref().unwrap_or("…"),
+            tui_version(),
+        ))
+        .alignment(Alignment::Center),
+        chunks[2],
+    );
 }
 
 fn render_menu(menu: &Menu, f: &mut Frame) {
@@ -490,7 +514,7 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .constraints([Constraint::Min(0), Constraint::Length(2), Constraint::Length(2)])
         .split(area);
     let mut lines: Vec<Line> = vec![];
     let mut footer = "[Enter] select   [Esc] back   [q] quit";
@@ -566,6 +590,12 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             }
             footer = "[any key] back to menu";
         }
+        StatusShow { text } => {
+            for l in text.lines() {
+                lines.push(Line::from(l.to_string()));
+            }
+            footer = "[any key] back to menu";
+        }
         ConsoleInfo => {
             lines.push(Line::from("browser console: run `ape-mcp serve` in another terminal,"));
             lines.push(Line::from("then open the printed URL (Live Trace, Runs, Ledger)."));
@@ -577,6 +607,10 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
         chunks[0],
     );
     f.render_widget(Paragraph::new(footer).alignment(Alignment::Center), chunks[1]);
+    f.render_widget(
+        Paragraph::new(menu.status_line(&tui_version())).alignment(Alignment::Center),
+        chunks[2],
+    );
 }
 
 /// Text-entry line with the cursor block drawn at the real cursor column

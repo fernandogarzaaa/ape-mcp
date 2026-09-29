@@ -6,7 +6,8 @@ process.env.APE_MAX_CONCURRENT_RUNS ??= "32";
 process.env.APE_MAX_DAILY_USD ??= "1000000";
 process.env.APE_ALLOW_MOCK_INPUT ??= "1";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 import { APE_VERSION } from "../src/index.js";
@@ -63,6 +64,37 @@ test("cli: run with a missing tool exits 1 with the name on stderr", () => {
   const r = spawnSync("node", [bin, "run", "nope_x", "{}"], { encoding: "utf8", timeout: 15000 });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /unknown_tool: nope_x/);
+});
+
+test("cli: run ape_agent_run returns promptly while the run is still going", () => {
+  // Regression: the start call used to hang until the whole run finished
+  // (worker held the parent's stdio/ipc). A 3s mock run must return fast.
+  const env = {
+    ...process.env,
+    APE_ALLOW_MOCK_INPUT: "1",
+    APE_MOCK_STEP_DELAY_MS: "3000",
+    APE_DATA_DIR: mkdtempSync(join(tmpdir(), "ape-start-prompt-")),
+    APE_MAX_CONCURRENT_RUNS: "32",
+    APE_MAX_DAILY_USD: "1000000",
+  };
+  const script = [
+    { tool: "skein.orchestrate", args: { op: "status" } },
+    { tool: "finish", args: { summary: "prompt" } },
+  ];
+  const t0 = Date.now();
+  const out = execFileSync(
+    "node",
+    [bin, "run", "ape_agent_run", JSON.stringify({ profile: "repo-triage", objective: "promptness", _mockScript: script })],
+    { encoding: "utf8", env, timeout: 15000 }
+  );
+  const dt = Date.now() - t0;
+  const runId = JSON.parse(out).structuredContent.result.run_id;
+  assert.ok(runId, "run started");
+  assert.ok(dt < 2500, `start returned in ${dt}ms, well before the 3s+ run ends`);
+  const st = JSON.parse(
+    execFileSync("node", [bin, "run", "ape_agent_status", JSON.stringify({ run_id: runId })], { encoding: "utf8", env, timeout: 15000 })
+  ).structuredContent.result;
+  assert.equal(st.status, "running", "run genuinely still going after prompt start");
 });
 
 test("cli: templates list is header + scannable id/tier/pitch rows", () => {

@@ -1,8 +1,8 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│ok    node>=22.5                                                              │
-│FAIL  vendors/adam                                                            │
-│                                                                              │
-│                                                                              │
+│ape-mcp 1.0.4                                                                 │
+│provider: opencode (opencode session)                                         │
+│engines: genesis vendored, eve vendored, adam vendored, skein vendored        │
+│detected: opencode                                                            │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                              [any key] back to menu
 
-                    provider: … · profile: … · ape-mcp 0.1.0
+                 provider: opencode · profile: … · ape-mcp 0.1.0

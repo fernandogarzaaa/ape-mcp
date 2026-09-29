@@ -309,6 +309,13 @@ export function clearMock(convKey) {
   mockState.delete(convKey);
 }
 async function mockChat(convKey, modelId, system, messages, tools) {
+  // Snapshot-harness aid: APE_MOCK_STEP_DELAY_MS stretches a mock run so
+  // pollers can observe genuine `running` frames. Mock is deterministic and
+  // offline-only (tests/demos); production providers never read this.
+  const delayMs = Number(process.env.APE_MOCK_STEP_DELAY_MS ?? 0);
+  if (Number.isFinite(delayMs) && delayMs > 0) {
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
   const st = mockState.get(convKey) ?? { plan: [], index: 0, costPerCall: 0 };
   const step = st.plan[st.index];
   st.index++;
