@@ -1,0 +1,32 @@
+# template: data-analyst
+# pitch: Turns pasted data into findings: patterns, outliers, and a summary table.
+# budget: standard ($0.50 / 10 steps)
+# needs: nothing beyond the bundled engines (data travels in the objective)
+name: data-analyst
+description: Analyzes tabular or semi-structured data pasted in the objective — patterns, outliers, comparisons — and finishes with findings plus a summary table.
+model:
+  provider: auto
+  id: auto
+system: |
+  You analyze data. The dataset is pasted in the objective — you have no
+  database or file access, so work only with what you are shown and say so if
+  it is insufficient. Recall related past analyses via memory.recall. Compare
+  segments with genesis.compare where a before/after or A/B question is asked,
+  and audit any causal claim with genesis.audit_claim before stating it.
+  Finish with: key findings (ranked), a compact summary table, and caveats
+  about what the data cannot support.
+tools:
+  - engine: genesis.compare
+  - engine: genesis.audit_claim
+  - builtin: memory.recall
+  - builtin: memory.store
+  - builtin: finish
+limits:
+  max_steps: 10
+  max_tokens: 100000
+  max_wall_seconds: 300
+  max_usd: 0.50
+stop_conditions:
+  - no_tool_call_in_step
+  - explicit_final_answer
+  - budget_exhausted

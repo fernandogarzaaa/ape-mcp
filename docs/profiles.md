@@ -19,6 +19,24 @@ write one objective sentence, run:
 | `planner` | Skein graph + recall, cheap budget | Strategy only: emits a task graph for executors, never executes |
 | `supervisor` | delegate + Skein graph + recall | Coordinates specialist child runs and synthesizes their receipts |
 
+## Agent templates
+
+Starter profiles for onboarding and later customization. Templates ship
+read-only in `profiles/templates/` (8 zero-config entries: researcher,
+fact-checker, reviewer, analyst, triage, writer, meeting-prep, planner);
+installing copies one into your profiles dir (`.ape/profiles/`), which you
+own outright — edit or delete freely, bundled originals never change.
+
+```bash
+ape-mcp templates list                  # id, pitch, budget, needs
+ape-mcp templates install writer        # → .ape/profiles/writer.yaml
+```
+
+Collisions rename (`writer-2`), invalid templates refuse with reasons, and
+templates mirroring a bundled profile are staleness-guarded by tests (either
+in sync or marked `forked: true`). The TUI onboarding gallery and management
+screen are built on this same registry.
+
 `planner` and `triage-lead` are structured for the delegation primitive (L2):
 small, independently checkable nodes a supervisor can later fan out.
 

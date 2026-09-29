@@ -118,6 +118,31 @@ if (args.includes("--http")) {
   const out = await dispatchCall("ape_status", {});
   console.log(JSON.stringify(out.structuredContent.result.engines, null, 2));
   console.log("trace: .ape/trace.ndjson (GET /api/trace?since=N in console)");
+} else if (cmd === "templates") {
+  const { listTemplates, installTemplate } = await import("../src/agent/templates.js");
+  const [sub, id] = rest;
+  if (!sub || sub === "list") {
+    const all = listTemplates();
+    if (!all.length) console.log("no templates (profiles/templates/ is empty or missing)");
+    for (const t of all) {
+      console.log(`${t.id} — ${t.pitch || "no pitch"}${t.budget ? ` [${t.budget}]` : ""}${t.needs && t.needs !== "nothing" ? ` (needs: ${t.needs})` : ""}`);
+    }
+  } else if (sub === "install") {
+    if (!id) {
+      console.error("usage: ape-mcp templates install <id>  (see: ape-mcp templates list)");
+      process.exit(2);
+    }
+    try {
+      const name = installTemplate(id);
+      console.log(`installed profile: ${name} (edit it freely — bundled templates never change)`);
+    } catch (e) {
+      console.error(`templates install failed: ${e.message}`);
+      process.exit(1);
+    }
+  } else {
+    console.error("usage: ape-mcp templates [list|install <id>]");
+    process.exit(2);
+  }
 } else {
     // stdio: newline-delimited JSON-RPC {id, method, params}
     let buf = "";

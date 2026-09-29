@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — agent templates for onboarding
+
+### Template gallery backend (TUI-ready)
+- 8 zero-config templates in `profiles/templates/` (researcher, fact-checker,
+  reviewer, analyst, triage, writer, meeting-prep, planner), each with pitch,
+  budget tier, and needs flags. No connector-dependent or file/shell-dependent
+  templates — everything installs working.
+- `src/agent/templates.js` registry: list/install/validate; installs copy
+  into the user profiles dir (collision-safe renames, headers preserved) and
+  refuse invalid templates with reasons. Bundled originals never change.
+- `ape-mcp templates [list|install <id>]` CLI leaf for the TUI gallery and
+  management screen to shell out to.
+- Staleness guard: templates mirroring bundled profiles must stay in sync or
+  declare `forked: true`.
+
 ## Unreleased — `ape` visual terminal interface (Rust TUI)
 
 ### Native TUI frontend (no runtime changes)
