@@ -1,4 +1,4 @@
-﻿---
+---
 name: APE
 description: Activate the unified APE stack (Genesis + EVE + ADAM + Skein) as one agentic loop. Use when user says APE, validate experience, audit verifier, orchestrate tasks, evolve memory, or persist decisions.
 ---

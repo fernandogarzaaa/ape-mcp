@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 // ape-mcp: stdio JSON-RPC 2.0 (dual-era surface: legacy method set + modern
 // server/discover; see discover().transport for the honest wire contract)
 // + --http endpoint, plus the operator CLI (serve/run/doctor/mods/trace).
