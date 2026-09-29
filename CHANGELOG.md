@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.4
 
 Protocol fix: `tools/call` for a nonexistent tool now returns JSON-RPC error
 -32602 (`unknown_tool: <name>`) on both transports instead of a
