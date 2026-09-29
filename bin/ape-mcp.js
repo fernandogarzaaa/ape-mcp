@@ -55,16 +55,20 @@ if (args.includes("--http")) {
   const started = await startHttp({ port, host: bind.host });
   console.log(`ape-mcp http on http://${started.host}:${started.port}`);
 } else if (cmd === "console" || (!cmd && process.stdin.isTTY)) {
-  const { port } = await startConsole({ port: 0 });
-  const url = `http://127.0.0.1:${port}/`;
+  const { port, host } = await startConsole({ port: 0 });
+  // Bind may be 0.0.0.0 (explicit remote-viewing switch via APE_CONSOLE_HOST);
+  // the browser still opens the loopback URL, which always works locally.
+  const dialHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  const url = `http://${dialHost}:${port}/`;
   console.log(`APE console: ${url}`);
   console.log(`MCP: stdio via 'ape-mcp' | http via 'ape-mcp --http 8787'`);
   openBrowser(url);
   setInterval(() => {}, 1 << 30);
 } else if (cmd === "serve") {
   const noOpen = rest.includes("--no-open");
-  const { port } = await startConsole({ port: 0 });
-  const url = `http://127.0.0.1:${port}/`;
+  const { port, host } = await startConsole({ port: 0 });
+  const dialHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  const url = `http://${dialHost}:${port}/`;
   console.log(url);
   if (!noOpen) openBrowser(url);
   setInterval(() => {}, 1 << 30);
