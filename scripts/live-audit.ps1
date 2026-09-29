@@ -1,4 +1,4 @@
-﻿# Live APE exercise battery â€” drives the MCP (HTTP) + console exactly like a
+# Live APE exercise battery â€” drives the MCP (HTTP) + console exactly like a
 # plugin client would. Usage: powershell -File scripts/live-audit.ps1
 # NOTE: never name a param `$args` (PowerShell automatic variable) â€” payloads go empty.
 $ErrorActionPreference = "Continue"

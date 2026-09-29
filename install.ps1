@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 # APE one-liner: iex (irm https://raw.githubusercontent.com/fernandogarzaaa/ape-mcp/main/install.ps1)
 $dst = Join-Path $HOME ".ape\src"
 if (Test-Path (Join-Path $dst ".git")) { git -C $dst pull --ff-only } else { git clone https://github.com/fernandogarzaaa/ape-mcp $dst }

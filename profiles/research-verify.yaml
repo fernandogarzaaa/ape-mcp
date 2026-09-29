@@ -1,4 +1,4 @@
-﻿name: research-verify
+name: research-verify
 description: Searches the web via the bundled web connector, fetches pages, and verifies claims with evidence before finishing.
 model:
   provider: auto

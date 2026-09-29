@@ -15,10 +15,10 @@ target
 .skein
 .fastembed_cache
 .tmp-*/
-# Repo tooling & CI (not shipped)
-.git
-.github
-scripts
+# Repo tooling & CI (not shipped) — except scripts/postinstall.mjs, which npm
+# runs on install and therefore must ship (see package.json "files").
+scripts/*
+!scripts/postinstall.mjs
 tests
 .vscode
 .idea

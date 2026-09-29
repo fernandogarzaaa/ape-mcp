@@ -1,4 +1,4 @@
-﻿name: notify-APE
+name: notify-APE
 # TEMPLATE â€” copy to: genesis, experience-validation-engine, ADAM, skein, EVE---MIRO
 # as .github/workflows/notify-APE.yml, then set REPO_NAME below per repo:
 #   genesis | eve | adam | skein

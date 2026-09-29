@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 # APE one-liner: curl -fsSL https://raw.githubusercontent.com/fernandogarzaaa/ape-mcp/main/install.sh | bash
 DST="${HOME}/.ape/src"

@@ -1,4 +1,4 @@
-﻿// Local verification for the auto-update pipeline (not run in CI).
+// Local verification for the auto-update pipeline (not run in CI).
 // Usage: node scripts/verify-updater.mjs
 import { readFileSync } from "node:fs";
 import yaml from "yaml";
