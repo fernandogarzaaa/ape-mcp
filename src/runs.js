@@ -18,7 +18,7 @@ function sleepSync(ms) {
 function isBusy(e) {
   return /busy|locked/i.test(String(e?.message ?? e?.errstr ?? e));
 }
-export function open() {
+function open() {
   if (db) return db;
   mkdirSync(dataDir(), { recursive: true });
   let lastErr = null;
@@ -63,19 +63,6 @@ export function open() {
     ts TEXT NOT NULL
   )`);
       handle.exec("CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id)");
-      // Tool-result stash (context hygiene L1): full text of truncated tool
-      // results, keyed per run + ref. The agent pages through it on demand via
-      // the context.retrieve tool; rows older than 7 days are pruned on write.
-      handle.exec(`CREATE TABLE IF NOT EXISTS tool_result_stash (
-    run_key TEXT NOT NULL,
-    ref TEXT NOT NULL,
-    tool TEXT,
-    full_text TEXT NOT NULL,
-    capped INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (run_key, ref)
-  )`);
-      handle.exec("CREATE INDEX IF NOT EXISTS idx_stash_run ON tool_result_stash(run_key)");
       // Checkpoints: serialized loop state per run for resume (one row per run, upserted).
       handle.exec(`CREATE TABLE IF NOT EXISTS checkpoints (
     run_id TEXT PRIMARY KEY,
@@ -303,6 +290,11 @@ export function runningCount() {
   return d.prepare("SELECT COUNT(*) AS n FROM runs WHERE status = 'running'").get().n;
 }
 
+// Highest step row id (stream cursors start at "now" — no replay floods).
+export function maxStepId() {
+  const d = open();
+  return d.prepare("SELECT COALESCE(MAX(id), 0) AS m FROM steps").get().m;
+}
 // Steps newer than a row id, across all runs (powers the SSE push channel).
 export function stepsSince(lastId = 0, limit = 100) {
   const d = open();

@@ -165,7 +165,6 @@ async function main() {
     profile,
     objective: req.objective,
     organism_id: req.organism_id ?? "default",
-    runId,
     onStep: (step) => appendStep(runId, step),
     onCheckpoint: (state) => saveCheckpoint(runId, state.budget?.steps ?? 0, state),
     mockScript: opts.mockScript,

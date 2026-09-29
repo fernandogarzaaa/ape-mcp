@@ -1,4 +1,4 @@
-# APE
+﻿# APE
 
 **APE is an assistant that does multi-step jobs for you** — research, triage, validation — with budgets, receipts, and guardrails built in. Technically, it's an agent that lives inside the Model Context Protocol: instead of a host model chaining thin tools one call at a time, you invoke one tool (`ape_agent_run`) and an entire reasoning loop runs inside the server.
 
@@ -13,14 +13,10 @@
 **Install and check health:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fernandogarzaaa/ape-mcp/main/install.sh | bash
-node ~/.ape/src/bin/ape-mcp.js doctor   # checklist: all `ok` means you're good
+npm i -g ape-mcp
+ape-mcp doctor      # checklist — all `ok` means you're good
+ape-mcp             # opens the browser console (your home base)
 ```
-
-> An npm release (`npm i -g ape-mcp`) is pending: the repo ships a publish
-> workflow (`.github/workflows/publish-npm.yml`) that releases to npm on
-> version tags once the trusted publisher is configured on npmjs.com. Until
-> the first release is cut, install from source as above.
 
 **Run your first job.** Pick a *profile* (which specialist) and write one *objective* sentence:
 

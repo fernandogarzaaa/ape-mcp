@@ -6,9 +6,6 @@ import { adamCall } from "../adam-client.js";
 import { connectorList } from "../connectors.js";
 import { loadProfile } from "./profiles.js";
 import { createRun, admitRun, getRun, updateRun } from "../runs.js";
-import { retrieveResult } from "./stash.js";
-import { resolveHygiene } from "./context.js";
-import { loadGlobalConfig } from "../globalConfig.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,20 +39,6 @@ export function internalTools(profile) {
       tools.push({ name: entry.connector, description: `User-defined connector ${entry.connector} (operations listed at call time).`, inputSchema: { type: "object", properties: { operation: { type: "string" }, input: { type: "object" } }, required: ["operation"] }, kind: "connector", connector: entry.connector });
     }
   }
-  // Context hygiene: when tool results are truncated to previews, the agent gets
-  // a read-only retrieval tool to page through the stashed full text. Auto-added
-  // unless disabled globally (ape.config context.retrieve: false) or per profile
-  // (policy.context.retrieve: false).
-  const hygiene = resolveHygiene({ global: loadGlobalConfig().context, profile: profile.policy?.context });
-  if (hygiene.retrieve) {
-    tools.push({
-      name: "context.retrieve",
-      description: "Read back a truncated tool result. Pass the ref from a [truncated ...] marker; results come back in bounded pages (offset_chars/limit_chars, max 8000 chars per call) so a page can never overflow the context window. Use hasMore to keep paging.",
-      inputSchema: { type: "object", properties: { ref: { type: "string" }, offset_chars: { type: "number" }, limit_chars: { type: "number" } }, required: ["ref"] },
-      kind: "context",
-      op: "retrieve",
-    });
-  }
   return tools;
 }
 
@@ -70,12 +53,6 @@ export async function invokeTool(tool, args, ctx) {
   }
   if (tool.kind === "finish") {
     return { done: true, summary: args?.summary ?? "" };
-  }
-  if (tool.kind === "context") {
-    if (tool.op === "retrieve") {
-      return retrieveResult({ runKey: ctx?.runKey, ref: args?.ref, offsetChars: args?.offset_chars, limitChars: args?.limit_chars });
-    }
-    return { error: "unknown_context_op", op: tool.op };
   }
   if (tool.kind === "delegate") {
     return await runDelegated(args ?? {}, ctx);

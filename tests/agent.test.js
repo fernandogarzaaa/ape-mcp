@@ -768,39 +768,3 @@ test("agent: stalled provider call aborts at the timeout", async () => {
     assert.ok(Date.now() - t0 < 10000, `aborted promptly (${Date.now() - t0}ms), not at the 30s connector default`);
   } finally { srv.close(); }
 });
-test("agent: context-overflow rejection triggers in-loop shrink-and-retry", async () => {
-  // Seed a fat history so the overflow recovery has turns to digest.
-  const messages = [{ role: "user", content: "Triage the reported issue." }];
-  for (let i = 0; i < 6; i++) {
-    messages.push({ role: "assistant", toolCalls: [{ name: "memory.recall" }], content: "thinking ".repeat(60) });
-    messages.push({ role: "tool", toolCallId: `t${i}`, content: "result ".repeat(400) });
-  }
-  const script = [
-    { error: "This model's maximum context length is 8192 tokens, however you requested 12000 tokens", status: 400 },
-    { tool: "finish", args: { summary: "recovered and done" } },
-  ];
-  const steps = [];
-  const res = await runAgent({
-    profile: baseProfile,
-    objective: "Triage the reported issue.",
-    initial: { messages },
-    onStep: (s) => steps.push(s),
-    mockScript: script,
-  });
-  assert.equal(res.stop_reason, "explicit_final_answer");
-  assert.ok(String(res.outcome).includes("recovered and done"), `unexpected outcome: ${res.outcome}`);
-  assert.ok((res.overflow_recoveries ?? 0) >= 1, "expected at least one overflow recovery");
-  const recStep = steps.find((s) => (s.resultSummary ?? "").includes("context overflow: shrunk history"));
-  assert.ok(recStep, "expected a ledger step recording the overflow recovery");
-});
-
-test("agent: non-overflow model errors still halt without recovery", async () => {
-  const script = [{ error: "no mock credential configured", status: 401 }];
-  const res = await runAgent({
-    profile: baseProfile,
-    objective: "Triage the reported issue.",
-    mockScript: script,
-  });
-  assert.equal(res.stop_reason, "model_error");
-  assert.ok((res.overflow_recoveries ?? 0) === 0, "no overflow recovery for non-overflow errors");
-});

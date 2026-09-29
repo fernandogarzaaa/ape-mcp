@@ -1,4 +1,4 @@
-// The reasoning loop â€” the Tool Orchestrator pattern with a real model in the loop.
+﻿// The reasoning loop â€” the Tool Orchestrator pattern with a real model in the loop.
 // The host sees one tool call (ape_agent_run); everything below is APE's implementation.
 // Tool results are untrusted data: they are framed as such before re-entering the model.
 import { makeBudget } from "./budget.js";
@@ -7,9 +7,7 @@ import { internalTools, invokeTool, isDestructiveCall, frameToolOutput } from ".
 import { isRetryable, fingerprint, lookupImmunity, recordImmunity, selectRepair, shrinkArgs } from "./recovery.js";
 import { DEFAULT_VERIFY_TOOLS } from "./profiles.js";
 import { correlateEvidence, buildEvidence } from "./evidence.js";
-import { compressHistory, estimateTokens, truncateToolOutput, resolveHygiene, isContextOverflowError, recoverFromOverflow, MAX_OVERFLOW_RECOVERIES } from "./context.js";
-import { stashResult } from "./stash.js";
-import { loadGlobalConfig } from "../globalConfig.js";
+import { compressHistory, estimateTokens } from "./context.js";
 import { shaShort, emitTrace } from "../trace.js";
 import { familyOf, sha256hex } from "./outcomes.js";
 import { frameHydration } from "./similarity.js";
@@ -46,33 +44,7 @@ function checkGrounding(steps, profile) {
   return { ok: true, reason: "agree", correlation: corr };
 }
 
-// Ingests one tool result into a framed tool message, applying the truncation
-// budget plus the durable stash when the result is over budget. The full text
-// is stashed per run key and recoverable through the context.retrieve tool.
-// Budgets resolve global (ape.config) < profile policy.context < per-tool
-// overrides. Pure except for the stash write; the caller owns counters via
-// onTruncated and supplies the run key.
-export function ingestToolResult({ runKey, globalCtx = {}, policyCtx = {}, toolName = "", toolCallId = "", res = null, onTruncated = null }) {
-  const raw = JSON.stringify(res);
-  const hygiene = resolveHygiene({ global: globalCtx, profile: policyCtx, toolName });
-  const first = truncateToolOutput(raw, { maxTokens: hygiene.maxTokens, previewTokens: hygiene.previewTokens, mode: hygiene.mode, toolName });
-  if (!first.truncated) {
-    return { message: { role: "tool", toolCallId, content: frameToolOutput(toolName, first.text) }, truncated: false, omittedTokens: 0, ref: null };
-  }
-  const stashed = stashResult({ runKey, tool: toolName, fullText: raw, maxChars: hygiene.maxStashChars });
-  const text = stashed.ref
-    ? truncateToolOutput(raw, { maxTokens: hygiene.maxTokens, previewTokens: hygiene.previewTokens, mode: hygiene.mode, ref: stashed.ref, toolName }).text
-    : first.text;
-  onTruncated?.(first.omittedTokens);
-  return {
-    message: { role: "tool", toolCallId, content: frameToolOutput(toolName, text) },
-    truncated: true,
-    ref: stashed.ref,
-    omittedTokens: first.omittedTokens,
-  };
-}
-
-export async function runAgent({ profile, objective, organism_id = "default", onStep, onCheckpoint, mockScript, mockCostPerCall = 0, resolvedModel, resolvedChain = null, routing = null, initial = null, initialContext = null, depth = 0, parentRunId = null, runId = null }) {
+export async function runAgent({ profile, objective, organism_id = "default", onStep, onCheckpoint, mockScript, mockCostPerCall = 0, resolvedModel, resolvedChain = null, routing = null, initial = null, initialContext = null, depth = 0, parentRunId = null }) {
   const budget = makeBudget(profile.limits);
   // Resume: seed budget counters from the checkpoint so numbering and ceilings continue.
   if (initial?.budget) {
@@ -96,9 +68,6 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     ? [...initial.messages]
     : [...(initialContext ? [{ role: "user", content: frameHydration(initialContext) }] : []), { role: "user", content: String(objective) }];
   const convKey = `run-${organism_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  // Stable stash key for truncated tool results: the ledger run id when the loop
-  // runs inside a worker (survives resume), else the per-invocation convKey.
-  const runKey = runId ?? convKey;
   const providerCfgs = resolvedChain?.length ? resolvedChain : [modelCfg, ...(!resolvedModel && profile.model.fallback ? [profile.model.fallback] : [])];
   const chainHasMock = providerCfgs.some((p) => p.provider === "mock");
 
@@ -120,8 +89,6 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   let repeatCount = initial?.repeatCount ?? 0;
   let compressions = initial?.compressions ?? 0;
   let tokensSavedEstimate = initial?.tokensSavedEstimate ?? 0;
-  let truncations = initial?.truncations ?? 0;
-  let overflowRecoveries = initial?.overflowRecoveries ?? 0;
   const driftState = initial?.driftState ?? initDrift();
   // Evidence artifacts: full verifier results for the grounding gate (the gate
   // consumes these, never the truncated ledger summaries). Restored on resume
@@ -136,7 +103,6 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     organism_id,
     depth,
     parentRunId,
-    runKey,
     maxDelegateDepth: profile.limits?.max_delegate_depth ?? 2,
     budget: {
       stepsLeft: (profile.limits?.max_steps ?? 0) - budget.steps,
@@ -166,17 +132,6 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   };
 
   if (chainHasMock) mockPlan(convKey, mockScript ?? [], mockCostPerCall);
-
-  // Context hygiene: per-run config layers for the ingest helper below.
-  const globalCtx = loadGlobalConfig().context;
-  const policyCtx = profile.policy?.context;
-  const ingest = (toolName, toolCallId, res) => ingestToolResult({
-    runKey, globalCtx, policyCtx, toolName, toolCallId, res,
-    onTruncated: (omitted) => { truncations++; tokensSavedEstimate += Math.max(0, omitted); },
-  });
-  // Short ledger tag so the run record shows what was truncated and where the
-  // full text lives.
-  const truncTag = (ingested) => ingested.truncated ? `trunc:${ingested.ref ?? "nostash"}:~${ingested.omittedTokens}t ` : "";
 
   // --- Parallel fan-out: independent calls in one turn run concurrently. ---
   // Shared executor for the recovery path (repair selection with immunity
@@ -245,11 +200,10 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       const prefix = attempts > 1 ? `retry:${attempts}:${repairs.map((r) => r.repair).join("+")}:` : "";
       repairLog.push(...repairs);
       delegationLog.push(...delegations);
-      const ingested = ingest(tc.name, tc.id, res);
-      const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs, tokens: 0, cost: 0, parallel: true, resultSummary: truncTag(ingested) + prefix + JSON.stringify(res).slice(0, 200) };
+      const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs, tokens: 0, cost: 0, parallel: true, resultSummary: prefix + JSON.stringify(res).slice(0, 200) };
       collectEvidence(toolStep, res);
       record(toolStep);
-      messages.push(ingested.message);
+      messages.push({ role: "tool", toolCallId: tc.id, content: frameToolOutput(tc.name, JSON.stringify(res).slice(0, 8000)) });
     }
     const post = budget.check();
     if (post.exhausted) { stopReason = post.reason; }
@@ -283,7 +237,6 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       // run instead of spending past the cap.
       let resp = null;
       let lastErr = null;
-      let overflowErr = null;
       let cappedSkips = 0;
       const modelT0 = Date.now();
       // Wall-time abort: a stalled provider call cannot outlive the run.
@@ -301,13 +254,7 @@ export async function runAgent({ profile, objective, organism_id = "default", on
           usedResolution = p.resolution ?? null;
           fallbackUsed = fallbackUsed || pi > 0;
           break;
-        } catch (e) {
-          lastErr = e;
-          // A context-overflow rejection will hit every provider in the chain
-          // the same way (same messages), so remember it and stop trying
-          // further providers: the recovery below shrinks and retries instead.
-          if (isContextOverflowError(e)) { overflowErr = e; break; }
-        }
+        } catch (e) { lastErr = e; }
       }
       const modelDur = Date.now() - modelT0;
       if (!resp) {
@@ -316,22 +263,6 @@ export async function runAgent({ profile, objective, organism_id = "default", on
           outcome = `halted: provider spend caps reached (${Object.entries(spendByProvider).map(([k, v]) => `${k}=$${Number(v).toFixed(4)}`).join(", ") || "no spend yet"})`;
           record({ step: budget.steps + 1, kind: "model", tool: null, durationMs: 0, tokens: 0, cost: 0, resultSummary: outcome });
           break;
-        }
-        // Context-overflow recovery: the provider rejected the message set
-        // as too long. Shrink aggressively and retry the model call inside
-        // the loop (bounded: each recovery at least halves the estimate).
-        // When nothing more can be digested, halt honestly.
-        if (overflowErr && overflowRecoveries < MAX_OVERFLOW_RECOVERIES) {
-          const rec = recoverFromOverflow(messages);
-          if (rec) {
-            overflowRecoveries++;
-            tokensSavedEstimate += rec.savedTokens ?? 0;
-            messages.length = 0;
-            messages.push(...rec.messages);
-            record({ step: budget.steps + 1, kind: "model", tool: null, durationMs: modelDur, tokens: 0, cost: 0, resultSummary: `context overflow: shrunk history ${rec.before}->${rec.after} tokens (${rec.compressed} turns digested), retrying model call (recovery ${overflowRecoveries}/${MAX_OVERFLOW_RECOVERIES})` });
-            emitTrace("context_overflow_recovery", { before: rec.before, after: rec.after, recovery: overflowRecoveries });
-            continue;
-          }
         }
         stopReason = "model_error";
         outcome = { error: String(lastErr?.message ?? lastErr ?? "model call failed").slice(0, 400) };
@@ -427,13 +358,12 @@ const toolCalls = resp.toolCalls ?? [];
           break;
         }
         let res;
-        let toolStep = null;
         const t0 = Date.now();
         if (!tool) {
           // Hallucinated tool name â€” recorded, not invisible. This is the ledger
           // signal for unverified-claim / hallucination metrics.
           res = { error: "unknown_tool", name: tc.name };
-          toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "unknown_tool" };
+          record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "unknown_tool" });
         } else if (isDestructiveCall(tool, tc.args ?? {})) {
           // Destructive calls never run silently inside a loop. Default policy denies;
           // allowed profiles are capped per run; every attempt hits the audit stream.
@@ -444,12 +374,12 @@ const toolCalls = resp.toolCalls ?? [];
             res = { error: "destructive_not_allowed", tool: tc.name, hint: "this profile denies unattended destructive calls; finish with a proposal for the user to confirm instead" };
             const audit = auditDestructive({ ...auditEntry, verdict: "denied" });
             emitTrace({ tool: "agent.destructive", argsHash: auditEntry.argsHash, resultSummary: `denied:${tc.name}` });
-            toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:denied" + (audit.persisted ? "" : ":audit-degraded") };
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:denied" + (audit.persisted ? "" : ":audit-degraded") });
           } else if (destructiveUsed >= maxD) {
             res = { error: "destructive_cap_reached", tool: tc.name, hint: `this run already used ${destructiveUsed}/${maxD} destructive calls` };
             const audit = auditDestructive({ ...auditEntry, verdict: "cap-reached" });
             emitTrace({ tool: "agent.destructive", argsHash: auditEntry.argsHash, resultSummary: `cap-reached:${tc.name}` });
-            toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:cap-reached" + (audit.persisted ? "" : ":audit-degraded") };
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:cap-reached" + (audit.persisted ? "" : ":audit-degraded") });
           } else {
             destructiveUsed++;
             const audit = auditDestructive({ ...auditEntry, verdict: "executed", destructiveUsed });
@@ -460,7 +390,7 @@ const toolCalls = resp.toolCalls ?? [];
             // the audit write fails, the result says so explicitly.
             if (!audit.persisted && res && typeof res === "object") res.audit_status = "degraded";
             const dur = Date.now() - t0;
-            toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: dur, tokens: 0, cost: 0, resultSummary: "destructive:executed:" + (audit.persisted ? "" : "audit-degraded:") + JSON.stringify(res).slice(0, 160) };
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: dur, tokens: 0, cost: 0, resultSummary: "destructive:executed:" + (audit.persisted ? "" : "audit-degraded:") + JSON.stringify(res).slice(0, 160) });
           }
         } else {
           // Shared with parallel fan-out (runSimpleCall above): bounded recovery
@@ -470,19 +400,12 @@ const toolCalls = resp.toolCalls ?? [];
           repairLog.push(...simple.repairs);
           delegationLog.push(...simple.delegations);
           const prefix = simple.attempts > 1 ? `retry:${simple.attempts}:${simple.repairs.map((r) => r.repair).join("+")}:` : "";
-          toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: simple.durationMs, tokens: 0, cost: 0, resultSummary: prefix + JSON.stringify(res).slice(0, 200) };
+          const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: simple.durationMs, tokens: 0, cost: 0, resultSummary: prefix + JSON.stringify(res).slice(0, 200) };
           collectEvidence(toolStep, res);
-        }
-        // Frame tool output as untrusted data before it re-enters the model;
-        // ingestToolResult applies the truncation budget + stash when needed.
-        // Single record point: the ledger tag is applied before the step is
-        // recorded, so the ledger, onStep consumers, and the model all agree.
-        const ingested = ingest(tc.name, tc.id, res);
-        if (toolStep) {
-          toolStep.resultSummary = truncTag(ingested) + toolStep.resultSummary;
           record(toolStep);
         }
-        messages.push(ingested.message);
+        // Frame tool output as untrusted data before it re-enters the model.
+        messages.push({ role: "tool", toolCallId: tc.id, content: frameToolOutput(tc.name, JSON.stringify(res).slice(0, 8000)) });
         const post = budget.check();
         if (post.exhausted) { stopReason = post.reason; break; }
         // Drift check per tool call: advisory continues, error spiral halts.
@@ -495,7 +418,7 @@ const toolCalls = resp.toolCalls ?? [];
       try {
         onCheckpoint?.({
           messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd },
-          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, truncations, overflowRecoveries, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider, repairLog, delegationLog,
+          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider, repairLog, delegationLog,
         });
       } catch { /* checkpointing never breaks the loop */ }
     }
@@ -523,9 +446,7 @@ const toolCalls = resp.toolCalls ?? [];
     total_cost: budget.usd,
     duration_ms: Date.now() - startedAt,
     compressions,
-    overflow_recoveries: overflowRecoveries,
     tokens_saved_estimate: tokensSavedEstimate,
-    tool_truncations: truncations,
     destructive_used: destructiveUsed,
     receipt: {
       profile: profile.name,
@@ -540,9 +461,7 @@ const toolCalls = resp.toolCalls ?? [];
       spend_by_provider: spendByProvider,
       duration_ms: Date.now() - startedAt,
       compressions,
-      overflow_recoveries: overflowRecoveries,
       tokens_saved_estimate: tokensSavedEstimate,
-      tool_truncations: truncations,
       destructive_used: destructiveUsed,
       parallel_fanouts: parallelFanouts,
       fallback_used: fallbackUsed,

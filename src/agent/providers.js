@@ -312,13 +312,6 @@ async function mockChat(convKey, modelId, system, messages, tools) {
   const st = mockState.get(convKey) ?? { plan: [], index: 0, costPerCall: 0 };
   const step = st.plan[st.index];
   st.index++;
-  // Test-only error injection: a script step { error: "message", status?: n }
-  // throws like a failing provider, for recovery-path tests.
-  if (step && typeof step.error === "string") {
-    const err = new Error(step.error);
-    if (step.status !== undefined) err.status = step.status;
-    throw err;
-  }
   if (!step || step.final !== undefined) {
     return { content: step?.final ?? "Done.", toolCalls: [], stop: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } };
   }
