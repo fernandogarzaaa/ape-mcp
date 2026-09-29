@@ -10,7 +10,7 @@ import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
 import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
-import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns } from "./runs.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns, exportRun, importRun } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
@@ -53,6 +53,8 @@ export const TOOL_DEFS = [
   { name: "ape_agent_list", description: "List agent runs with filters; the discovery primitive for cross-client handoff (returns run URIs + claim state)", inputSchema: { type: "object", properties: { status: { type: "string", description: "filter: running|done|stopped|failed" }, profile: { type: "string" }, parent_run_id: { type: "string" }, limit: { type: "number", description: "max rows, default 20, cap 100" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_claim", description: "Claim a run for this operator. Conflicts (409-class) when a live run is held by someone else; advisory (takeover allowed) on terminal runs", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, claimant: { type: "string", description: "explicit operator identity (else APE_CLAIM_AS, else client identity)" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_agent_release", description: "Release your claim on a run; only the holder can release", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, claimant: { type: "string", description: "explicit operator identity (else APE_CLAIM_AS, else client identity)" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: true } },
+  { name: "ape_agent_export", description: "Export a run's full ledger slice (run row, steps, checkpoint, receipt) as a versioned, unsigned JSON bundle — the portable resume / offline-share artifact", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" } }, required: ["run_id"] }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_agent_import", description: "Import an ape_agent_export bundle as a NEW run with lineage linked (parent_run_id + resumes chain); plants the checkpoint so ape_agent_resume works on it", inputSchema: { type: "object", properties: { bundle: { description: "bundle object (or JSON string) from ape_agent_export" } }, required: ["bundle"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_agent_analyze", description: "Analyze a profile's recent runs and propose concrete profile edits (harness evolution from trajectories)", inputSchema: { type: "object", properties: { profile: { type: "string" }, window: { type: "number" }, record: { type: "boolean" } }, required: ["profile"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_family", description: "Cost-per-outcome + variant tracking for an outcome family (pass family id or raw objective)", inputSchema: { type: "object", properties: { family: { type: "string" }, objective: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_deprecate", description: "Mark an outcome variant of a family as deprecated with a reason", inputSchema: { type: "object", properties: { family: { type: "string" }, outcome_hash: { type: "string" }, reason: { type: "string" } }, required: ["family", "outcome_hash", "reason"] }, annotations: { readOnly: false, idempotent: true } },
@@ -386,6 +388,19 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         result = releaseRun(runId, resolveClaimant(a.claimant, ctx));
         break;
       }
+      case "ape_agent_export": {
+        result = exportRun(parseRunRef(a.run_id));
+        break;
+      }
+      case "ape_agent_import": {
+        let bundle = a.bundle;
+        if (typeof bundle === "string") {
+          try { bundle = JSON.parse(bundle); }
+          catch { result = { error: "invalid_bundle", hint: "bundle string is not valid JSON" }; break; }
+        }
+        result = importRun(bundle);
+        break;
+      }
       case "ape_agent_analyze": {
         const { analyzeProfile, recordAnalysis } = await import("./agent/analyze.js");
         const analysis = analyzeProfile(a.profile, { window: Number(a.window ?? 20) });
@@ -580,6 +595,16 @@ export async function agentMethod(method, params = {}) {
     case "agent/listRuns":
       reconcileRuns();
       return { runs: queryRuns({ status: params.status, profile: params.profile, parent_run_id: params.parent_run_id, limit: params.limit }) };
+    case "agent/export":
+      return exportRun(parseRunRef(params.run_id));
+    case "agent/import": {
+      let bundle = params.bundle;
+      if (typeof bundle === "string") {
+        try { bundle = JSON.parse(bundle); }
+        catch { return { error: "invalid_bundle", hint: "bundle string is not valid JSON" }; }
+      }
+      return importRun(bundle);
+    }
     default:
       return { error: "unknown_method", method };
   }

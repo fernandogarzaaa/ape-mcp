@@ -2,7 +2,7 @@
 // (tool, argsHash, durationMs, tokens, cost), stop reason, total cost.
 // SQLite via node:sqlite (WAL for concurrent writer/reader between worker + server).
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "./sqlite.js";
 import { dataDir } from "./trace.js";
@@ -411,4 +411,134 @@ export function loadCheckpoint(runId) {
   if (!row) return null;
   try { return { ...row, state: JSON.parse(row.state) }; }
   catch { return null; }
+}
+
+// Portable run bundles (stateful protocol, phase 2): a run's full ledger slice
+// (run row, steps, checkpoint, receipt) as a versioned JSON bundle. Import
+// plants it as a NEW run with lineage linked (parent_run_id + resumes chain),
+// resumable via ape_agent_resume. Bundles are UNSIGNED in v1 —
+// manifest.signed is always false and says so plainly; signing is a follow-up
+// once key material exists. Version mismatch is a hard error, never a silent
+// reinterpretation.
+export const EXPORT_BUNDLE_VERSION = 1;
+
+function exporterId() {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    return `ape-mcp/${pkg.version ?? "unknown"}`;
+  } catch { return "ape-mcp/unknown"; }
+}
+
+function parseJsonLenient(s) {
+  if (s == null) return null;
+  if (typeof s !== "string") return s;
+  try { return JSON.parse(s); } catch { return s; }
+}
+
+// Export is read-only: any run state (live, stopped, done, failed) exports.
+// worker_pid is machine-local and is always nulled in the bundle.
+export function exportRun(runId) {
+  const d = open();
+  const run = d.prepare("SELECT * FROM runs WHERE run_id = ?").get(runId);
+  if (!run) return { error: "run_not_found", run_id: runId };
+  const steps = d.prepare("SELECT * FROM steps WHERE run_id = ? ORDER BY step").all(runId);
+  const cpRow = d.prepare("SELECT * FROM checkpoints WHERE run_id = ?").get(runId);
+  let checkpoint = null;
+  if (cpRow) {
+    const state = parseJsonLenient(cpRow.state);
+    checkpoint = {
+      step: cpRow.step,
+      state: state && typeof state === "object" ? state : null,
+      updated_at: cpRow.updated_at,
+    };
+    if (!checkpoint.state) checkpoint = null;
+  }
+  const { worker_pid, ...runRow } = run;
+  return {
+    version: EXPORT_BUNDLE_VERSION,
+    exported_at: new Date().toISOString(),
+    run: runRow,
+    steps,
+    checkpoint,
+    receipt: parseJsonLenient(run.receipt),
+    manifest: { signed: false, exporter: exporterId(), kind: "ape-run-export" },
+  };
+}
+
+// Import: validate the bundle, then plant a NEW run row (fresh lifecycle,
+// status 'stopped' so ape_agent_resume can take it), copy the step history
+// with run_id remapped, and plant the checkpoint so resume continues from the
+// exported loop state. The new run's parent_run_id is the exported run's id
+// and resumes is the source count + 1 (the lineage's continuation count —
+// APE_MAX_RESUMES applies to the lineage, same as in-place resume).
+export function importRun(bundle) {
+  if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) {
+    return { error: "invalid_bundle", hint: "bundle must be a JSON object produced by ape_agent_export" };
+  }
+  if (bundle.version !== EXPORT_BUNDLE_VERSION) {
+    return {
+      error: "unsupported_bundle_version",
+      bundle_version: bundle.version ?? null,
+      supported_version: EXPORT_BUNDLE_VERSION,
+      hint: "this bundle was produced by a different ape-mcp; refusing to reinterpret it",
+    };
+  }
+  const src = bundle.run;
+  if (!src || typeof src !== "object" || typeof src.run_id !== "string" || !src.run_id) {
+    return { error: "invalid_bundle", hint: "bundle.run is missing or has no run_id" };
+  }
+  const cpState = bundle.checkpoint?.state;
+  if (!cpState || typeof cpState !== "object") {
+    return {
+      error: "no_checkpoint",
+      source_run_id: src.run_id,
+      hint: "bundle has no checkpoint (source run never reached a model turn); nothing resumable to import",
+    };
+  }
+  const d = open();
+  const newId = "run-" + randomUUID().slice(0, 12);
+  const now = new Date().toISOString();
+  d.prepare(`INSERT INTO runs
+    (run_id, profile, model, model_resolution, objective, organism_id, status, stop_reason,
+     step_count, total_tokens, total_cost, outcome, outcome_family, outcome_hash,
+     profile_hash, env_hash, unverified, receipt, parent_run_id, resumes,
+     started_at, finished_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'stopped', 'imported', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      newId, src.profile ?? "unknown", src.model ?? "unknown", src.model_resolution ?? null,
+      src.objective ?? "", src.organism_id ?? "default",
+      src.step_count ?? 0, src.total_tokens ?? 0, src.total_cost ?? 0,
+      typeof src.outcome === "string" ? src.outcome : JSON.stringify(src.outcome ?? null),
+      src.outcome_family ?? null, src.outcome_hash ?? null,
+      src.profile_hash ?? null, src.env_hash ?? null, src.unverified ?? 0,
+      typeof bundle.receipt === "string" ? bundle.receipt : JSON.stringify(bundle.receipt ?? null),
+      src.run_id, (src.resumes ?? 0) + 1,
+      now, now,
+    );
+  const insStep = d.prepare("INSERT INTO steps (run_id, step, kind, tool, args_hash, duration_ms, tokens, cost, result_summary, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const srcSteps = Array.isArray(bundle.steps) ? bundle.steps : [];
+  for (const s of srcSteps) {
+    if (!s || typeof s !== "object") continue;
+    insStep.run(newId, s.step ?? 0, s.kind ?? null, s.tool ?? null, s.args_hash ?? null,
+      s.duration_ms ?? 0, s.tokens ?? 0, s.cost ?? 0,
+      typeof s.result_summary === "string" ? s.result_summary : String(s.result_summary ?? ""),
+      s.ts ?? now);
+  }
+  saveCheckpoint(newId, bundle.checkpoint.step ?? 0, cpState);
+  const out = {
+    run_id: newId,
+    uri: `ape://runs/${newId}`,
+    status: "stopped",
+    stop_reason: "imported",
+    parent_run_id: src.run_id,
+    source_run_id: src.run_id,
+    resume_count: (src.resumes ?? 0) + 1,
+    steps_imported: srcSteps.length,
+    checkpoint_step: bundle.checkpoint.step ?? 0,
+    resume_with: "ape_agent_resume",
+  };
+  if (src.status === "running") {
+    out.warning = "source run was live at export; do not resume this import while the source run is still running (the two workers would diverge from the same checkpoint)";
+  }
+  return out;
 }
