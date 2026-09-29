@@ -10,7 +10,7 @@ import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
 import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
-import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun } from "./runs.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
@@ -47,9 +47,12 @@ export const TOOL_DEFS = [
   { name: "ape_task_get", description: "Poll a background task (running/done/failed + result)", inputSchema: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_profiles", description: "List available agent profiles + their declared tools and limits", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_run", description: "Invoke an agent profile against an objective; returns run_id immediately (poll ape_agent_status). provider/model override auto-detection", inputSchema: { type: "object", properties: { profile: { type: "string" }, objective: { type: "string" }, organism_id: { type: "string" }, provider: { type: "string" }, model: { type: "string" } }, required: ["profile", "objective"] }, annotations: { readOnly: false, idempotent: false } },
-  { name: "ape_agent_status", description: "Poll an agent run: status, steps, cost, outcome", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: true, idempotent: true } },
-  { name: "ape_agent_cancel", description: "Cancel a running agent run, preserving the partial ledger", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
-  { name: "ape_agent_resume", description: "Resume a stopped/failed run from its last checkpoint with a replacement worker", inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_status", description: "Poll an agent run: status, steps, cost, outcome", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" } }, required: ["run_id"] }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_agent_cancel", description: "Cancel a running agent run, preserving the partial ledger", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, claimant: { type: "string", description: "operator identity; required to cancel a live run claimed by someone else" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_resume", description: "Resume a stopped/failed run from its last checkpoint with a replacement worker", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, claimant: { type: "string", description: "operator identity; must hold the claim when one is set" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_list", description: "List agent runs with filters; the discovery primitive for cross-client handoff (returns run URIs + claim state)", inputSchema: { type: "object", properties: { status: { type: "string", description: "filter: running|done|stopped|failed" }, profile: { type: "string" }, parent_run_id: { type: "string" }, limit: { type: "number", description: "max rows, default 20, cap 100" } } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_agent_claim", description: "Claim a run for this operator. Conflicts (409-class) when a live run is held by someone else; advisory (takeover allowed) on terminal runs", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, claimant: { type: "string", description: "explicit operator identity (else APE_CLAIM_AS, else client identity)" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: true } },
+  { name: "ape_agent_release", description: "Release your claim on a run; only the holder can release", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, claimant: { type: "string", description: "explicit operator identity (else APE_CLAIM_AS, else client identity)" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_agent_analyze", description: "Analyze a profile's recent runs and propose concrete profile edits (harness evolution from trajectories)", inputSchema: { type: "object", properties: { profile: { type: "string" }, window: { type: "number" }, record: { type: "boolean" } }, required: ["profile"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_family", description: "Cost-per-outcome + variant tracking for an outcome family (pass family id or raw objective)", inputSchema: { type: "object", properties: { family: { type: "string" }, objective: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_deprecate", description: "Mark an outcome variant of a family as deprecated with a reason", inputSchema: { type: "object", properties: { family: { type: "string" }, outcome_hash: { type: "string" }, reason: { type: "string" } }, required: ["family", "outcome_hash", "reason"] }, annotations: { readOnly: false, idempotent: true } },
@@ -82,6 +85,37 @@ export function safeTruncate(value, maxChars) {
   return { truncated: true, note: "result exceeds display budget; see structuredContent for the full result" };
 }
 
+// Canonical run handle: ape://runs/<run_id>. Accepted anywhere a run_id is
+// accepted (status, cancel, resume, claim, release); ape_agent_run returns it.
+export const RUN_URI_PREFIX = "ape://runs/";
+export function parseRunRef(ref) {
+  const s = String(ref ?? "");
+  return s.startsWith(RUN_URI_PREFIX) ? s.slice(RUN_URI_PREFIX.length) : s;
+}
+export function runUri(runId) {
+  return RUN_URI_PREFIX + runId;
+}
+
+// Claim identity (stateful protocol, phase 1): who is driving this run.
+// Precedence: explicit tool arg > APE_CLAIM_AS env (or --claim-as CLI flag,
+// which sets it) > MCP clientInfo.name (+ session discriminator) > "anonymous".
+// Explicit names are stable across reconnects, so the same operator on a new
+// machine keeps driving; the automatic fallback keeps anonymous clients
+// contained to their own session.
+export function resolveClaimant(provided, ctx = {}) {
+  const clean = (s) => (typeof s === "string" && s.trim() ? s.trim().slice(0, 128) : null);
+  const fromArg = clean(provided);
+  if (fromArg) return fromArg;
+  const fromEnv = clean(process.env.APE_CLAIM_AS);
+  if (fromEnv) return fromEnv;
+  const ciName = clean(ctx.clientInfo?.name);
+  if (ciName) {
+    const disc = ctx.sessionId ? String(ctx.sessionId).slice(0, 8) : "stdio";
+    return `${ciName}#${disc}`;
+  }
+  return "anonymous";
+}
+
 // Compact run summary for content.text: sufficient for the model to continue even
 // when the host does not forward structuredContent. Full step ledger stays in
 // structuredContent.result.steps.
@@ -95,6 +129,7 @@ export function runStatusSummary(result) {
   }));
   return {
     run_id: result.run_id,
+    uri: runUri(result.run_id),
     status: result.status,
     stop_reason: result.stop_reason,
     model: result.model,
@@ -102,6 +137,8 @@ export function runStatusSummary(result) {
     steps: result.step_count,
     cost_usd: result.total_cost,
     tokens: result.total_tokens,
+    claimant: result.claimant ?? null,
+    resume_count: result.resume_count ?? 0,
     outcome: String(result.outcome ?? "").slice(0, 800),
     recent_steps: recent,
     steps_omitted: Math.max(0, steps.length - recent.length),
@@ -123,7 +160,11 @@ export function stripMockInput(a) {
 
 // Resume a stopped/failed run from its last checkpoint with a replacement worker.
 // Refuses live workers, finished runs, missing checkpoints, and resume-cap excess.
-function resumeRun(runId, workerOpts = {}) {
+// Claim rule (stateful protocol): when a claim is set and the caller is not the
+// holder, resume is refused — take the claim first with ape_agent_claim (advisory
+// on stopped/failed runs, so handoff is one extra call). On success the claim
+// transfers to the resumer: they are now driving the run.
+function resumeRun(runId, workerOpts = {}, ctx = {}) {
   reconcileRuns();
   const run = getRun(runId);
   if (!run || run.status === "not_found") return { error: "run_not_found", run_id: runId };
@@ -138,6 +179,13 @@ function resumeRun(runId, workerOpts = {}) {
       return { error: "run_active", run_id: runId, hint: "run is marked running with no dead worker proof; cancel first" };
     }
   }
+  const caller = resolveClaimant(ctx.claimant, ctx);
+  if (run.claimant && run.claimant !== caller) {
+    return {
+      error: "claim_required", status: 403, run_id: runId, holder: run.claimant,
+      hint: "this run is claimed by another operator; take the claim first with ape_agent_claim (advisory on stopped runs), then resume",
+    };
+  }
   const maxResumes = Number(process.env.APE_MAX_RESUMES ?? 3);
   if ((run.resumes ?? 0) >= maxResumes) {
     return { error: "resume_cap_reached", run_id: runId, resumes: run.resumes, max: maxResumes };
@@ -148,18 +196,22 @@ function resumeRun(runId, workerOpts = {}) {
   if (ceiling) return ceiling;
   const profile = loadProfile(run.profile);
   if (!profile) return { error: "profile_not_found", profile: run.profile };
+  const now = new Date().toISOString();
   updateRun(runId, {
     status: "running",
     stop_reason: null,
     finished_at: null,
     resumes: (run.resumes ?? 0) + 1,
+    resumed_from_step: cp.step,
+    claimant: caller,
+    claimed_at: now,
   });
   const worker = fork(join(root, "src", "agent", "worker.js"), [runId, JSON.stringify({ ...workerOpts, resume: true })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
   worker.unref();
   updateRun(runId, { worker_pid: worker.pid });
   worker.on("exit", () => runningAgents.delete(runId));
   runningAgents.set(runId, worker);
-  return { run_id: runId, status: "running", resumed_from_step: cp.step, resumes: (run.resumes ?? 0) + 1, poll: "ape_agent_status" };
+  return { run_id: runId, uri: runUri(runId), status: "running", resumed_from_step: cp.step, resumes: (run.resumes ?? 0) + 1, claimant: caller, poll: "ape_agent_status" };
 }
 
 // Run-level ceilings above any single run's budget: cap concurrent forks and total
@@ -283,28 +335,55 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         updateRun(runId, { worker_pid: worker.pid });
         worker.on("exit", () => runningAgents.delete(runId));
         runningAgents.set(runId, worker);
-        result = { run_id: runId, status: "running", profile: a.profile, poll: "ape_agent_status" };
+        result = { run_id: runId, uri: runUri(runId), status: "running", profile: a.profile, poll: "ape_agent_status" };
         break;
       }
       case "ape_agent_status":
         reconcileRuns();
-        result = getRun(a.run_id);
+        result = getRun(parseRunRef(a.run_id));
         break;
       case "ape_agent_cancel": {
-        const run = getRun(a.run_id);
-        const w = runningAgents.get(a.run_id);
-        if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(a.run_id); }
+        const runId = parseRunRef(a.run_id);
+        const run = getRun(runId);
+        // Claim rule: a live run held by someone else can only be cancelled
+        // by the holder. No claim set -> current behavior unchanged.
+        const me = resolveClaimant(a.claimant, ctx);
+        if (run.status === "running" && run.claimant && run.claimant !== me) {
+          result = {
+            error: "claim_required", status: 403, run_id: runId, holder: run.claimant,
+            hint: "this live run is claimed by another operator; cancel as the holder (--claim-as) or have the holder release it",
+          };
+          break;
+        }
+        const w = runningAgents.get(runId);
+        if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(runId); }
         else if (run.status === "running" && run.worker_pid) { try { process.kill(run.worker_pid); } catch { /* already gone */ } }
         if (run.status === "running") {
-          updateRun(a.run_id, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
-          result = { run_id: a.run_id, status: "stopped", stop_reason: "cancelled" };
+          updateRun(runId, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
+          result = { run_id: runId, uri: runUri(runId), status: "stopped", stop_reason: "cancelled" };
         } else {
-          result = { run_id: a.run_id, status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
+          result = { run_id: runId, uri: runUri(runId), status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
         }
         break;
       }
       case "ape_agent_resume": {
-        result = resumeRun(a.run_id, { mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model });
+        stripMockInput(a);
+        result = resumeRun(parseRunRef(a.run_id), { mockScript: a._mockScript, mockCostPerCall: a._mockCostPerCall, provider: a.provider, model: a.model }, { ...ctx, claimant: a.claimant });
+        break;
+      }
+      case "ape_agent_list": {
+        reconcileRuns();
+        result = { runs: queryRuns({ status: a.status, profile: a.profile, parent_run_id: a.parent_run_id, limit: a.limit }) };
+        break;
+      }
+      case "ape_agent_claim": {
+        const runId = parseRunRef(a.run_id);
+        result = claimRun(runId, resolveClaimant(a.claimant, ctx));
+        break;
+      }
+      case "ape_agent_release": {
+        const runId = parseRunRef(a.run_id);
+        result = releaseRun(runId, resolveClaimant(a.claimant, ctx));
         break;
       }
       case "ape_agent_analyze": {
@@ -467,24 +546,40 @@ export async function agentMethod(method, params = {}) {
       updateRun(runId, { worker_pid: worker.pid });
       worker.on("exit", () => runningAgents.delete(runId));
       runningAgents.set(runId, worker);
-      return { run_id: runId, status: "running", profile: params.profile };
+      return { run_id: runId, uri: runUri(runId), status: "running", profile: params.profile };
     }
     case "agent/getRun":
       reconcileRuns();
-      return getRun(params.run_id);
+      return getRun(parseRunRef(params.run_id));
     case "agent/cancel": {
-      const run = getRun(params.run_id);
-      const w = runningAgents.get(params.run_id);
-      if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(params.run_id); }
+      const runId = parseRunRef(params.run_id);
+      const run = getRun(runId);
+      const me = resolveClaimant(params.claimant, {});
+      if (run.status === "running" && run.claimant && run.claimant !== me) {
+        return { error: "claim_required", status: 403, run_id: runId, holder: run.claimant, hint: "this live run is claimed by another operator" };
+      }
+      const w = runningAgents.get(runId);
+      if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(runId); }
       else if (run.status === "running" && run.worker_pid) { try { process.kill(run.worker_pid); } catch { /* already gone */ } }
       if (run.status === "running") {
-        updateRun(params.run_id, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
-        return { run_id: params.run_id, status: "stopped", stop_reason: "cancelled" };
+        updateRun(runId, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
+        return { run_id: runId, uri: runUri(runId), status: "stopped", stop_reason: "cancelled" };
       }
-      return { run_id: params.run_id, status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
+      return { run_id: runId, uri: runUri(runId), status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
     }
     case "agent/resume":
-      return resumeRun(params.run_id, { mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model });
+      return resumeRun(parseRunRef(params.run_id), { mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model }, { claimant: params.claimant });
+    case "agent/claim": {
+      const runId = parseRunRef(params.run_id);
+      return claimRun(runId, resolveClaimant(params.claimant, {}));
+    }
+    case "agent/release": {
+      const runId = parseRunRef(params.run_id);
+      return releaseRun(runId, resolveClaimant(params.claimant, {}));
+    }
+    case "agent/listRuns":
+      reconcileRuns();
+      return { runs: queryRuns({ status: params.status, profile: params.profile, parent_run_id: params.parent_run_id, limit: params.limit }) };
     default:
       return { error: "unknown_method", method };
   }

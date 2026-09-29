@@ -17,7 +17,21 @@ import { startConsole } from "../src/console.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
+// Operator identity for the run-claim protocol: --claim-as <name> sets
+// APE_CLAIM_AS for this process (stdio server, --http, run subcommand).
+// Consumed here so it never leaks into the `run` subcommand's k=v parser.
+{
+  const i = args.indexOf("--claim-as");
+  if (i >= 0) {
+    const v = args[i + 1];
+    if (v && !v.startsWith("--")) process.env.APE_CLAIM_AS = v;
+    args.splice(i, v && !v.startsWith("--") ? 2 : 1);
+  }
+}
 const [cmd, ...rest] = args;
+// stdio is one client per process: remember its clientInfo from initialize so
+// tool calls can resolve the automatic claim identity fallback.
+let stdioClientInfo = null;
 
 function openBrowser(url) {
   const p = process.platform;
@@ -126,6 +140,7 @@ if (args.includes("--http")) {
             // supported, pin on unknown. Unconditional pins break real
             // clients capped at older versions (observed: fallback to dead
             // transports after rejecting 2026-07-28).
+            stdioClientInfo = params?.clientInfo ?? null;
             result = { protocolVersion: negotiateProtocolVersion(params?.protocolVersion), capabilities: discover().capabilities, serverInfo: { name: "ape-mcp", version: "1.0.0" } };
           } else if (method === "ping") {
             result = {};
@@ -136,7 +151,7 @@ if (args.includes("--http")) {
           else if (method === "prompts/list") result = promptsList();
           else if (method === "prompts/get") result = await getPrompt(params?.name, params?.arguments ?? {});
           else if (method === "tasks/get") result = { resultType: "complete", task: taskGet(params?.task_id) };
-          else if (method === "tools/call") result = await dispatchCall(params?.name, params?.arguments ?? {});
+          else if (method === "tools/call") result = await dispatchCall(params?.name, params?.arguments ?? {}, { clientInfo: stdioClientInfo });
           else if (method.startsWith("agent/")) result = await agentMethod(method, params ?? {});
           else throw { code: -32601, message: `unknown_method: ${method}` };
           process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
