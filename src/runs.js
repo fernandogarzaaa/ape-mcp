@@ -3,7 +3,7 @@
 // SQLite via node:sqlite (WAL for concurrent writer/reader between worker + server).
 import { join } from "node:path";
 import { mkdirSync, readFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "./sqlite.js";
 import { dataDir } from "./trace.js";
 
@@ -108,6 +108,17 @@ function open() {
     deprecated_at TEXT NOT NULL,
     PRIMARY KEY (family, outcome_hash)
   )`);
+      // Phase 3 (stateful protocol): run share tokens. Only the SHA-256 hash of
+      // the 64-hex token is stored; the raw token is shown once at mint time and
+      // never persisted or logged. revoked_at NULL means the share is live.
+      handle.exec(`CREATE TABLE IF NOT EXISTS run_shares (
+    token_hash TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT NULL,
+    label TEXT
+  )`);
+      handle.exec("CREATE INDEX IF NOT EXISTS idx_run_shares_run ON run_shares(run_id)");
       db = handle;
       return db;
     } catch (e) {
@@ -267,6 +278,101 @@ export function releaseRun(runId, claimant) {
   }
   d.prepare("UPDATE runs SET claimant = NULL, claimed_at = NULL WHERE run_id = ?").run(runId);
   return { run_id: runId, released: true, previous_holder: claimant };
+}
+
+// Phase 3 (stateful protocol): read-only share links. A share is a bearer
+// capability scoped to exactly one run: whoever holds the URL can view that
+// run's status, steps/timeline, and receipt — nothing else. The raw token
+// (32 random bytes, 64 hex chars) is returned ONCE at mint time; only its
+// SHA-256 hash is persisted, so a ledger read never leaks a usable token.
+// Lookups hash the presented token first and compare hashes in constant time:
+// timing reveals nothing about the 256-bit preimage.
+function hashShareToken(token) {
+  return createHash("sha256").update(String(token), "utf8").digest("hex");
+}
+
+// Console origin for share URLs. The console server records its bound port in
+// <dataDir>/console.port on listen; APE_CONSOLE_PORT pins it explicitly and
+// wins over the port file. Host is APE_CONSOLE_HOST (default 127.0.0.1).
+// Returns null when no console port is known — callers get an honest hint
+// instead of a broken link.
+export function consolePortFile() {
+  return join(dataDir(), "console.port");
+}
+
+export function consoleOrigin() {
+  const host = process.env.APE_CONSOLE_HOST || "127.0.0.1";
+  let port = null;
+  const envPort = String(process.env.APE_CONSOLE_PORT || "").trim();
+  if (/^\d+$/.test(envPort)) port = envPort;
+  if (!port) {
+    try {
+      const raw = readFileSync(consolePortFile(), "utf8").trim();
+      if (/^\d+$/.test(raw)) port = raw;
+    } catch { /* no console has recorded a port yet */ }
+  }
+  return port ? `http://${host}:${port}` : null;
+}
+
+export function shareRun(runId, { label } = {}) {
+  const d = open();
+  const run = d.prepare("SELECT run_id FROM runs WHERE run_id = ?").get(runId);
+  if (!run) return { error: "run_not_found", run_id: runId };
+  const token = randomBytes(32).toString("hex");
+  const now = new Date().toISOString();
+  const cleanLabel = typeof label === "string" && label.trim() ? label.trim().slice(0, 128) : null;
+  d.prepare("INSERT INTO run_shares (token_hash, run_id, created_at, revoked_at, label) VALUES (?, ?, ?, NULL, ?)")
+    .run(hashShareToken(token), runId, now, cleanLabel);
+  const origin = consoleOrigin();
+  return {
+    run_id: runId, token, label: cleanLabel, created_at: now,
+    url: origin ? `${origin}/share/${token}` : null,
+    ...(origin ? {} : { hint: "console origin unknown: start the console (ape-mcp serve) or set APE_CONSOLE_PORT, then re-share" }),
+  };
+}
+
+// Revoke share link(s): pass { token } to revoke one link, or { all: true } to
+// revoke every live link for the run. Revocation is a timestamp, not a
+// delete — audit history survives.
+export function unshareRun(runId, { token, all } = {}) {
+  const d = open();
+  const run = d.prepare("SELECT run_id FROM runs WHERE run_id = ?").get(runId);
+  if (!run) return { error: "run_not_found", run_id: runId };
+  const now = new Date().toISOString();
+  if (all === true) {
+    const r = d.prepare("UPDATE run_shares SET revoked_at = ? WHERE run_id = ? AND revoked_at IS NULL")
+      .run(now, runId);
+    return { run_id: runId, revoked: r.changes };
+  }
+  if (typeof token === "string" && token) {
+    const h = hashShareToken(token);
+    const row = d.prepare("SELECT token_hash FROM run_shares WHERE run_id = ? AND token_hash = ? AND revoked_at IS NULL")
+      .get(runId, h);
+    if (!row) return { error: "share_not_found", run_id: runId, hint: "no live share for this run matches that token" };
+    const a = Buffer.from(row.token_hash, "utf8");
+    const b = Buffer.from(h, "utf8");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      return { error: "share_not_found", run_id: runId };
+    }
+    d.prepare("UPDATE run_shares SET revoked_at = ? WHERE token_hash = ?").run(now, h);
+    return { run_id: runId, revoked: 1 };
+  }
+  return { error: "missing_args", need: ["token or all=true"] };
+}
+
+// Resolve a presented share token to its live share. Returns null for
+// unknown, malformed, or revoked tokens — the HTTP layer answers 404 either
+// way, leaking no run details.
+export function resolveShareToken(token) {
+  if (typeof token !== "string" || !/^[0-9a-f]{64}$/.test(token)) return null;
+  const d = open();
+  const h = hashShareToken(token);
+  const row = d.prepare("SELECT token_hash, run_id, created_at, label FROM run_shares WHERE token_hash = ? AND revoked_at IS NULL").get(h);
+  if (!row) return null;
+  const a = Buffer.from(row.token_hash, "utf8");
+  const b = Buffer.from(h, "utf8");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  return { run_id: row.run_id, created_at: row.created_at, label: row.label };
 }
 
 // Filtered run discovery for cross-client handoff: any client holding a

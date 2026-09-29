@@ -26,6 +26,8 @@ tools:
   - { name: ape_agent_release, from: [ape(agent runtime)], args: { run_id, claimant }, out: { released } }
   - { name: ape_agent_export, from: [ape(agent runtime)], args: { run_id }, out: { version, run, steps, checkpoint, receipt, manifest } }
   - { name: ape_agent_import, from: [ape(agent runtime)], args: { bundle }, out: { run_id, uri, parent_run_id, resume_count } }
+  - { name: ape_agent_share, from: [ape(agent runtime)], args: { run_id, label }, out: { run_id, token, url, created_at } }
+  - { name: ape_agent_unshare, from: [ape(agent runtime)], args: { run_id, token, all }, out: { run_id, revoked } }
   - { name: ape_agent_analyze, from: [ape(harness evolution)], args: { profile, window, record }, out: { findings, suggestions } }
   - { name: ape_agent_family, from: [ape(outcome ledger)], args: { family, objective }, out: { runs, completed, total_cost_usd, avg_cost_usd, variants } }
   - { name: ape_agent_deprecate, from: [ape(outcome ledger)], args: { family, outcome_hash, reason }, out: { family, outcome_hash, reason } }

@@ -10,7 +10,7 @@ import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
 import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
-import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns, exportRun, importRun } from "./runs.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns, exportRun, importRun, shareRun, unshareRun } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 
@@ -55,6 +55,8 @@ export const TOOL_DEFS = [
   { name: "ape_agent_release", description: "Release your claim on a run; only the holder can release", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, claimant: { type: "string", description: "explicit operator identity (else APE_CLAIM_AS, else client identity)" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_agent_export", description: "Export a run's full ledger slice (run row, steps, checkpoint, receipt) as a versioned, unsigned JSON bundle — the portable resume / offline-share artifact", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" } }, required: ["run_id"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_import", description: "Import an ape_agent_export bundle as a NEW run with lineage linked (parent_run_id + resumes chain); plants the checkpoint so ape_agent_resume works on it", inputSchema: { type: "object", properties: { bundle: { description: "bundle object (or JSON string) from ape_agent_export" } }, required: ["bundle"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_share", description: "Mint a read-only share link for a run: returns the raw bearer token ONCE plus its share URL, scoped to exactly that run; anyone with the URL can view the run's status, steps, and receipt", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, label: { type: "string", description: "optional label shown on the share page" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: false } },
+  { name: "ape_agent_unshare", description: "Revoke share link(s) for a run: pass token to revoke one link, or all=true to revoke every live link for the run; revocation timestamps (never deletes)", inputSchema: { type: "object", properties: { run_id: { type: "string", description: "run_id or ape://runs/<id> URI" }, token: { type: "string", description: "the raw token returned by ape_agent_share" }, all: { type: "boolean", description: "revoke all live shares for the run" } }, required: ["run_id"] }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_agent_analyze", description: "Analyze a profile's recent runs and propose concrete profile edits (harness evolution from trajectories)", inputSchema: { type: "object", properties: { profile: { type: "string" }, window: { type: "number" }, record: { type: "boolean" } }, required: ["profile"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_family", description: "Cost-per-outcome + variant tracking for an outcome family (pass family id or raw objective)", inputSchema: { type: "object", properties: { family: { type: "string" }, objective: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_deprecate", description: "Mark an outcome variant of a family as deprecated with a reason", inputSchema: { type: "object", properties: { family: { type: "string" }, outcome_hash: { type: "string" }, reason: { type: "string" } }, required: ["family", "outcome_hash", "reason"] }, annotations: { readOnly: false, idempotent: true } },
@@ -401,6 +403,14 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         result = importRun(bundle);
         break;
       }
+      case "ape_agent_share": {
+        result = shareRun(parseRunRef(a.run_id), { label: a.label });
+        break;
+      }
+      case "ape_agent_unshare": {
+        result = unshareRun(parseRunRef(a.run_id), { token: a.token, all: a.all === true });
+        break;
+      }
       case "ape_agent_analyze": {
         const { analyzeProfile, recordAnalysis } = await import("./agent/analyze.js");
         const analysis = analyzeProfile(a.profile, { window: Number(a.window ?? 20) });
@@ -592,6 +602,10 @@ export async function agentMethod(method, params = {}) {
       const runId = parseRunRef(params.run_id);
       return releaseRun(runId, resolveClaimant(params.claimant, {}));
     }
+    case "agent/share":
+      return shareRun(parseRunRef(params.run_id), { label: params.label });
+    case "agent/unshare":
+      return unshareRun(parseRunRef(params.run_id), { token: params.token, all: params.all === true });
     case "agent/listRuns":
       reconcileRuns();
       return { runs: queryRuns({ status: params.status, profile: params.profile, parent_run_id: params.parent_run_id, limit: params.limit }) };
