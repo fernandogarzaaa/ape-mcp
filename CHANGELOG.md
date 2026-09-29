@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2
+
+Ship the `ape` terminal interface: native Rust TUI (banner, guided
+onboarding, menu over the existing runtime), `ape` bin alias, 8 zero-config
+agent templates + registry + `templates` CLI, win-x64 prebuilt. No runtime
+behavior changes.
+
 ## Unreleased — agent templates for onboarding
 
 ### Template gallery backend (TUI-ready)
