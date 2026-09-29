@@ -48,5 +48,10 @@
       "name": "ape-mcp",
       "version": "1.0.0"
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fernandogarzaaa/ape-mcp.git"
+  },
+  "homepage": "https://github.com/fernandogarzaaa/ape-mcp"
 }
