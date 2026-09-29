@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — protocol negotiation fix (real-client interop)
+
+### Negotiated versions (not unconditional pin)
+- `initialize` (both `/mcp` and stdio) now returns the newest mutually
+  supported version from `2026-07-28 → 2024-11-05`, pinning only on
+  unknown/absent requests. Root cause of a live failure: OpenCode's client
+  rejects `2026-07-28`, fell back to a dead SSE transport, and marked the
+  server unavailable. Unknown versions are still never echoed.
+
 ## Unreleased — production endpoint on ape.runs-on.dev + EIP
 
 ### Canonical name + static IP

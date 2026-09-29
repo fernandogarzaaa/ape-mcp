@@ -9,9 +9,14 @@ separately and will be advertised only when the wire actually changes.
 
 ## Version pinning
 
-- The server answers `initialize` with its pinned `protocolVersion`
-  (`2026-07-28`) and current capabilities. It does not echo arbitrary client
-  versions — claiming a wire it cannot speak.
+- The server answers `initialize` with the newest mutually supported
+  `protocolVersion` (`2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`,
+  `2024-11-05`; unknown/absent requests get the pin). It never echoes
+  arbitrary client versions — claiming a wire it cannot speak.
+- This is standard MCP negotiation, and it matters operationally: an
+  unconditional pin breaks real clients capped at older versions (observed:
+  OpenCode rejects `2026-07-28` and falls back to a dead SSE transport).
+  The method set served is the stable core valid across all listed versions.
 - `server/discover` reports `protocol`, `capabilities`, and the `transport`
   descriptor above.
 

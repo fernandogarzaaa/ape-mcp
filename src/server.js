@@ -19,6 +19,16 @@ const runningAgents = new Map();
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROTOCOL = "2026-07-28";
 export { PROTOCOL };
+// Versions whose wire shape this server actually speaks (stable core method
+// set, valid across all of them). Negotiation picks the newest mutually
+// supported version; unknown/absent requests get the pin. This is standard
+// MCP negotiation, not echo: arbitrary versions are never parroted, and
+// clients that only know older versions (e.g. capped at 2025-11-25) still
+// connect instead of failing over to dead transports.
+export const SUPPORTED_PROTOCOL_VERSIONS = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+export function negotiateProtocolVersion(requested) {
+  return SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : PROTOCOL;
+}
 
 export const TOOL_DEFS = [
   { name: "ape_status", description: "APE status: versions, vendored engines, mods", inputSchema: { type: "object", properties: { organism_id: { type: "string" } } }, annotations: { readOnly: true, idempotent: true } },
