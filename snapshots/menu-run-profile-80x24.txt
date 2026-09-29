@@ -1,0 +1,22 @@
+┌ APE ─────────────────────────────────────────────────────────────────────────┐
+│pick a profile (Esc back):                                                    │
+│  deep-researcher — Broad web research                                        │
+│  fact-checker — Verifies a single claim                                      │
+│  writer — Drafts prose                                                       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                    [↑/↓] move   [Enter] choose   [Esc] back

@@ -1,0 +1,22 @@
+┌Onboarding 4/4 · Demo run─────────────────────────────────────────────────────┐
+│demo failed: no model provider detected                                       │
+│the demo needs a working provider — press Enter to go back and pick again.    │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                      [Enter] back to profiles, pick again

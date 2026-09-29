@@ -1,0 +1,22 @@
+┌ APE ─────────────────────────────────────────────────────────────────────────┐
+│browser console: run `ape-mcp serve` in another terminal,                     │
+│then open the printed URL (Live Trace, Runs, Ledger).                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                             [any key] back to menu

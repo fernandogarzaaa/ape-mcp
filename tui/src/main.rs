@@ -7,6 +7,8 @@ mod input;
 mod menu;
 mod onboard;
 mod screens;
+#[cfg(test)]
+mod snap;
 
 use ape::{envelope_result, BridgeResult};
 use crossterm::{

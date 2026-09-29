@@ -1,0 +1,22 @@
+┌Onboarding 4/4 · Demo run─────────────────────────────────────────────────────┐
+│demo running: run-<id>                                                      │
+│watching status — Esc cancels watching (the run keeps going)                  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                      [Esc] stop watching (run keeps going)

@@ -1,0 +1,22 @@
+┌Onboarding 4/4 · Demo run─────────────────────────────────────────────────────┐
+│demo finished — you have seen the whole loop:                                 │
+│status=done stop=explicit_final_answer steps=2 cost_usd=0                     │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                 [Enter] finish

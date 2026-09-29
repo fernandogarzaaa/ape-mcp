@@ -1,0 +1,22 @@
+┌Onboarding 1/4 · Doctor───────────────────────────────────────────────────────┐
+│ok   ok    node>=22.5                                                         │
+│ok   ok    node:sqlite                                                        │
+│FAIL FAIL  vendors/adam                                                       │
+│                                                                              │
+│1 check(s) failing — you can continue; run `ape-mcp doctor` later for details.│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                  [Enter] continue   [Esc] back   [Ctrl-C] quit
