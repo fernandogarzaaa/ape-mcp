@@ -33,6 +33,7 @@ tools:
   - { name: ape_agent_deprecate, from: [ape(outcome ledger)], args: { family, outcome_hash, reason }, out: { family, outcome_hash, reason } }
   - { name: ape_connector_list, from: [ape(connectors)], args: {}, out: { connectors: [] } }
   - { name: ape_connector_call, from: [ape(connectors)], args: { connector, operation, input, confirm }, out: { ok, status, body }, destructive_confirm: true }
+  - { name: ape_ledger, from: [ape(governance audit stream)], args: { limit, kind }, out: { entries, returned, truncated } }
 resources:
   - { uri: "genome://current", from: adam-kernel }
   - { uri: "memory://{kind}/{id}", from: adam-memory/eventlog }

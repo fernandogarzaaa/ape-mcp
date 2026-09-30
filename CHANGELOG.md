@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+TUI M4 views (Runs, Ledger, Tasks) + runtime ledger fixes.
+
+Runtime (real execution path, each with a regression test):
+- Run-row totals (step_count, total_cost, total_tokens) now update with
+  every streamed step (`runs.js recordStep`), not only at completion.
+- Destructive-denied step rows carry the human policy reason after the
+  marker; cancel appends a minimal `kind: "cancel"` interruption marker.
+- New read-only tool `ape_ledger` (limit + kind filter over ledger.jsonl,
+  the same read the console's /api/ledger serves).
+
+TUI: Runs list (status/profile/cost/steps/started, Enter opens live
+progress for running runs else the done view), Ledger (governance audit
+stream with kind filter — entries carry no run id or status, so no such
+filter is offered), Tasks (Skein graph text). All reachable as menu
+items with per-screen footers; empty and error states render honestly.
+
 ## 1.0.4
 
 Protocol fix: `tools/call` for a nonexistent tool now returns JSON-RPC error

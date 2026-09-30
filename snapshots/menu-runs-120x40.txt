@@ -1,14 +1,14 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  Run an agent                                                                                                        │
-│  Check a run                                                                                                         │
-│  Profiles                                                                                                            │
-│  Doctor                                                                                                              │
-│  Console info                                                                                                        │
-│  Status                                                                                                              │
-│  Runs                                                                                                                │
-│  Ledger                                                                                                              │
-│  Tasks                                                                                                               │
-│  Quit                                                                                                                │
+│  run-<id> · repo-triage · running · $0.01 · 3 steps · 2026-09-30 10:11                                             │
+│showing 1–1 of 1                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -34,6 +34,6 @@
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                                         [↑/↓] move   [Enter] select   [q] quit
+                                [↑/↓] move   [Enter] open (live if running)   [Esc] back
 
                                         provider: … · profile: … · ape-mcp 0.1.0

@@ -335,6 +335,62 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
             },
             _ => menu.apply_status(&serde_json::Value::Null),
         },
+        LoadRuns => match ctx.tool("ape_agent_list", r#"{"limit":20}"#) {
+            Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                Some(r) => {
+                    let runs = r
+                        .get("runs")
+                        .and_then(|x| x.as_array())
+                        .map(|a| a.iter().map(menu::RunRow::from_json).collect())
+                        .unwrap_or_default();
+                    menu.apply_runs(runs, String::new());
+                }
+                None => menu.apply_runs(vec![], "list failed: no result envelope".to_string()),
+            },
+            Err(e) => menu.apply_runs(vec![], format!("list failed: {e}")),
+            _ => {}
+        },
+        LoadLedger => match ctx.tool("ape_ledger", r#"{"limit":100}"#) {
+            Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                Some(r) => {
+                    let entries: Vec<menu::LedgerEntry> = r
+                        .get("entries")
+                        .and_then(|x| x.as_array())
+                        .map(|a| a.iter().map(menu::LedgerEntry::from_json).collect())
+                        .unwrap_or_default();
+                    let note = r
+                        .get("note")
+                        .and_then(|x| x.as_str())
+                        .or(if entries.is_empty() { Some("no entries match") } else { None })
+                        .unwrap_or("")
+                        .to_string();
+                    let note = if r.get("truncated").and_then(|x| x.as_bool()).unwrap_or(false) {
+                        format!("{note} — showing newest 100")
+                    } else {
+                        note
+                    };
+                    menu.apply_ledger(entries, note);
+                }
+                None => menu.apply_ledger(vec![], "ledger failed: no result envelope".to_string()),
+            },
+            Err(e) => menu.apply_ledger(vec![], format!("ledger failed: {e}")),
+            _ => {}
+        },
+        LoadTasks => match ctx.tool("ape_orchestrate", r#"{"op":"graph"}"#) {
+            Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                Some(r) => {
+                    let text = r
+                        .get("output")
+                        .and_then(|x| x.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| r.to_string());
+                    menu.apply_tasks(text);
+                }
+                None => menu.apply_tasks("tasks failed: no result envelope".to_string()),
+            },
+            Err(e) => menu.apply_tasks(format!("tasks failed: {e}")),
+            _ => {}
+        },
         StartRun { profile, objective } => {
             let args = serde_json::json!({ "profile": profile, "objective": objective }).to_string();
             match ctx.tool("ape_agent_run", &args) {
@@ -380,9 +436,22 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
             }
         }
         FetchStatus(run_id) => {
+            // Open into the LIVE progress view when the run is still going
+            // (same polling path as a fresh start), else the done view.
+            // Either way the id stays visible and pollable.
             match ctx.tool("ape_agent_status", &format!(r#"{{"run_id":{run_id:?}}}"#)) {
                 Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
-                    Some(r) => menu.apply_check_status(r),
+                    Some(r) => {
+                        let running = r.get("status").and_then(|s| s.as_str()) == Some("running");
+                        if running {
+                            let id = r.get("run_id").and_then(|x| x.as_str()).unwrap_or(&run_id).to_string();
+                            let profile = r.get("profile").and_then(|x| x.as_str()).unwrap_or("?").to_string();
+                            menu.apply_run_started(id, profile);
+                            menu.apply_poll(r);
+                        } else {
+                            menu.apply_check_status(r);
+                        }
+                    }
                     None => menu.apply_check_status(&serde_json::json!({
                         "status": "unknown", "stop_reason": null,
                         "step_count": 0, "total_cost": 0, "outcome": "no result envelope"
@@ -603,19 +672,38 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
                 ]));
                 if is_sel && *expanded {
                     // Full result_summary, one Line per source line (never a
-                    // joined multi-line Line). Denied blocks name what the
-                    // ledger does NOT carry: the human policy reason.
-                    for l in b.summary.lines() {
-                        lines.push(Line::from(format!("    {l}")));
+                    // joined multi-line Line). The ledger stores max 300
+                    // chars per step (runs.js appendStep): a full-length
+                    // summary says so honestly instead of implying more.
+                    // Denied blocks show the parsed reason INSTEAD of the raw
+                    // marker line (which just repeats it).
+                    let show_raw = !(b.denied && !b.denied_reason.is_empty());
+                    if show_raw {
+                        for l in b.summary.lines() {
+                            lines.push(Line::from(format!("    {l}")));
+                        }
                     }
                     if b.summary.lines().count() == 0 {
                         lines.push(Line::from("    (empty result)"));
                     }
-                    if b.denied {
+                    if b.summary.chars().count() >= 300 {
                         lines.push(Line::from(Span::styled(
-                            "    reason recorded in the run receipt/audit, not in this step row",
+                            "    …[ledger stores max 300 chars per step]",
                             Style::default().fg(Color::DarkGray),
                         )));
+                    }
+                    if b.denied {
+                        if b.denied_reason.is_empty() {
+                            lines.push(Line::from(Span::styled(
+                                "    reason recorded in the run receipt/audit, not in this step row",
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        } else {
+                            lines.push(Line::from(Span::styled(
+                                format!("    reason: {}", b.denied_reason),
+                                Style::default().fg(Color::Yellow),
+                            )));
+                        }
                     }
                 } else if !b.body().is_empty() {
                     lines.push(Line::from(format!("  {}", b.body())));
@@ -681,6 +769,58 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
         StatusShow { text } => {
             for l in text.lines() {
                 lines.push(Line::from(l.to_string()));
+            }
+            footer = "[any key] back to menu";
+        }
+        RunsList { runs, selected, offset, note } => {
+            const PAGE: usize = 15;
+            if runs.is_empty() {
+                lines.push(Line::from(if note.is_empty() { "no runs yet — start one with Run an agent." } else { note.as_str() }));
+            }
+            for (i, row) in runs.iter().enumerate().skip(*offset).take(PAGE) {
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(format!("  {}", row.line()), style)));
+            }
+            let end = (*offset + PAGE).min(runs.len().max(1));
+            footer = if runs.is_empty() {
+                "[Esc] back"
+            } else {
+                // Static footer text per screen would need allocation; the
+                // range is baked into the last line instead.
+                lines.push(Line::from(format!("showing {}–{} of {}", offset + 1, end, runs.len())));
+                "[↑/↓] move   [Enter] open (live if running)   [Esc] back"
+            };
+        }
+        LedgerList { entries, offset, filter, note } => {
+            const PAGE: usize = 15;
+            let shown: Vec<&menu::LedgerEntry> = entries.iter().filter(|e| filter.matches(e)).collect();
+            // Entries carry no run id or status (audit stream, not run
+            // ledger): the filter is by kind, said on screen.
+            lines.push(Line::from(format!("audit stream · filter: {} (f cycles)", filter.label())));
+            if shown.is_empty() {
+                lines.push(Line::from(if note.is_empty() { "no entries match." } else { note.as_str() }));
+            }
+            let offset = (*offset).min(shown.len().saturating_sub(1));
+            for e in shown.iter().skip(offset).take(PAGE) {
+                lines.push(Line::from(e.line()));
+            }
+            footer = "[↑/↓] scroll   [f] filter   [Esc] back";
+        }
+        TasksShow { text } => {
+            // Skein graph as its own CLI text: real fields only, one Line
+            // per source line. Errors (no python, no graph) render as-is —
+            // never a blank screen.
+            let mut shown = 0;
+            for l in text.lines().take(30) {
+                lines.push(Line::from(l.to_string()));
+                shown += 1;
+            }
+            if shown == 0 {
+                lines.push(Line::from("empty graph — add nodes with ape_orchestrate node-add."));
             }
             footer = "[any key] back to menu";
         }

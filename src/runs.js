@@ -234,6 +234,20 @@ export function appendStep(runId, step) {
     .run(runId, step.step, step.kind ?? "model", step.tool ?? null, step.argsHash ?? null, step.durationMs ?? 0, step.tokens ?? 0, step.cost ?? 0, String(step.resultSummary ?? "").slice(0, 300), new Date().toISOString());
 }
 
+// Live totals: every streamed step also bumps the run row (cost/tokens sum
+// all rows; step_count counts model turns to match max_steps semantics and
+// the end-of-run absolute write, which stays numerically identical).
+// Edge: halt marker rows (spend_capped/model_error) stream as kind "model"
+// without a budget turn, so step_count can read one high until the absolute
+// end-of-run write corrects it. Pollers (TUI meter, browser console,
+// ape_agent_status) are correct mid-run instead of reading zeros.
+export function recordStep(runId, step) {
+  appendStep(runId, step);
+  const d = open();
+  d.prepare("UPDATE runs SET total_cost = total_cost + ?, total_tokens = total_tokens + ?, step_count = step_count + ? WHERE run_id = ?")
+    .run(step.cost ?? 0, step.tokens ?? 0, step.kind === "model" ? 1 : 0, runId);
+}
+
 export function updateRun(runId, patch) {
   const d = open();
   const keys = Object.keys(patch);

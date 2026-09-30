@@ -5,10 +5,10 @@
 │  Doctor                                                                      │
 │  Console info                                                                │
 │  Status                                                                      │
+│  Runs                                                                        │
+│  Ledger                                                                      │
+│  Tasks                                                                       │
 │  Quit                                                                        │
-│                                                                              │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

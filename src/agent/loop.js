@@ -374,12 +374,12 @@ const toolCalls = resp.toolCalls ?? [];
             res = { error: "destructive_not_allowed", tool: tc.name, hint: "this profile denies unattended destructive calls; finish with a proposal for the user to confirm instead" };
             const audit = auditDestructive({ ...auditEntry, verdict: "denied" });
             emitTrace({ tool: "agent.destructive", argsHash: auditEntry.argsHash, resultSummary: `denied:${tc.name}` });
-            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:denied" + (audit.persisted ? "" : ":audit-degraded") });
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:denied" + (audit.persisted ? "" : ":audit-degraded") + ": " + res.hint });
           } else if (destructiveUsed >= maxD) {
             res = { error: "destructive_cap_reached", tool: tc.name, hint: `this run already used ${destructiveUsed}/${maxD} destructive calls` };
             const audit = auditDestructive({ ...auditEntry, verdict: "cap-reached" });
             emitTrace({ tool: "agent.destructive", argsHash: auditEntry.argsHash, resultSummary: `cap-reached:${tc.name}` });
-            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:cap-reached" + (audit.persisted ? "" : ":audit-degraded") });
+            record({ step: budget.steps, kind: "tool", tool: tc.name, argsHash: auditEntry.argsHash, durationMs: Date.now() - t0, tokens: 0, cost: 0, resultSummary: "destructive:cap-reached" + (audit.persisted ? "" : ":audit-degraded") + ": " + res.hint });
           } else {
             destructiveUsed++;
             const audit = auditDestructive({ ...auditEntry, verdict: "executed", destructiveUsed });

@@ -262,6 +262,17 @@ mod snap_impl {
         .unwrap();
         m.apply_cancelled("run-abc123".to_string(), &cancelled);
         shot("menu-cancelled", 80, 24, |f| render_menu(&m, f));
+        // Denied block expanded: marker + reason from the row.
+        let mut m = Menu::new();
+        m.apply_profiles(canned_profiles(), canned_limits());
+        m.apply_run_started("run-abc123".to_string(), "repo-triage".to_string());
+        let denied: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"run-abc123","status":"running","step_count":1,"total_cost":0,"total_tokens":2,"steps":[{"step":1,"kind":"model","tool":"","duration_ms":407,"tokens":2,"cost":0,"result_summary":""},{"step":2,"kind":"tool","tool":"adam.evolve","duration_ms":1,"tokens":0,"cost":0,"result_summary":"destructive:denied: this profile denies unattended destructive calls; finish with a proposal"}]}"#,
+        )
+        .unwrap();
+        m.apply_poll(&denied);
+        m.on_key(Key::Enter);
+        shot("menu-denied", 80, 24, |f| render_menu(&m, f));
 
         // --- Check flow.
         let mut m = Menu::new();
@@ -293,5 +304,92 @@ mod snap_impl {
         let mut m = Menu::new();
         m.view = MenuView::ConsoleInfo;
         shot("menu-console", 80, 24, |f| render_menu(&m, f));
+
+        // --- M4 views: Runs / Ledger / Tasks (canned data, real paths).
+        let mut m = Menu::new();
+        m.view = MenuView::RunsList { runs: vec![], selected: 0, offset: 0, note: "loading runs…".to_string() };
+        m.apply_runs(
+            vec![
+                (("run-aaa111", "repo-triage", "running", "", 0.01, 3, "2026-09-30 10:11")),
+                (("run-bbb222", "writer", "done", "explicit_final_answer", 0.12, 8, "2026-09-30 09:02")),
+                (("run-ccc333", "fact-checker", "stopped", "cancelled", 0.0, 1, "2026-09-29 18:44")),
+            ]
+            .into_iter()
+            .map(|(id, profile, status, stop, cost, steps, started)| menu::RunRow {
+                run_id: id.to_string(),
+                profile: profile.to_string(),
+                status: status.to_string(),
+                stop_reason: stop.to_string(),
+                cost,
+                steps,
+                started: started.to_string(),
+            })
+            .collect(),
+            String::new(),
+        );
+        m.on_key(Key::Down);
+        for (w, h) in [(120u16, 40u16), (80u16, 24u16)] {
+            shot("menu-runs", w, h, |f| {
+                let mut m2 = Menu::new();
+                m2.view = MenuView::RunsList { runs: vec![], selected: 0, offset: 0, note: String::new() };
+                m2.apply_runs(
+                    vec![menu::RunRow {
+                        run_id: "run-aaa111".to_string(),
+                        profile: "repo-triage".to_string(),
+                        status: "running".to_string(),
+                        stop_reason: String::new(),
+                        cost: 0.01,
+                        steps: 3,
+                        started: "2026-09-30 10:11".to_string(),
+                    }],
+                    String::new(),
+                );
+                render_menu(&m2, f);
+            });
+        }
+        shot("menu-runs-full", 80, 24, |f| render_menu(&m, f));
+        // Empty runs.
+        let mut m = Menu::new();
+        m.view = MenuView::RunsList { runs: vec![], selected: 0, offset: 0, note: String::new() };
+        shot("menu-runs-empty", 80, 24, |f| render_menu(&m, f));
+
+        // Ledger: entries + filter cycle + empty.
+        let mut m = Menu::new();
+        m.view = MenuView::LedgerList {
+            entries: vec![],
+            offset: 0,
+            filter: menu::LedgerFilter::All,
+            note: "loading ledger…".to_string(),
+        };
+        m.apply_ledger(
+            vec![
+                menu::LedgerEntry { ts: "2026-09-30T10:11:12".to_string(), kind: "agent.destructive".to_string(), summary: "tool=ape_evolve verdict=denied".to_string() },
+                menu::LedgerEntry { ts: "2026-09-30T09:02:00".to_string(), kind: "genesis.audit".to_string(), summary: "suite=code verdict=SOUND".to_string() },
+            ],
+            String::new(),
+        );
+        shot("menu-ledger", 80, 24, |f| render_menu(&m, f));
+        m.on_key(Key::Char('f'));
+        shot("menu-ledger-filtered", 80, 24, |f| render_menu(&m, f));
+        let mut m = Menu::new();
+        m.view = MenuView::LedgerList {
+            entries: vec![],
+            offset: 0,
+            filter: menu::LedgerFilter::All,
+            note: "no entries yet".to_string(),
+        };
+        shot("menu-ledger-empty", 80, 24, |f| render_menu(&m, f));
+
+        // Tasks: graph text + error state.
+        let mut m = Menu::new();
+        m.view = MenuView::TasksShow {
+            text: "graph: 3 nodes\n- plan [done]\n- execute [claimed by worker-1]\n- verify [open]".to_string(),
+        };
+        shot("menu-tasks", 80, 24, |f| render_menu(&m, f));
+        let mut m = Menu::new();
+        m.view = MenuView::TasksShow {
+            text: "tasks failed: engine_not_configured (skein needs python)".to_string(),
+        };
+        shot("menu-tasks-error", 80, 24, |f| render_menu(&m, f));
     }
 }

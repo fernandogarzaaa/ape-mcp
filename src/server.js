@@ -10,12 +10,44 @@ import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
 import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
 import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
-import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns, exportRun, importRun, shareRun, unshareRun } from "./runs.js";
+import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns, exportRun, importRun, shareRun, unshareRun, appendStep } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
 import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
 import { APE_VERSION } from "./version.js";
 
 const runningAgents = new Map();
+
+// Shared cancel core for ape_agent_cancel + agent/cancel: kill the worker
+// (no drain), mark stopped/cancelled, append the interruption marker.
+// Returns the result object; claim checks stay with the callers.
+function cancelRunCore(runId) {
+  const w = runningAgents.get(runId);
+  if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(runId); }
+  else {
+    const row = getRun(runId);
+    if (row.status === "running" && row.worker_pid) { try { process.kill(row.worker_pid); } catch { /* already gone */ } }
+  }
+  const run = getRun(runId);
+  if (run.status !== "running") {
+    return { run_id: runId, uri: runUri(runId), status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
+  }
+  updateRun(runId, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
+  // Minimal interruption marker, no graceful drain: the in-flight step is
+  // unknowable server-side (the worker holds it), so the marker bounds it
+  // honestly — after the last recorded step. Zero-value row (totals and
+  // resume numbering untouched; resume reads checkpoints, not this row).
+  const seen = getRun(runId).steps ?? [];
+  const last = seen[seen.length - 1];
+  appendStep(runId, {
+    step: (last?.step ?? 0) + 1,
+    kind: "cancel",
+    tool: last?.tool ?? null,
+    resultSummary: last
+      ? `interrupted:cancelled after step ${last.step} (${last.tool || last.kind}) — in-flight work discarded, no graceful drain`
+      : "interrupted:cancelled before any step — nothing was in flight",
+  });
+  return { run_id: runId, uri: runUri(runId), status: "stopped", stop_reason: "cancelled" };
+}
 
 // Worker spawn: detached with NO ipc channel and stdout/stderr to a per-run
 // log file — never inherited pipes. An inherited stdout pipe (or fork's ipc
@@ -86,6 +118,7 @@ export const TOOL_DEFS = [
   { name: "ape_agent_deprecate", description: "Mark an outcome variant of a family as deprecated with a reason", inputSchema: { type: "object", properties: { family: { type: "string", description: "outcome family id" }, outcome_hash: { type: "string", description: "variant hash to deprecate" }, reason: { type: "string", description: "why this variant is deprecated" } }, required: ["family", "outcome_hash", "reason"] }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_connector_call", description: "Call a user-defined connector operation (egress-allowlisted). destructive ops need confirm", inputSchema: { type: "object", properties: { connector: { type: "string", description: "connector name" }, operation: { type: "string", description: "operation to invoke" }, input: { type: "object", description: "operation input object" }, confirm: { type: "boolean", description: "explicit confirm for destructive ops" } }, required: ["connector", "operation"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_connector_list", description: "List loaded connectors + their operations and egress hosts", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_ledger", description: "Recent governance audit entries (destructive attempts, genesis verdicts) from ledger.jsonl — newest last, optional kind filter", inputSchema: { type: "object", properties: { limit: { type: "number", description: "max entries (default 50, cap 200)" }, kind: { type: "string", description: "substring filter on entry kind" } } }, annotations: { readOnly: true, idempotent: true } },
 ];
 
 // Truncation that preserves valid JSON. Slicing a serialized string can split
@@ -386,15 +419,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
           };
           break;
         }
-        const w = runningAgents.get(runId);
-        if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(runId); }
-        else if (run.status === "running" && run.worker_pid) { try { process.kill(run.worker_pid); } catch { /* already gone */ } }
-        if (run.status === "running") {
-          updateRun(runId, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
-          result = { run_id: runId, uri: runUri(runId), status: "stopped", stop_reason: "cancelled" };
-        } else {
-          result = { run_id: runId, uri: runUri(runId), status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
-        }
+        result = cancelRunCore(runId);
         break;
       }
       case "ape_agent_resume": {
@@ -461,6 +486,32 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
       }
       case "ape_connector_list": {
         result = { connectors: connectorList().map((c) => ({ name: c.name, source: c.source, egress_allow: c.egress_allow, operations: c.operations.map((o) => ({ name: o.name, method: o.method, path: o.path, annotations: o.annotations })) })) };
+        break;
+      }
+      case "ape_ledger": {
+        // Same read the browser console's /api/ledger serves: governance
+        // audit stream (destructive attempts, genesis verdicts). No console
+        // process needed — plain file read in shared dispatch.
+        const limit = Math.min(Math.max(Number(a.limit ?? 50) || 50, 1), 200);
+        const kindFilter = typeof a.kind === "string" && a.kind ? a.kind : null;
+        const p = join(dataDir(), "ledger.jsonl");
+        if (!existsSync(p)) {
+          result = { entries: [], note: "no entries yet" };
+          break;
+        }
+        let entries = [];
+        try {
+          entries = readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => {
+            try { return JSON.parse(l); } catch { return { raw: l.slice(0, 300) }; }
+          });
+        } catch (e) {
+          result = { error: "ledger_unreadable", hint: String(e?.message ?? e).slice(0, 200) };
+          break;
+        }
+        if (kindFilter) entries = entries.filter((e) => String(e?.kind ?? "").includes(kindFilter));
+        const total = entries.length;
+        entries = entries.slice(-limit);
+        result = { entries, returned: entries.length, truncated: total > entries.length };
         break;
       }
       case "ape_connector_call": {
@@ -615,14 +666,7 @@ export async function agentMethod(method, params = {}) {
       if (run.status === "running" && run.claimant && run.claimant !== me) {
         return { error: "claim_required", status: 403, run_id: runId, holder: run.claimant, hint: "this live run is claimed by another operator" };
       }
-      const w = runningAgents.get(runId);
-      if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(runId); }
-      else if (run.status === "running" && run.worker_pid) { try { process.kill(run.worker_pid); } catch { /* already gone */ } }
-      if (run.status === "running") {
-        updateRun(runId, { status: "stopped", stop_reason: "cancelled", finished_at: new Date().toISOString() });
-        return { run_id: runId, uri: runUri(runId), status: "stopped", stop_reason: "cancelled" };
-      }
-      return { run_id: runId, uri: runUri(runId), status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
+      return cancelRunCore(runId);
     }
     case "agent/resume":
       return resumeRun(parseRunRef(params.run_id), { mockScript: params._mockScript, mockCostPerCall: params._mockCostPerCall, provider: params.provider, model: params.model }, { claimant: params.claimant });

@@ -10,7 +10,7 @@ import { classifyObjective, selectRoutedModel } from "./router.js";
 import { rankBySimilarity, buildHydrationContext } from "./similarity.js";
 import { familyOf, profileHash, envFingerprint } from "./outcomes.js";
 import { connectorList } from "../connectors.js";
-import { getRun, updateRun, appendStep, recentRuns, saveCheckpoint, loadCheckpoint, findDuplicate } from "../runs.js";
+import { getRun, updateRun, recordStep, recentRuns, saveCheckpoint, loadCheckpoint, findDuplicate } from "../runs.js";
 import { adamCall } from "../adam-client.js";
 
 const runId = process.argv[2];
@@ -165,7 +165,7 @@ async function main() {
     profile,
     objective: req.objective,
     organism_id: req.organism_id ?? "default",
-    onStep: (step) => appendStep(runId, step),
+    onStep: (step) => recordStep(runId, step),
     onCheckpoint: (state) => saveCheckpoint(runId, state.budget?.steps ?? 0, state),
     mockScript: opts.mockScript,
     mockCostPerCall: opts.mockCostPerCall,

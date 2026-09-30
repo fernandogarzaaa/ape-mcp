@@ -4,13 +4,16 @@ use super::input::{Key, LineEditor};
 use crate::ape;
 use std::collections::HashMap;
 
-pub const MENU_ITEMS: [&str; 7] = [
+pub const MENU_ITEMS: [&str; 10] = [
     "Run an agent",
     "Check a run",
     "Profiles",
     "Doctor",
     "Console info",
     "Status",
+    "Runs",
+    "Ledger",
+    "Tasks",
     "Quit",
 ];
 
@@ -27,6 +30,9 @@ pub enum MenuView {
     ProfilesList { profiles: Vec<(String, String)>, offset: usize },
     DoctorShow { text: String },
     StatusShow { text: String },
+    RunsList { runs: Vec<RunRow>, selected: usize, offset: usize, note: String },
+    LedgerList { entries: Vec<LedgerEntry>, offset: usize, filter: LedgerFilter, note: String },
+    TasksShow { text: String },
     ConsoleInfo,
 }
 
@@ -35,9 +41,134 @@ pub enum MenuEffect {
     LoadProfiles,
     LoadDoctor,
     LoadStatus,
+    LoadRuns,
+    LoadLedger,
+    LoadTasks,
     StartRun { profile: String, objective: String },
     FetchStatus(String),
     CancelRun { run_id: String },
+}
+
+/// One row of `ape_agent_list`: real columns only (ids, profile, state,
+/// cost, steps, start time). Age is shown as the start timestamp — no
+/// date library, no invented relative times.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunRow {
+    pub run_id: String,
+    pub profile: String,
+    pub status: String,
+    pub stop_reason: String,
+    pub cost: f64,
+    pub steps: i64,
+    pub started: String,
+}
+
+impl RunRow {
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        Self {
+            run_id: s("run_id"),
+            profile: s("profile"),
+            status: s("status"),
+            stop_reason: s("stop_reason"),
+            cost: v.get("total_cost").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            steps: v.get("step_count").and_then(|x| x.as_i64()).unwrap_or(0),
+            started: s("started_at").replace('T', " ").chars().take(16).collect(),
+        }
+    }
+
+    pub fn line(&self) -> String {
+        let state = if self.stop_reason.is_empty() || self.status == "running" {
+            self.status.clone()
+        } else {
+            format!("{}/{}", self.status, self.stop_reason)
+        };
+        format!(
+            "{} · {} · {} · ${} · {} steps · {}",
+            self.run_id.chars().take(16).collect::<String>(),
+            self.profile,
+            state,
+            fmt_usd(self.cost),
+            self.steps,
+            self.started,
+        )
+    }
+}
+
+/// One `ape_ledger` entry: timestamp, kind, and a one-line human summary
+/// built from real fields only (tool/verdict/suite/message, whichever the
+/// entry carries — entries are heterogeneous by design).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LedgerEntry {
+    pub ts: String,
+    pub kind: String,
+    pub summary: String,
+}
+
+impl LedgerEntry {
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let detail = ["tool", "verdict", "suite", "message", "ledger_entry", "spent_usd", "running"]
+            .iter()
+            .filter_map(|k| {
+                let val = match v.get(*k) {
+                    Some(serde_json::Value::String(x)) => x.clone(),
+                    Some(other) => other.to_string(),
+                    None => return None,
+                };
+                if val.is_empty() { None } else { Some(format!("{k}={val}")) }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let summary = if detail.is_empty() {
+            v.to_string().chars().take(100).collect()
+        } else {
+            detail.chars().take(120).collect()
+        };
+        Self { ts: s("ts").chars().take(19).collect(), kind: s("kind"), summary }
+    }
+
+    pub fn line(&self) -> String {
+        format!("{} · {} · {}", self.ts, self.kind, self.summary)
+    }
+}
+
+/// Ledger kind filter. Entries are heterogeneous and carry no run id or
+/// status (audit stream, not run ledger) — filtering is by kind substring,
+/// cycled with `f`. No run-id/status filter is offered because the data
+/// does not have those fields; inventing one would lie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerFilter {
+    #[default]
+    All,
+    Destructive,
+    Genesis,
+}
+
+impl LedgerFilter {
+    fn next(self) -> Self {
+        match self {
+            LedgerFilter::All => LedgerFilter::Destructive,
+            LedgerFilter::Destructive => LedgerFilter::Genesis,
+            LedgerFilter::Genesis => LedgerFilter::All,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LedgerFilter::All => "all",
+            LedgerFilter::Destructive => "destructive",
+            LedgerFilter::Genesis => "genesis",
+        }
+    }
+
+    pub fn matches(self, e: &LedgerEntry) -> bool {
+        match self {
+            LedgerFilter::All => true,
+            LedgerFilter::Destructive => e.kind.contains("destructive"),
+            LedgerFilter::Genesis => e.kind.contains("genesis"),
+        }
+    }
 }
 
 /// Budget limits for one profile, from `ape_agent_profiles` (same call that
@@ -105,11 +236,12 @@ pub struct StepBlock {
     pub tokens: i64,
     pub cost: f64,
     pub summary: String,
-    /// A loop policy denial (`destructive:denied…` / `:cap-reached…`). The
-    /// ledger row carries the marker but NOT the human reason (that lives
-    /// in the model's res.hint, unrecorded) — the TUI shows the marker
-    /// distinctly and says where the reason is not.
+    /// A loop policy denial (`destructive:<marker>…`). The row now carries
+    /// the human reason after the marker (`…: <reason>`), so [DENIED] blocks
+    /// show it from real data. Rows predating the reason (marker only) show
+    /// the marker plus where the reason is not.
     pub denied: bool,
+    pub denied_reason: String,
 }
 
 impl StepBlock {
@@ -117,7 +249,13 @@ impl StepBlock {
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
         let n = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
         let summary = s("result_summary");
-        let denied = summary.starts_with("destructive:");
+        let (denied, denied_reason) = match summary.strip_prefix("destructive:") {
+            Some(rest) => match rest.find(": ") {
+                Some(i) => (true, rest[i + 2..].to_string()),
+                None => (true, String::new()),
+            },
+            None => (false, String::new()),
+        };
         Self {
             step: n("step"),
             kind: s("kind"),
@@ -127,6 +265,7 @@ impl StepBlock {
             cost: v.get("cost").and_then(|x| x.as_f64()).unwrap_or(0.0),
             summary,
             denied,
+            denied_reason,
         }
     }
 
@@ -304,6 +443,16 @@ impl Menu {
         }
     }
 
+    /// Page window for scrollable lists: keep the selection visible.
+    const PAGE: usize = 15;
+    fn follow(selected: usize, offset: &mut usize) {
+        if selected < *offset {
+            *offset = selected;
+        } else if selected >= *offset + Self::PAGE {
+            *offset = selected + 1 - Self::PAGE;
+        }
+    }
+
     /// Key handling. Returns (effects, quit_app).
     /// Arrows are primary; `j`/`k` are secondary aliases. Text-entry views
     /// consume printable chars into their editors; only Esc navigates back,
@@ -338,6 +487,15 @@ impl Menu {
                         (vec![], false)
                     }
                     5 => (vec![MenuEffect::LoadStatus], false),
+                    6 => {
+                        self.view = MenuView::RunsList { runs: vec![], selected: 0, offset: 0, note: "loading runs…".to_string() };
+                        (vec![MenuEffect::LoadRuns], false)
+                    }
+                    7 => {
+                        self.view = MenuView::LedgerList { entries: vec![], offset: 0, filter: LedgerFilter::All, note: "loading ledger…".to_string() };
+                        (vec![MenuEffect::LoadLedger], false)
+                    }
+                    8 => (vec![MenuEffect::LoadTasks], false),
                     _ => (vec![], true),
                 },
                 Key::Char('q') | Key::Char('Q') => (vec![], true),
@@ -422,10 +580,52 @@ impl Menu {
             | MenuView::CheckShow { .. }
             | MenuView::DoctorShow { .. }
             | MenuView::StatusShow { .. }
+            | MenuView::TasksShow { .. }
             | MenuView::ConsoleInfo => {
                 self.view = MenuView::Main { selected: 0 };
                 (vec![], false)
             }
+            MenuView::RunsList { runs, selected, offset, .. } => match key {
+                Key::Down | Key::Char('j') => {
+                    *selected = (*selected + 1).min(runs.len().saturating_sub(1));
+                    Self::follow(*selected, offset);
+                    (vec![], false)
+                }
+                Key::Up | Key::Char('k') => {
+                    *selected = selected.saturating_sub(1);
+                    Self::follow(*selected, offset);
+                    (vec![], false)
+                }
+                Key::Enter => match runs.get(*selected) {
+                    Some(row) => (vec![MenuEffect::FetchStatus(row.run_id.clone())], false),
+                    None => (vec![], false),
+                },
+                Key::Esc => {
+                    self.view = MenuView::Main { selected: 0 };
+                    (vec![], false)
+                }
+                _ => (vec![], false),
+            },
+            MenuView::LedgerList { offset, filter, .. } => match key {
+                Key::Down | Key::Char('j') => {
+                    *offset = offset.saturating_add(1);
+                    (vec![], false)
+                }
+                Key::Up | Key::Char('k') => {
+                    *offset = offset.saturating_sub(1);
+                    (vec![], false)
+                }
+                Key::Char('f') | Key::Char('F') => {
+                    *filter = filter.next();
+                    *offset = 0;
+                    (vec![], false)
+                }
+                Key::Esc => {
+                    self.view = MenuView::Main { selected: 0 };
+                    (vec![], false)
+                }
+                _ => (vec![], false),
+            },
             MenuView::ProfilesList { profiles, offset } => match key {
                 Key::Down | Key::Char('j') => {
                     *offset = (*offset + 1).min(profiles.len().saturating_sub(1));
@@ -513,9 +713,9 @@ impl Menu {
 
     /// Feed one `ape_agent_status` poll. Appends only steps never seen (by
     /// position in the ledger array) — the timeline grows, never clears.
-    /// Spent aggregates come from the step ROWS, not the run row: the row's
-    /// totals are written once at completion (0 mid-run), while step rows
-    /// stream live. Model-turn rows count as steps (matches max_steps).
+    /// Spent comes from the run ROW: since live totals land per streamed
+    /// step (runs.js recordStep), the row is correct mid-run — no separate
+    /// aggregation needed (locked by tests/ledger-live.test.js).
     /// Returns true when the run reached a terminal state.
     pub fn apply_poll(&mut self, status: &serde_json::Value) -> bool {
         let state = status.get("status").and_then(|s| s.as_str()).unwrap_or("running").to_string();
@@ -534,28 +734,10 @@ impl Menu {
                     if *selected + 1 >= prev.max(1) {
                         *selected = blocks.len().saturating_sub(1);
                     }
-                    // Live aggregates over the whole ledger (cumulative array):
-                    // cost/tokens sum all rows; steps counts model turns to
-                    // match max_steps semantics. Falls back to row totals when
-                    // no step rows are present (defensive: older servers).
-                    let mut cost = 0.0;
-                    let mut toks = 0i64;
-                    let mut turns = 0i64;
-                    for s in steps {
-                        cost += s.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        toks += s.get("tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                        if s.get("kind").and_then(|v| v.as_str()) == Some("model") {
-                            turns += 1;
-                        }
-                    }
-                    budget.spent_usd = cost;
-                    budget.spent_tokens = toks;
-                    budget.steps = turns;
-                } else {
-                    budget.spent_usd = status.get("total_cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    budget.spent_tokens = status.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                    budget.steps = status.get("step_count").and_then(|v| v.as_i64()).unwrap_or(0);
                 }
+                budget.spent_usd = status.get("total_cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                budget.spent_tokens = status.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                budget.steps = status.get("step_count").and_then(|v| v.as_i64()).unwrap_or(0);
                 *last_status = state.clone();
                 if terminal {
                     // Prefer the view's id; the status envelope should echo
@@ -584,6 +766,36 @@ impl Menu {
         self.view = MenuView::DoctorShow { text };
     }
 
+    pub fn apply_runs(&mut self, runs: Vec<RunRow>, note: String) {
+        match &mut self.view {
+            MenuView::RunsList { runs: r, selected, offset, note: n } => {
+                *r = runs;
+                *n = note;
+                let max = r.len().saturating_sub(1);
+                if *selected > max {
+                    *selected = max;
+                }
+                let sel = *selected;
+                Self::follow(sel, offset);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn apply_ledger(&mut self, entries: Vec<LedgerEntry>, note: String) {
+        match &mut self.view {
+            MenuView::LedgerList { entries: e, note: n, .. } => {
+                *e = entries;
+                *n = note;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn apply_tasks(&mut self, text: String) {
+        self.view = MenuView::TasksShow { text };
+    }
+
     pub fn apply_status(&mut self, status: &serde_json::Value) {
         self.provider_cache = status
             .get("active_provider")
@@ -604,6 +816,18 @@ impl Default for Menu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn menu_row(id: &str, status: &str) -> RunRow {
+        RunRow {
+            run_id: id.to_string(),
+            profile: "p".to_string(),
+            status: status.to_string(),
+            stop_reason: "explicit_final_answer".to_string(),
+            cost: 0.02,
+            steps: 3,
+            started: "2026-09-30 10:11".to_string(),
+        }
+    }
 
     #[test]
     fn main_navigation_moves_and_selects() {
@@ -634,11 +858,86 @@ mod tests {
     #[test]
     fn quit_entry_quits() {
         let mut m = Menu::new();
-        for _ in 0..6 {
+        for _ in 0..9 {
             m.on_key(Key::Char('j'));
         }
         let (_, quit) = m.on_key(Key::Enter);
         assert!(quit);
+    }
+
+    #[test]
+    fn runs_ledger_tasks_entries_emit_loads() {
+        let mut m = Menu::new();
+        for _ in 0..6 {
+            m.on_key(Key::Down);
+        }
+        let (fx, _) = m.on_key(Key::Enter);
+        assert_eq!(fx, vec![MenuEffect::LoadRuns]);
+        assert!(matches!(m.view, MenuView::RunsList { .. }));
+        let mut m = Menu::new();
+        for _ in 0..7 {
+            m.on_key(Key::Down);
+        }
+        let (fx, _) = m.on_key(Key::Enter);
+        assert_eq!(fx, vec![MenuEffect::LoadLedger]);
+        let mut m = Menu::new();
+        for _ in 0..8 {
+            m.on_key(Key::Down);
+        }
+        let (fx, _) = m.on_key(Key::Enter);
+        assert_eq!(fx, vec![MenuEffect::LoadTasks]);
+    }
+
+    #[test]
+    fn runs_enter_opens_selected_into_fetch() {
+        let mut m = Menu::new();
+        m.view = MenuView::RunsList {
+            runs: vec![menu_row("run-a", "running"), menu_row("run-b", "done")],
+            selected: 1,
+            offset: 0,
+            note: String::new(),
+        };
+        let (fx, _) = m.on_key(Key::Enter);
+        assert_eq!(fx, vec![MenuEffect::FetchStatus("run-b".to_string())]);
+        m.on_key(Key::Down);
+        m.on_key(Key::Up);
+        match &m.view {
+            MenuView::RunsList { selected, .. } => assert_eq!(*selected, 0),
+            other => panic!("expected RunsList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ledger_filter_cycles_and_resets_offset() {
+        let mut m = Menu::new();
+        m.view = MenuView::LedgerList {
+            entries: vec![
+                LedgerEntry { ts: "t".into(), kind: "agent.destructive".into(), summary: "s".into() },
+                LedgerEntry { ts: "t".into(), kind: "genesis.audit".into(), summary: "s".into() },
+            ],
+            offset: 5,
+            filter: LedgerFilter::All,
+            note: String::new(),
+        };
+        m.on_key(Key::Char('f'));
+        match &m.view {
+            MenuView::LedgerList { filter, offset, .. } => {
+                assert_eq!(*filter, LedgerFilter::Destructive);
+                assert_eq!(*offset, 0);
+            }
+            other => panic!("expected LedgerList, got {other:?}"),
+        }
+        assert!(LedgerFilter::Genesis.matches(&LedgerEntry { ts: "t".into(), kind: "genesis.audit".into(), summary: "s".into() }));
+        assert!(!LedgerFilter::Genesis.matches(&LedgerEntry { ts: "t".into(), kind: "agent.destructive".into(), summary: "s".into() }));
+    }
+
+    #[test]
+    fn run_row_and_ledger_entry_lines() {
+        let row = menu_row("run-abcdef1234567890", "done");
+        assert!(row.line().contains("run-abcdef123456"), "id shortened, got: {}", row.line());
+        assert!(row.line().contains("explicit_final_answer"), "stop shown, got: {}", row.line());
+        let e = LedgerEntry { ts: "2026-09-30T10:11:12".into(), kind: "agent.destructive".into(), summary: "tool=x".into() };
+        assert!(e.line().contains("agent.destructive"));
     }
 
     #[test]
@@ -858,11 +1157,11 @@ mod tests {
     }
 
     #[test]
-    fn denied_blocks_carry_marker_not_reason() {
+    fn denied_blocks_carry_marker_and_reason() {
         let mut m = Menu::new();
         m.apply_run_started("r".to_string(), "p".to_string());
         let poll: serde_json::Value = serde_json::from_str(
-            r#"{"run_id":"r","status":"running","steps":[{"step":1,"kind":"tool","tool":"ape_evolve","duration_ms":1,"tokens":0,"cost":0,"result_summary":"destructive:denied"}]}"#,
+            r#"{"run_id":"r","status":"running","steps":[{"step":1,"kind":"tool","tool":"adam.evolve","duration_ms":1,"tokens":0,"cost":0,"result_summary":"destructive:denied: this profile denies unattended destructive calls; finish with a proposal"}]}"#,
         )
         .unwrap();
         m.apply_poll(&poll);
@@ -870,26 +1169,44 @@ mod tests {
             MenuView::RunProgress { blocks, .. } => {
                 assert!(blocks[0].denied);
                 assert!(blocks[0].header().contains("[DENIED]"));
+                assert!(blocks[0].denied_reason.contains("denies unattended"), "got: {}", blocks[0].denied_reason);
+            }
+            other => panic!("expected RunProgress, got {other:?}"),
+        }
+        // Marker-only rows (predating the reason) still flag distinctly.
+        let mut m2 = Menu::new();
+        m2.apply_run_started("r".to_string(), "p".to_string());
+        let old: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"running","steps":[{"step":1,"kind":"tool","tool":"x","duration_ms":1,"tokens":0,"cost":0,"result_summary":"destructive:denied"}]}"#,
+        )
+        .unwrap();
+        m2.apply_poll(&old);
+        match &m2.view {
+            MenuView::RunProgress { blocks, .. } => {
+                assert!(blocks[0].denied);
+                assert!(blocks[0].denied_reason.is_empty());
             }
             other => panic!("expected RunProgress, got {other:?}"),
         }
     }
 
     #[test]
-    fn live_aggregates_come_from_step_rows() {
-        // Run-row totals stay 0 mid-run; the meter must read the rows.
+    fn live_totals_come_from_the_run_row() {
+        // Rows are live since recordStep (locked by ledger-live.test.js);
+        // the TUI trusts them, including mid-run nonzero values.
         let mut m = Menu::new();
         m.apply_run_started("r".to_string(), "p".to_string());
         let poll: serde_json::Value = serde_json::from_str(
-            r#"{"run_id":"r","status":"running","step_count":0,"total_cost":0,"total_tokens":0,"steps":[{"step":1,"kind":"model","tool":"","duration_ms":407,"tokens":2,"cost":0,"result_summary":""},{"step":2,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"}]}"#,
+            r#"{"run_id":"r","status":"running","step_count":1,"total_cost":0.01,"total_tokens":42,"steps":[{"step":1,"kind":"model","tool":"","duration_ms":407,"tokens":2,"cost":0,"result_summary":""},{"step":2,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"}]}"#,
         )
         .unwrap();
         m.apply_poll(&poll);
         match &m.view {
-            MenuView::RunProgress { budget, .. } => {
+            MenuView::RunProgress { budget, blocks, .. } => {
                 assert_eq!(budget.spent_tokens, 42);
-                assert_eq!(budget.steps, 1, "model turns, not rows");
+                assert_eq!(budget.steps, 1);
                 assert!((budget.spent_usd - 0.01).abs() < 1e-9);
+                assert_eq!(blocks.len(), 2, "blocks still come from the rows");
             }
             other => panic!("expected RunProgress, got {other:?}"),
         }
