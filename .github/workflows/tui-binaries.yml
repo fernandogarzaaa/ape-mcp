@@ -35,6 +35,17 @@ jobs:
       - name: ape-tui unit tests (each platform builds what it ships)
         run: cargo test --manifest-path tui/Cargo.toml
       - run: cargo build --release --manifest-path tui/Cargo.toml --target ${{ matrix.target }}
+      - name: Smoke-test the built binary (non-TTY guard path)
+        shell: bash
+        run: |
+          bin="tui/target/${{ matrix.target }}/release/ape-tui${{ contains(matrix.os, 'windows') && '.exe' || '' }}"
+          # Piped stdin is not a TTY: the binary must refuse with exit 2 and
+          # the guard message. Anything else (crash, hang, exit 0) fails the
+          # job BEFORE the asset uploads, so a dead binary can never ship.
+          echo | "$bin" > smoke.out 2>&1; code=$?
+          cat smoke.out
+          test "$code" -eq 2 || { echo "::error::smoke failed: exit $code, want 2"; exit 1; }
+          grep -q "run it in a terminal" smoke.out || { echo "::error::smoke failed: guard message missing"; exit 1; }
       - name: Rename binary to platform asset name (so platforms don't collide on download)
         shell: bash
         run: |
@@ -69,6 +80,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Serialized with adam-binaries' release job (same group name): both
+    # workflows append to the SAME tag release (shared repo versioning), and
+    # concurrent create-or-update calls can 422-conflict and drop assets.
+    # Filenames are disjoint (ape-tui-* vs adam-mcp-*), so ordered appends
+    # never overwrite — they just must not run at the same instant.
+    concurrency:
+      group: release-assets
+      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -77,3 +96,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist-tui/*
+          # Release candidates stay pre-release; real versions don't.
+          prerelease: ${{ contains(github.ref, '-rc.') }}
