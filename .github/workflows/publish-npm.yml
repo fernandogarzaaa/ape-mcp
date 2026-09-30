@@ -1,20 +1,35 @@
 # Publishes to npm via OIDC trusted publishing (no long-lived NPM_TOKEN).
-# Trigger: push a v* tag whose version matches package.json.
-# The npm package's Trusted Publisher must name this exact workflow file.
+#
+# Two triggers, one publish path:
+# - Tag push (v*): the real release flow. Version guard -> asset gate ->
+#   fast tests -> human approval (npm-publish environment) -> publish.
+# - Manual dispatch: dry-run proof of the SAME gates. Always --dry-run,
+#   publishes nothing; used to prove the environment gate pauses.
 #
 # Ordering vs the binary workflows: GitHub Actions has no cross-workflow
 # `needs`, so this job CANNOT wait for tui-binaries/adam-binaries. Two
 # gates stand in instead, and BOTH must hold before anything publishes:
-#  1. The verify-assets step below fails the job unless the tag's release
-#     already carries all four ape-tui binaries plus SHA256SUMS (the tag
-#     workflows attach them; postinstall downloads them by tag).
+#  1. The verify-assets step fails the job unless the tag's release
+#     already carries all four ape-tui binaries plus SHA256SUMS.
 #  2. The `npm-publish` environment requires a human reviewer (one-time
 #     repo setting, see docs/release.md) who checks the assets by eye.
 # Either gate stops a publish that would ship without TUI binaries.
+#
+# The npm package's Trusted Publisher must name this exact workflow file.
 name: publish-npm
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to verify and dry-publish (proves the gates, publishes nothing)"
+        required: false
+        default: "v1.1.0"
+      dry_run:
+        description: "Manual runs are dry-run only"
+        type: boolean
+        default: true
 permissions:
   contents: read
   id-token: write
@@ -22,32 +37,65 @@ concurrency:
   group: publish-npm
   cancel-in-progress: false
 jobs:
-  publish:
+  # Fast suite as a required gate inside this workflow: a failing tree
+  # cannot reach the publish job, on either trigger.
+  test:
     runs-on: ubuntu-latest
-    environment: npm-publish
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: npm install --omit=dev --no-audit --no-fund
+      - run: npm --prefix vendors/genesis install --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix vendors/eve install --ignore-scripts --no-audit --no-fund
+      - run: npm test
+  publish:
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    steps:
+      - name: Manual runs are dry-run only
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          [ "${{ inputs.dry_run }}" = "true" ] || { echo "::error::manual runs are dry-run only; use a tag push for real releases"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - name: Tag version matches package.json
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+            TAG="${TAG#v}"
+          else
+            TAG="${GITHUB_REF_NAME#v}"
+          fi
           PKG="$(node -p "require('./package.json').version")"
           echo "tag: $TAG / package.json: $PKG"
           test "$TAG" = "$PKG" || { echo "::error::tag v$TAG does not match package.json version $PKG"; exit 1; }
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
       - name: Release carries all TUI binaries + SHA256SUMS
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for f in ape-tui-win-x64.exe ape-tui-linux-x64 ape-tui-darwin-arm64 ape-tui-darwin-x64 SHA256SUMS; do
-            gh release view "${GITHUB_REF_NAME}" --json assets --jq ".assets[].name" | grep -qx "$f" \
-              || { echo "::error::release ${GITHUB_REF_NAME} is missing asset: $f (binaries workflow must finish first)"; exit 1; }
+            gh release view "v$TAG" --json assets --jq ".assets[].name" | grep -qx "$f" \
+              || { echo "::error::release v$TAG is missing asset: $f (binaries workflow must finish first)"; exit 1; }
           done
-          echo "all 5 TUI release files present"
+          echo "all 5 TUI release files present on v$TAG"
       - run: npm ci --no-audit --no-fund
       - run: node scripts/check-bom.mjs
-      - run: npm publish --provenance --access public
+      - name: Publish (real on tag push, dry-run on manual dispatch)
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            npm publish --dry-run --access public
+          else
+            npm publish --provenance --access public
+          fi
