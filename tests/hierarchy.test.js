@@ -8,6 +8,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const workdir = mkdtempSync(join(tmpdir(), "ape-hier-ws-"));
+// Pin the vendored skein CLI to this workspace: without a .skein dir here,
+// find_repo_root() walks up past the temp dir and can latch onto ambient
+// state (e.g. a user-level ~/.skein), so a rerun sees the previous run's
+// nodes and node-add fails with "already exists".
+mkdirSync(join(workdir, ".skein"), { recursive: true });
 process.env.APE_DATA_DIR = mkdtempSync(join(tmpdir(), "ape-hier-"));
 process.env.APE_ALLOW_MOCK_INPUT = "1";
 

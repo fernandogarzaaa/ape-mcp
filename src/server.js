@@ -8,7 +8,7 @@ import { emitTrace, newTraceId, shaShort, dataDir } from "./trace.js";
 import { loadMods } from "./mods.js";
 import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
-import { loadProfile, listProfiles, describeProfile } from "./agent/profiles.js";
+import { loadProfile, listProfiles, describeProfile, listProfileDetails } from "./agent/profiles.js";
 import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
 import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns, exportRun, importRun, shareRun, unshareRun, appendStep } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
@@ -382,7 +382,7 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
       }
       case "ape_task_get": result = taskGet(a.task_id); break;
       case "ape_agent_profiles": {
-        result = { profiles: listProfiles().map((n) => ({ ...describeProfile(n), description: describeProfile(n)?.description })) };
+        result = { profiles: listProfileDetails() };
         break;
       }
       case "ape_agent_run": {
@@ -638,7 +638,7 @@ export function discover() {
 export async function agentMethod(method, params = {}) {
   switch (method) {
     case "agent/listProfiles":
-      return { profiles: listProfiles().map((n) => describeProfile(n)) };
+      return { profiles: listProfileDetails() };
     case "agent/describeProfile":
       return describeProfile(params.profile) ?? { error: "profile_not_found", profile: params.profile, available: listProfiles() };
     case "agent/run": {
