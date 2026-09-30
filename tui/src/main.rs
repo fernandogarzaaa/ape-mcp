@@ -314,10 +314,10 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
     match fx {
         LoadProfiles => match ctx.tool("ape_agent_profiles", "{}") {
             Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
-                Some(r) => menu.apply_profiles(onboard::profile_list(r)),
-                None => menu.apply_profiles(vec![]),
+                Some(r) => menu.apply_profiles(onboard::profile_list(r), onboard::profile_limits(r)),
+                None => menu.apply_profiles(vec![], Default::default()),
             },
-            _ => menu.apply_profiles(vec![]),
+            _ => menu.apply_profiles(vec![], Default::default()),
         },
         LoadDoctor => {
             let text = match ctx.cli(&["doctor"]) {
@@ -345,17 +345,37 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
                         Some(id) => menu.apply_run_started(id.to_string(), profile),
                         None => {
                             menu.view = MenuView::RunDone {
+                                run_id: String::new(),
                                 summary: "start failed: no run_id in response".to_string(),
                             }
                         }
                     }
                 }
                 Ok(_) => {
-                    menu.view = MenuView::RunDone { summary: "start failed: unexpected response".to_string() }
+                    menu.view = MenuView::RunDone { run_id: String::new(), summary: "start failed: unexpected response".to_string() }
                 }
                 Err(e) => {
-                    menu.view = MenuView::RunDone { summary: format!("start failed: {e}") }
+                    menu.view = MenuView::RunDone { run_id: String::new(), summary: format!("start failed: {e}") }
                 }
+            }
+        }
+        CancelRun { run_id } => {
+            // Real cancel: the runtime kills the worker and marks the row
+            // stopped/cancelled (proven via CLI on a delayed mock run). The
+            // id stays on screen so the run remains pollable by id.
+            match ctx.tool("ape_agent_cancel", &format!(r#"{{"run_id":{run_id:?}}}"#)) {
+                Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                    Some(r) => menu.apply_cancelled(run_id, r),
+                    None => menu.apply_cancelled(
+                        run_id,
+                        &serde_json::json!({"status":"unknown","outcome":"cancel sent, no result envelope"}),
+                    ),
+                },
+                Err(e) => menu.apply_cancelled(
+                    run_id,
+                    &serde_json::json!({"status":"error","outcome":e}),
+                ),
+                _ => {}
             }
         }
         FetchStatus(run_id) => {
@@ -481,7 +501,9 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
                         "demo finished — you have seen the whole loop:",
                         Style::default().fg(Color::Green),
                     )));
-                    lines.push(Line::from(summary.as_str()));
+                    for l in summary.lines() {
+                        lines.push(Line::from(l.to_string()));
+                    }
                 }
             }
         }
@@ -550,16 +572,55 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             lines.push(editor_line(editor));
             footer = "[←/→] move in text   [Enter] run   [Esc] back";
         }
-        RunProgress { run_id, profile, lines: log } => {
-            lines.push(Line::from(format!("run {run_id} [{profile}] — Esc stops watching (run continues):")));
-            for l in log.iter() {
-                lines.push(Line::from(l.as_str()));
+        RunProgress { run_id, profile, blocks, budget, last_status, .. } => {
+            lines.push(Line::from(format!("run {run_id} [{profile}] — {last_status}:")));
+            // Budget meter first: always visible while the run is live.
+            lines.push(Line::from(Span::styled(
+                budget.meter(),
+                Style::default().fg(Color::Yellow),
+            )));
+            // Timeline grows by append; the screen shows the tail with an
+            // honest count when older blocks scrolled out of view.
+            const TAIL: usize = 20;
+            let skip = blocks.len().saturating_sub(TAIL);
+            if skip > 0 {
+                lines.push(Line::from(format!("… {skip} earlier step(s) — poll by id for the full ledger")));
             }
-            footer = "[Esc] stop watching (run keeps going)";
+            if blocks.is_empty() {
+                lines.push(Line::from("run started — waiting for the first step…"));
+            }
+            for b in blocks.iter().skip(skip) {
+                lines.push(Line::from(Span::styled(
+                    b.header(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                if !b.body().is_empty() {
+                    lines.push(Line::from(format!("  {}", b.body())));
+                }
+            }
+            footer = "[Esc] cancel run   (stays pollable by id)";
         }
-        RunDone { summary } => {
-            lines.push(Line::from(Span::styled("done:", Style::default().fg(Color::Green))));
-            lines.push(Line::from(summary.as_str()));
+        RunDone { run_id, summary } => {
+            lines.push(Line::from(Span::styled("finished:", Style::default().fg(Color::Green))));
+            if !run_id.is_empty() {
+                lines.push(Line::from(format!("run {run_id}")));
+            }
+            // Split, never one multi-line Line: ratatui wraps those instead
+            // of breaking them (same bug class as the old banner render).
+            for l in summary.lines() {
+                lines.push(Line::from(l.to_string()));
+            }
+            footer = "[any key] back to menu";
+        }
+        RunCancelled { run_id, summary } => {
+            lines.push(Line::from(Span::styled(
+                "cancelled — worker stopped.",
+                Style::default().fg(Color::Yellow),
+            )));
+            lines.push(Line::from(format!("run {run_id} (still pollable via Check a run)")));
+            for l in summary.lines() {
+                lines.push(Line::from(l.to_string()));
+            }
             footer = "[any key] back to menu";
         }
         CheckId { editor } => {

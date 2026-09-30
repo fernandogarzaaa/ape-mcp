@@ -7,10 +7,8 @@
 //! Data provenance per snapshot:
 //! - canned: hand-written backend stand-ins (doctor lines, profiles).
 //! - real: `snapshots/real-status.json` from `scripts/tui-capture.mjs`
-//!   (a genuine mock run through `ape-mcp run` + `ape_agent_status`).
-//! - real-derived: the real done sample reframed as an earlier running
-//!   frame (steps truncated, status flipped) — same tool names, durations,
-//!   costs; only the frame position is synthetic.
+//!   (a genuine mock run through `ape-mcp run` + `ape_agent_status`,
+//!   stretched by APE_MOCK_STEP_DELAY_MS so real `running` frames exist).
 //!
 //! Volatile bits (run ids) are normalized to `run-<id>` so diffs are clean.
 #[cfg(test)]
@@ -89,13 +87,31 @@ mod snap_impl {
         serde_json::from_str(r#"{"active_provider":{"provider":"opencode","source":"opencode session"}}"#).unwrap()
     }
 
+    fn canned_limits() -> std::collections::HashMap<String, menu::ProfileLimits> {
+        [("repo-triage".to_string(), menu::ProfileLimits {
+            max_steps: Some(12),
+            max_usd: Some(0.5),
+            max_tokens: Some(120000),
+        })]
+        .into_iter()
+        .collect()
+    }
+
     fn canned_poll(i: usize, terminal: bool) -> serde_json::Value {
+        let steps: Vec<String> = (1..=i)
+            .map(|n| {
+                format!(
+                    r#"{{"step":{n},"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok {n}"}}"#
+                )
+            })
+            .collect();
         serde_json::from_str(&format!(
-            r#"{{"status":"{}","stop_reason":{},"step_count":{},"total_cost":0.01,"outcome":"{}"}}"#,
+            r#"{{"run_id":"run-abc123","status":"{}","stop_reason":{},"step_count":{},"total_cost":0.01,"total_tokens":80,"outcome":"{}","steps":[{}]}}"#,
             if terminal { "done" } else { "running" },
             if terminal { "\"explicit_final_answer\"" } else { "null" },
             i,
             if terminal { "snapshot ok" } else { "" },
+            steps.join(","),
         ))
         .unwrap()
     }
@@ -160,7 +176,7 @@ mod snap_impl {
         let mut m = Menu::new();
         let (fx, _) = m.on_key(Key::Enter); // Run an agent
         assert_eq!(fx, vec![menu::MenuEffect::LoadProfiles]);
-        m.apply_profiles(canned_profiles());
+        m.apply_profiles(canned_profiles(), canned_limits());
         m.on_key(Key::Down);
         shot("menu-run-profile", 80, 24, |f| render_menu(&m, f));
         let _ = m.on_key(Key::Enter); // -> RunObjective
@@ -171,52 +187,67 @@ mod snap_impl {
         m.on_key(Key::Left);
         shot("menu-objective", 80, 24, |f| render_menu(&m, f));
 
-        // --- Run progress: REAL done sample + real-derived running frame.
+        // --- Run progress: drive apply_poll with REAL samples so the
+        // timeline diff/append path is exercised, not hand-built.
         let real = real_samples();
+        let running_frames: Vec<serde_json::Value> = real
+            .as_ref()
+            .map(|s| {
+                s.iter()
+                    .filter(|v| v.get("status").and_then(|x| x.as_str()) != Some("done"))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         let done_value = real
             .as_ref()
             .and_then(|s| s.iter().find(|v| v.get("status").and_then(|x| x.as_str()) == Some("done")).cloned())
             .unwrap_or_else(|| canned_poll(2, true));
-        let running_value = real
-            .as_ref()
-            .and_then(|s| s.iter().find(|v| v.get("status").and_then(|x| x.as_str()) != Some("done")).cloned())
-            .unwrap_or_else(|| {
-                // Real-derived: truncate the real step ledger to an earlier frame.
-                let mut v = done_value.clone();
-                if let Some(steps) = v.get_mut("steps").and_then(|x| x.as_array_mut()) {
-                    steps.truncate(3);
-                }
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("status".to_string(), serde_json::Value::String("running".to_string()));
-                    obj.insert("stop_reason".to_string(), serde_json::Value::Null);
-                    obj.insert("finished_at".to_string(), serde_json::Value::Null);
-                    obj.insert("outcome".to_string(), serde_json::Value::String(String::new()));
-                }
-                v
-            });
+        // Start a real run flow: profile pick carries limits into the budget.
         let mut m = Menu::new();
-        let lore = menu::status_text(&running_value);
-        m.view = MenuView::RunProgress {
-            run_id: running_value.get("run_id").and_then(|r| r.as_str()).unwrap_or("run-abc123").to_string(),
-            profile: "repo-triage".to_string(),
-            lines: vec![lore.clone(), lore],
+        m.apply_profiles(canned_profiles(), canned_limits());
+        m.apply_run_started(
+            done_value.get("run_id").and_then(|r| r.as_str()).unwrap_or("run-abc123").to_string(),
+            "repo-triage".to_string(),
+        );
+        // Feed the first two genuine running frames (or canned fallback).
+        let frames: Vec<serde_json::Value> = if running_frames.len() >= 2 {
+            running_frames[..2].to_vec()
+        } else {
+            vec![canned_poll(1, false), canned_poll(2, false)]
         };
+        for fr in &frames {
+            m.apply_poll(fr);
+        }
         for (w, h) in [(120u16, 40u16), (80u16, 24u16)] {
             shot("menu-progress", w, h, |f| {
                 let mut m2 = Menu::new();
-                m2.view = MenuView::RunProgress {
-                    run_id: "run-abc123".to_string(),
-                    profile: "repo-triage".to_string(),
-                    lines: vec![menu::status_text(&canned_poll(2, false)), menu::status_text(&canned_poll(3, false))],
-                };
+                m2.apply_run_started("run-abc123".to_string(), "repo-triage".to_string());
+                m2.apply_poll(&canned_poll(1, false));
+                m2.apply_poll(&canned_poll(2, false));
                 render_menu(&m2, f);
             });
         }
         // Real-data progress frame (80x24 only; ids normalized).
         shot("menu-progress-real", 80, 24, |f| render_menu(&m, f));
+        // Natural finish keeps the id.
         let mut m = Menu::new();
-        m.view = MenuView::RunDone { summary: menu::status_text(&done_value) };
+        m.apply_run_started(
+            done_value.get("run_id").and_then(|r| r.as_str()).unwrap_or("run-abc123").to_string(),
+            "repo-triage".to_string(),
+        );
+        m.apply_poll(&done_value);
         shot("menu-done", 80, 24, |f| render_menu(&m, f));
+        // Cancelled run keeps the id and stays pollable.
+        let mut m = Menu::new();
+        m.apply_run_started("run-abc123".to_string(), "repo-triage".to_string());
+        m.apply_poll(&canned_poll(1, false));
+        let cancelled: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"run-abc123","status":"stopped","stop_reason":"cancelled","step_count":1,"total_cost":0.01,"total_tokens":40,"outcome":""}"#,
+        )
+        .unwrap();
+        m.apply_cancelled("run-abc123".to_string(), &cancelled);
+        shot("menu-cancelled", 80, 24, |f| render_menu(&m, f));
 
         // --- Check flow.
         let mut m = Menu::new();
@@ -231,7 +262,7 @@ mod snap_impl {
 
         // --- Lists / info.
         let mut m = Menu::new();
-        m.apply_profiles(canned_profiles());
+        m.apply_profiles(canned_profiles(), canned_limits());
         m.view = MenuView::ProfilesList { profiles: canned_profiles(), offset: 0 };
         shot("menu-profiles", 80, 24, |f| render_menu(&m, f));
         let mut m = Menu::new();

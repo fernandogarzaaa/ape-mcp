@@ -1,10 +1,10 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│run run-<id> [repo-triage] — Esc stops watching (run continues):                                                    │
-│running · 2 steps · $0.01 ·  tokens                                                                                   │
-│running · 3 steps · $0.01 ·  tokens                                                                                   │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
+│run run-<id> [repo-triage] — running:                                                                               │
+│budget $0.01 · 2 steps · 80 tok                                                                                       │
+│step 1 · skein.orchestrate · 120ms · 40 tok · $0.01                                                                   │
+│  ok 1                                                                                                                │
+│step 2 · skein.orchestrate · 120ms · 40 tok · $0.01                                                                   │
+│  ok 2                                                                                                                │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -34,6 +34,6 @@
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                                          [Esc] stop watching (run keeps going)
+                                        [Esc] cancel run   (stays pollable by id)
 
-                                        provider: … · profile: … · ape-mcp 0.1.0
+                             run run-<id> · repo-triage · running · $0.01 · ape-mcp 0.1.0

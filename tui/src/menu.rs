@@ -2,6 +2,7 @@
 //! [`MenuEffect`]s (subprocess calls) and feeds results back via `apply_*`.
 use super::input::{Key, LineEditor};
 use crate::ape;
+use std::collections::HashMap;
 
 pub const MENU_ITEMS: [&str; 7] = [
     "Run an agent",
@@ -18,8 +19,9 @@ pub enum MenuView {
     Main { selected: usize },
     RunProfile { profiles: Vec<(String, String)>, selected: usize },
     RunObjective { profile: String, editor: LineEditor },
-    RunProgress { run_id: String, profile: String, lines: Vec<String> },
-    RunDone { summary: String },
+    RunProgress { run_id: String, profile: String, blocks: Vec<StepBlock>, seen: usize, budget: Budget, last_status: String },
+    RunDone { run_id: String, summary: String },
+    RunCancelled { run_id: String, summary: String },
     CheckId { editor: LineEditor },
     CheckShow { text: String },
     ProfilesList { profiles: Vec<(String, String)>, offset: usize },
@@ -35,6 +37,114 @@ pub enum MenuEffect {
     LoadStatus,
     StartRun { profile: String, objective: String },
     FetchStatus(String),
+    CancelRun { run_id: String },
+}
+
+/// Budget limits for one profile, from `ape_agent_profiles` (same call that
+/// feeds the picker — no second round-trip). All optional: a profile may
+/// omit any ceiling, and then the meter shows spent only.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProfileLimits {
+    pub max_steps: Option<i64>,
+    pub max_usd: Option<f64>,
+    pub max_tokens: Option<i64>,
+}
+
+/// Live budget: spent (from each `ape_agent_status` poll of the run row)
+/// against limits (captured at start). Renders text-only, no graphics deps.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Budget {
+    pub spent_usd: f64,
+    pub spent_tokens: i64,
+    pub steps: i64,
+    pub limit_usd: Option<f64>,
+    pub limit_tokens: Option<i64>,
+    pub limit_steps: Option<i64>,
+}
+
+fn fmt_usd(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let s = format!("{v:.4}");
+    s.trim_end_matches('0').to_string()
+}
+
+impl Budget {
+    pub fn meter(&self) -> String {
+        let spent = fmt_usd(self.spent_usd);
+        let steps = match self.limit_steps {
+            Some(l) => format!("{}/{} steps", self.steps, l),
+            None => format!("{} steps", self.steps),
+        };
+        let toks = match self.limit_tokens {
+            Some(l) => format!("{}/{} tok", self.spent_tokens, l),
+            None => format!("{} tok", self.spent_tokens),
+        };
+        match self.limit_usd {
+            Some(l) if l > 0.0 => {
+                let frac = (self.spent_usd / l).clamp(0.0, 1.0);
+                let filled = (frac * 10.0).round() as usize;
+                let bar: String = (0..10).map(|i| if i < filled { '█' } else { '░' }).collect();
+                format!("budget ${spent}/${} · {steps} · {toks} [{bar}]", fmt_usd(l))
+            }
+            _ => format!("budget ${spent} · {steps} · {toks}"),
+        }
+    }
+}
+
+/// One ledger step as a timeline block. Only fields the runtime exposes
+/// (`tool`, `duration_ms`, `tokens`, `cost`, `result_summary` + row ids) —
+/// there is no per-step args payload (only `args_hash`), so none is shown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepBlock {
+    pub step: i64,
+    pub kind: String,
+    pub tool: String,
+    pub duration_ms: i64,
+    pub tokens: i64,
+    pub cost: f64,
+    pub summary: String,
+}
+
+impl StepBlock {
+    fn from_json(v: &serde_json::Value) -> Self {
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let n = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+        Self {
+            step: n("step"),
+            kind: s("kind"),
+            tool: s("tool"),
+            duration_ms: n("duration_ms"),
+            tokens: n("tokens"),
+            cost: v.get("cost").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            summary: s("result_summary"),
+        }
+    }
+
+    pub fn header(&self) -> String {
+        let what = if self.tool.is_empty() { self.kind.clone() } else { self.tool.clone() };
+        format!(
+            "step {} · {} · {}ms · {} tok · ${}",
+            self.step,
+            if what.is_empty() { "?".to_string() } else { what },
+            self.duration_ms,
+            self.tokens,
+            fmt_usd(self.cost),
+        )
+    }
+
+    /// Summary with honest truncation: cut text ends in `…[cut]` and the
+    /// full record stays in the ledger (pollable by id, step detail in M3).
+    /// Newlines are flattened: one block body is one screen line, always.
+    pub fn body(&self) -> String {
+        let flat: String = self.summary.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+        if flat.chars().count() > 120 {
+            format!("{}…[cut]", flat.chars().take(115).collect::<String>())
+        } else {
+            flat
+        }
+    }
 }
 
 /// One-line human summary of an `ape_agent_status` result object.
@@ -130,6 +240,7 @@ pub fn status_body(status: &serde_json::Value) -> String {
 pub struct Menu {
     pub view: MenuView,
     profiles_cache: Vec<(String, String)>,
+    limits_cache: HashMap<String, ProfileLimits>,
     provider_cache: Option<String>,
     default_profile: Option<String>,
 }
@@ -139,6 +250,7 @@ impl Menu {
         Self {
             view: MenuView::Main { selected: 0 },
             profiles_cache: Vec::new(),
+            limits_cache: HashMap::new(),
             provider_cache: None,
             // Local state, read once: the onboarded default, if any.
             default_profile: ape::load_default_profile(),
@@ -147,8 +259,16 @@ impl Menu {
 
     /// One-line chrome for the status line: provider when a Status view has
     /// loaded it this session, default profile from local state, always
-    /// truthful about what is (not) known yet.
+    /// truthful about what is (not) known yet. During a run it goes live:
+    /// run id, profile, state, and spent cost.
     pub fn status_line(&self, version: &str) -> String {
+        if let MenuView::RunProgress { run_id, profile, budget, last_status, .. } = &self.view {
+            let short: String = run_id.chars().take(16).collect();
+            return format!(
+                "run {short} · {profile} · {last_status} · ${} · ape-mcp {version}",
+                fmt_usd(budget.spent_usd),
+            );
+        }
         format!(
             "provider: {} · profile: {} · ape-mcp {}",
             self.provider_cache.as_deref().unwrap_or("…"),
@@ -258,15 +378,18 @@ impl Menu {
                 }
                 _ => (vec![], false),
             },
-            MenuView::RunProgress { .. } => {
-                // Polling continues; Esc abandons watching and the run keeps
-                // going server-side.
+            MenuView::RunProgress { run_id, .. } => {
+                // Esc cancels the run server-side (ape_agent_cancel: the
+                // worker is killed, the row goes stopped/cancelled and stays
+                // pollable by id). Polling continues until the cancel lands.
                 if key == Key::Esc {
-                    self.view = MenuView::Main { selected: 0 };
+                    (vec![MenuEffect::CancelRun { run_id: run_id.clone() }], false)
+                } else {
+                    (vec![], false)
                 }
-                (vec![], false)
             }
             MenuView::RunDone { .. }
+            | MenuView::RunCancelled { .. }
             | MenuView::CheckShow { .. }
             | MenuView::DoctorShow { .. }
             | MenuView::StatusShow { .. }
@@ -321,8 +444,9 @@ impl Menu {
         }
     }
 
-    pub fn apply_profiles(&mut self, profiles: Vec<(String, String)>) {
+    pub fn apply_profiles(&mut self, profiles: Vec<(String, String)>, limits: HashMap<String, ProfileLimits>) {
         self.profiles_cache = profiles.clone();
+        self.limits_cache = limits;
         match &mut self.view {
             MenuView::RunProfile { profiles: p, selected } => {
                 *p = profiles;
@@ -340,27 +464,58 @@ impl Menu {
     }
 
     pub fn apply_run_started(&mut self, run_id: String, profile: String) {
-        self.view = MenuView::RunProgress { run_id, profile, lines: vec!["run started — polling status…".to_string()] };
+        let limits = self.limits_cache.get(&profile).cloned().unwrap_or_default();
+        self.view = MenuView::RunProgress {
+            run_id,
+            profile,
+            blocks: vec![],
+            seen: 0,
+            budget: Budget {
+                limit_usd: limits.max_usd,
+                limit_tokens: limits.max_tokens,
+                limit_steps: limits.max_steps,
+                ..Budget::default()
+            },
+            last_status: "starting".to_string(),
+        };
     }
 
+    /// Feed one `ape_agent_status` poll. Appends only steps never seen (by
+    /// position in the ledger array) — the timeline grows, never clears.
     /// Returns true when the run reached a terminal state.
     pub fn apply_poll(&mut self, status: &serde_json::Value) -> bool {
-        let terminal = status.get("status").and_then(|s| s.as_str()).unwrap_or("running") != "running";
-        let line = status_text(status);
+        let state = status.get("status").and_then(|s| s.as_str()).unwrap_or("running").to_string();
+        let terminal = state != "running";
+        let status_id = status.get("run_id").and_then(|r| r.as_str()).unwrap_or("").to_string();
         match &mut self.view {
-            MenuView::RunProgress { lines, .. } => {
-                lines.push(line.clone());
-                if lines.len() > 12 {
-                    lines.drain(..lines.len() - 12);
+            MenuView::RunProgress { run_id: view_id, blocks, seen, budget, last_status, .. } => {
+                if let Some(steps) = status.get("steps").and_then(|s| s.as_array()) {
+                    for s in steps.iter().skip(*seen) {
+                        blocks.push(StepBlock::from_json(s));
+                    }
+                    *seen = steps.len();
                 }
+                budget.spent_usd = status.get("total_cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                budget.spent_tokens = status.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                budget.steps = status.get("step_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                *last_status = state.clone();
                 if terminal {
-                    self.view = MenuView::RunDone { summary: line };
+                    // Prefer the view's id; the status envelope should echo
+                    // it, but the id on screen must never be empty.
+                    let id = if status_id.is_empty() { view_id.clone() } else { status_id };
+                    self.view = MenuView::RunDone { run_id: id, summary: status_text(status) };
                     return true;
                 }
             }
             _ => {}
         }
         false
+    }
+
+    /// A cancel that landed server-side: the run is stopped, its id stays
+    /// visible so it remains pollable via Check a run.
+    pub fn apply_cancelled(&mut self, run_id: String, status: &serde_json::Value) {
+        self.view = MenuView::RunCancelled { run_id, summary: status_text(status) };
     }
 
     pub fn apply_check_status(&mut self, status: &serde_json::Value) {
@@ -485,7 +640,7 @@ mod tests {
     fn profiles_reload_resets_scroll() {
         let mut m = Menu::new();
         m.view = MenuView::ProfilesList { profiles: vec![("a".into(), "".into())], offset: 3 };
-        m.apply_profiles(vec![("a".into(), "".into()), ("b".into(), "".into())]);
+        m.apply_profiles(vec![("a".into(), "".into()), ("b".into(), "".into())], HashMap::new());
         assert!(matches!(m.view, MenuView::ProfilesList { offset: 0, .. }));
     }
 
@@ -494,7 +649,7 @@ mod tests {
         let mut m = Menu::new();
         let (fx, _) = m.on_key(Key::Enter); // Run an agent
         assert_eq!(fx, vec![MenuEffect::LoadProfiles]);
-        m.apply_profiles(vec![("repo-triage".to_string(), "t".to_string())]);
+        m.apply_profiles(vec![("repo-triage".to_string(), "t".to_string())], HashMap::new());
         assert!(matches!(m.view, MenuView::RunProfile { .. }));
         m.on_key(Key::Enter);
         assert!(matches!(m.view, MenuView::RunObjective { .. }));
@@ -515,14 +670,98 @@ mod tests {
     }
 
     #[test]
-    fn poll_tracks_until_terminal() {
+    fn poll_appends_only_new_steps_and_keeps_id() {
         let mut m = Menu::new();
-        m.view = MenuView::RunProgress { run_id: "r".to_string(), profile: "p".to_string(), lines: vec![] };
-        let running: serde_json::Value = serde_json::from_str(r#"{"status":"running","stop_reason":null,"step_count":2,"total_cost":0.01,"outcome":""}"#).unwrap();
-        assert!(!m.apply_poll(&running));
-        let done: serde_json::Value = serde_json::from_str(r#"{"status":"done","stop_reason":"explicit_final_answer","step_count":3,"total_cost":0.02,"outcome":"ok"}"#).unwrap();
-        assert!(m.apply_poll(&done));
-        assert!(matches!(m.view, MenuView::RunDone { .. }));
+        m.view = MenuView::RunProgress {
+            run_id: "r".to_string(),
+            profile: "p".to_string(),
+            blocks: vec![],
+            seen: 0,
+            budget: Budget::default(),
+            last_status: "starting".to_string(),
+        };
+        let poll1: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"running","step_count":1,"total_cost":0.01,"total_tokens":40,"steps":[{"step":1,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"}]}"#,
+        )
+        .unwrap();
+        assert!(!m.apply_poll(&poll1));
+        // Same frame twice: no duplicates.
+        assert!(!m.apply_poll(&poll1));
+        let poll2: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"done","stop_reason":"explicit_final_answer","step_count":2,"total_cost":0.02,"total_tokens":80,"outcome":"fine","steps":[{"step":1,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"},{"step":2,"kind":"tool","tool":"finish","duration_ms":5,"tokens":40,"cost":0.01,"result_summary":"fine"}]}"#,
+        )
+        .unwrap();
+        assert!(m.apply_poll(&poll2));
+        match &m.view {
+            MenuView::RunDone { run_id, summary } => {
+                assert_eq!(run_id, "r");
+                assert!(summary.contains("finished"), "got: {summary}");
+            }
+            other => panic!("expected RunDone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn esc_in_progress_cancels_not_detaches() {
+        let mut m = Menu::new();
+        m.view = MenuView::RunProgress {
+            run_id: "r".to_string(),
+            profile: "p".to_string(),
+            blocks: vec![],
+            seen: 0,
+            budget: Budget::default(),
+            last_status: "running".to_string(),
+        };
+        let (fx, quit) = m.on_key(Key::Esc);
+        assert!(!quit);
+        assert_eq!(fx, vec![MenuEffect::CancelRun { run_id: "r".to_string() }]);
+        // Stays on the progress view until the cancel lands.
+        assert!(matches!(m.view, MenuView::RunProgress { .. }));
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"stopped","stop_reason":"cancelled","step_count":1,"total_cost":0.01,"total_tokens":40,"outcome":""}"#,
+        )
+        .unwrap();
+        m.apply_cancelled("r".to_string(), &v);
+        match &m.view {
+            MenuView::RunCancelled { run_id, .. } => assert_eq!(run_id, "r"),
+            other => panic!("expected RunCancelled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn budget_meter_shows_limits_and_spent() {
+        let b = Budget {
+            spent_usd: 0.25,
+            spent_tokens: 812,
+            steps: 3,
+            limit_usd: Some(0.5),
+            limit_tokens: Some(100000),
+            limit_steps: Some(10),
+        };
+        let t = b.meter();
+        assert!(t.contains("3/10 steps"), "got: {t}");
+        assert!(t.contains("812/100000 tok"), "got: {t}");
+        assert!(t.contains("$0.25/$0.5"), "got: {t}");
+        assert!(t.contains('█'), "bar present, got: {t}");
+        let bare = Budget::default().meter();
+        assert!(!bare.contains('/'), "no limits, no slashes: {bare}");
+    }
+
+    #[test]
+    fn status_line_goes_live_during_runs() {
+        let mut m = Menu::new();
+        m.view = MenuView::RunProgress {
+            run_id: "run-abc123".to_string(),
+            profile: "p".to_string(),
+            blocks: vec![],
+            seen: 0,
+            budget: Budget { spent_usd: 0.02, ..Budget::default() },
+            last_status: "running".to_string(),
+        };
+        let t = m.status_line("1.0.4");
+        assert!(t.contains("run-abc123"), "got: {t}");
+        assert!(t.contains("running"), "got: {t}");
+        assert!(t.contains("0.02"), "got: {t}");
     }
 
     #[test]

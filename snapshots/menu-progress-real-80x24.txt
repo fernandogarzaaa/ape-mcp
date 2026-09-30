@@ -1,7 +1,7 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│run run-<id> [repo-triage] — Esc stops watching (run continues):      │
-│running · 0 steps · $0 · 0 tokens                                             │
-│running · 0 steps · $0 · 0 tokens                                             │
+│run run-<id> [repo-triage] — running:                                 │
+│budget $0/$0.5 · 0/12 steps · 0/120000 tok [░░░░░░░░░░]                       │
+│step 1 · model · 407ms · 2 tok · $0                                           │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -18,6 +18,6 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-                      [Esc] stop watching (run keeps going)
+                    [Esc] cancel run   (stays pollable by id)
 
-                    provider: … · profile: … · ape-mcp 0.1.0
+        run run-<id> · repo-triage · running · $0 · ape-mcp 0.1.0

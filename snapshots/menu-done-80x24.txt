@@ -1,9 +1,9 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│done:                                                                         │
-│finished · 8 steps · $0 · 16 tokens · stopped: explicit_final_answersnapshot o│
-│                                                                              │
-│                                                                              │
-│                                                                              │
+│finished:                                                                     │
+│run run-<id>                                                          │
+│finished · 8 steps · $0 · 16 tokens · stopped: explicit_final_answer          │
+│snapshot ok                                                                   │
+│[unverified: no-evidence]                                                     │
 │                                                                              │
 │                                                                              │
 │                                                                              │

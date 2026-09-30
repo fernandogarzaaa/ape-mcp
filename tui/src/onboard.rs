@@ -70,6 +70,36 @@ pub fn profile_list(result: &serde_json::Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// Budget limits per profile from the SAME `ape_agent_profiles` result
+/// object — one round-trip feeds both the picker and the run budget meter.
+/// Profiles without a limits block (or without a name) are skipped; the run
+/// view then shows spent only.
+pub fn profile_limits(
+    result: &serde_json::Value,
+) -> std::collections::HashMap<String, super::menu::ProfileLimits> {
+    use super::menu::ProfileLimits;
+    result
+        .get("profiles")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    let name = p.get("name")?.as_str()?.to_string();
+                    let lim = p.get("limits")?;
+                    Some((
+                        name,
+                        ProfileLimits {
+                            max_steps: lim.get("max_steps").and_then(|v| v.as_i64()),
+                            max_usd: lim.get("max_usd").and_then(|v| v.as_f64()),
+                            max_tokens: lim.get("max_tokens").and_then(|v| v.as_i64()),
+                        },
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Step {
     Doctor,
@@ -296,6 +326,18 @@ mod tests {
             profile_list(&v),
             vec![("a".to_string(), "A".to_string()), ("b".to_string(), "".to_string())]
         );
+    }
+
+    #[test]
+    fn profile_limits_extract_per_profile() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"profiles":[{"name":"a","limits":{"max_steps":10,"max_usd":0.5}},{"name":"b"}]}"#,
+        )
+        .unwrap();
+        let lim = profile_limits(&v);
+        assert_eq!(lim["a"].max_steps, Some(10));
+        assert_eq!(lim["a"].max_usd, Some(0.5));
+        assert!(lim.get("b").is_none(), "no limits block, no entry");
     }
 
     #[test]
