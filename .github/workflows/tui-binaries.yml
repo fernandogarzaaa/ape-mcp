@@ -42,7 +42,12 @@ jobs:
           # Piped stdin is not a TTY: the binary must refuse with exit 2 and
           # the guard message. Anything else (crash, hang, exit 0) fails the
           # job BEFORE the asset uploads, so a dead binary can never ship.
-          echo | "$bin" > smoke.out 2>&1; code=$?
+          # NOTE: `set +e` around the run — the expected exit code is 2 and
+          # the runner shell has `set -e`, which would kill the step early.
+          set +e
+          echo | "$bin" > smoke.out 2>&1
+          code=$?
+          set -e
           cat smoke.out
           test "$code" -eq 2 || { echo "::error::smoke failed: exit $code, want 2"; exit 1; }
           grep -q "run it in a terminal" smoke.out || { echo "::error::smoke failed: guard message missing"; exit 1; }
