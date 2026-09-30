@@ -10,6 +10,9 @@ Run an agent, Check a run, Profiles, Doctor, Console info, Status, Runs,
 Ledger, Tasks, Quit. Every list scrolls with ↑/↓ and goes back with Esc;
 footers name the keys per screen.
 
+- **Main menu**: list on the left, `APE-MCP` box art on the right when the
+  terminal fits both (hidden below ~96 columns, never shrunk). The art is
+  a clean-room interpretation (see note below), honoring `NO_COLOR`.
 - **Runs**: newest-first run rows (id, profile, status, cost, steps,
   start). Enter opens a running run into the live progress view, else
   the finished view. Empty when no runs exist yet.
@@ -44,6 +47,21 @@ footers name the keys per screen.
   /tasks /status /doctor. ↑/↓ picks, Enter jumps through the same
   transition the menu item uses, Esc goes back. Unmatched `/text`
   sends literally as the objective.
+
+## Status line
+
+`provider: X · profile: Y · ape-mcp V`: the version is embedded at build
+time from package.json (launcher env wins when present), so every launch
+path reports the release. The provider primes once per menu entry with a
+single `ape_status` call; unknown stays `unknown` until known. During a
+run the line goes live (id, profile, state, spent).
+
+## Failed runs
+
+A `model_error` outcome carrying a JSON payload renders its human fields
+(`error:`, `message:`) plus the stop reason; the raw blob stays one
+expand away in the timeline. Step summaries are capped at 300 chars at
+write time (said on screen at full length).
 
 ## Esc means different things on different screens
 

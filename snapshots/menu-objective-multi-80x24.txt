@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 [←/→] move   [↑/↓] history   [Enter] run   [Alt+Enter/Ctrl+J] newline   [Esc] ba
 
-                    provider: … · profile: … · ape-mcp 0.1.0
+              provider: unknown · profile: unknown · ape-mcp 1.1.1

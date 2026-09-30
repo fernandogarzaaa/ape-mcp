@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (toward 1.1.2 — 1.1.1 is tagged and live)
+
+TUI live-testing fixes from Windows PowerShell:
+- Double key events fixed: Windows emits Press+Release per key and the
+  loop acted on both ("review" -> "rerevvieewew"). Release is now ignored
+  in the single normalization point; regression test feeds Press/Release
+  pairs through the real mapping.
+- Profile descriptions wrap within the panel (both the Profiles view and
+  the picker), one selectable item per profile.
+- Status line: version embedded at build time from package.json (both
+  launchers still pass it too), provider primed once per menu entry via
+  `ape_status`; unknowns read "unknown".
+- Failed runs with JSON `model_error` payloads show human fields plus
+  the stop reason; raw blob stays on expand.
+- Main menu gains an `APE-MCP` box-art side panel (responsive hide below
+  ~96 cols, `NO_COLOR` respected). Letterforms are a clean-room
+  interpretation — no reference screenshot was received.
+
 ## 1.1.1
 
 - Pack ships the whole `scripts/` dir (1.1.0 excluded `tui-fetch.mjs`,

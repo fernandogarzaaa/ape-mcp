@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
       [↑/↓] step   [Enter] expand   [Esc] cancel run (stays pollable by id)
 
-        run run-<id> · repo-triage · running · $0 · ape-mcp 0.1.0
+        run run-<id> · repo-triage · running · $0 · ape-mcp 1.1.1

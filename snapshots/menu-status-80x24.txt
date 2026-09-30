@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                              [any key] back to menu
 
-                 provider: opencode · profile: … · ape-mcp 0.1.0
+              provider: opencode · profile: unknown · ape-mcp 1.1.1

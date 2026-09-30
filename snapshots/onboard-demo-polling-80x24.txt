@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                       [Esc] stop watching (run keeps going)
 
-                           provider: … · ape-mcp 0.1.0
+                           provider: … · ape-mcp 1.1.1

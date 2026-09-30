@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                   [Enter] continue   [Esc] back   [Ctrl-C] quit
 
-                           provider: … · ape-mcp 0.1.0
+                           provider: … · ape-mcp 1.1.1

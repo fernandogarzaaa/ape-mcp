@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
        [↑/↓] pick   [Enter] jump   [Esc] back   [Alt+Enter/Ctrl+J] newline
 
-                    provider: … · profile: … · ape-mcp 0.1.0
+              provider: unknown · profile: unknown · ape-mcp 1.1.1

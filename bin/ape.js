@@ -7,12 +7,21 @@
 // `ape-mcp` behavior via the TUI's own guard... instead this shim refuses:
 // scripted use must call `ape-mcp` directly so pipes never hang on prompts.
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { root, runTui } from "./tui-bin.js";
 
 function fail(msg) {
   console.error(`ape: ${msg}`);
   process.exit(1);
+}
+
+function packageVersion() {
+  try {
+    return JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version ?? null;
+  } catch {
+    return null;
+  }
 }
 
 if (!process.stdin.isTTY && process.argv.length <= 2) {
@@ -26,7 +35,11 @@ if (process.argv.length > 2) {
   process.exit(r.status ?? 1);
 }
 try {
-  process.exit(await runTui(process.argv.slice(2)));
+  // Same version passthrough as `ape-mcp tui`: the status line reports the
+  // release on every launch path, never the crate fallback.
+  const v = packageVersion();
+  const env = v ? { ...process.env, APE_TUI_VERSION: v } : undefined;
+  process.exit(await runTui(process.argv.slice(2), env));
 } catch (e) {
   // ensureTui already names the exact remedy (approve scripts, release
   // download, or source checkout); surface it instead of a generic hint.

@@ -41,6 +41,7 @@ pub enum MenuEffect {
     LoadProfiles,
     LoadDoctor,
     LoadStatus,
+    PrimeStatus,
     LoadRuns,
     LoadLedger,
     LoadTasks,
@@ -206,6 +207,67 @@ pub fn slash_menu(text: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// Wrap text to a column width for list rows: word boundaries, hard-cut
+/// words longer than the width, one String per visual line. Pure for tests.
+pub fn wrap_text(text: &str, max: usize) -> Vec<String> {
+    let max = max.max(1);
+    let mut lines: Vec<String> = vec![String::new()];
+    let mut push_word = |word: &str, lines: &mut Vec<String>| {
+        if word.is_empty() {
+            return;
+        }
+        // Hard-cut tokens longer than the width.
+        let mut rest = word;
+        while rest.chars().count() > max {
+            let cut: String = rest.chars().take(max).collect();
+            let cut_len = cut.len();
+            let cur_is_empty = lines.last().map(|l| l.is_empty()).unwrap_or(true);
+            if cur_is_empty {
+                *lines.last_mut().unwrap() = cut;
+            } else {
+                lines.push(cut);
+            }
+            lines.push(String::new());
+            rest = &rest[cut_len..];
+        }
+        // Byte slicing on a char boundary: cut is a char prefix, so the
+        // remainder starts on a boundary. (cut.len() counts bytes of whole
+        // chars only.)
+        let cur_is_empty = lines.last().map(|l| l.is_empty()).unwrap_or(true);
+        if cur_is_empty {
+            *lines.last_mut().unwrap() = rest.to_string();
+        } else {
+            let cur_len: usize = lines.last().unwrap().chars().count();
+            if cur_len + 1 + rest.chars().count() > max {
+                lines.push(rest.to_string());
+            } else {
+                lines.last_mut().unwrap().push(' ');
+                lines.last_mut().unwrap().push_str(rest);
+            }
+        }
+    };
+    for word in text.split(' ') {
+        let w = word.to_string();
+        push_word(&w, &mut lines);
+    }
+    lines.into_iter().filter(|l| !l.is_empty()).collect()
+}
+
+/// Profile rows: name line plus wrapped description lines (cap 4, honest
+/// marker). Selection highlights every line of the item.
+pub fn profile_lines(name: &str, desc: &str, max: usize, selected: bool) -> Vec<(String, bool)> {
+    let mut out = vec![(format!("  {name}"), selected)];
+    let wrapped = wrap_text(desc, max.saturating_sub(4).max(10));
+    for (i, l) in wrapped.iter().enumerate() {
+        if i >= 4 {
+            out.push(("    …".to_string(), selected));
+            break;
+        }
+        out.push((format!("    {l}"), selected));
+    }
+    out
+}
+
 /// Budget limits for one profile, from `ape_agent_profiles` (same call that
 /// feeds the picker — no second round-trip). All optional: a profile may
 /// omit any ceiling, and then the meter shows spent only.
@@ -360,13 +422,17 @@ pub fn status_text(result: &serde_json::Value) -> String {
         }
     }
     let status = result.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
-    let outcome = result
+    // Outcomes are usually prose, but failures can be JSON blobs
+    // (model_error payloads). Show the human message + stop reason, never
+    // the raw blob; the raw text stays one expand away in the timeline.
+    let outcome_raw = result
         .get("outcome")
         .and_then(|o| o.as_str())
         .unwrap_or("")
         .chars()
         .take(400)
         .collect::<String>();
+    let outcome = humanize_outcome(&outcome_raw);
     let mut head = format!(
         "{} · {} steps · ${} · {} tokens",
         human_status(status),
@@ -383,6 +449,36 @@ pub fn status_text(result: &serde_json::Value) -> String {
     } else {
         format!("{head}\n{outcome}")
     }
+}
+
+/// A JSON outcome object renders as its human fields (`error`, `message`,
+/// `hint` — whichever exist), plus the stop reason lives in the head line.
+/// Anything else passes through untouched.
+fn humanize_outcome(outcome: &str) -> String {
+    let t = outcome.trim();
+    if !t.starts_with('{') {
+        return outcome.to_string();
+    }
+    let v: serde_json::Value = match serde_json::from_str(t) {
+        Ok(v) => v,
+        Err(_) => return outcome.to_string(),
+    };
+    let obj = match v.as_object() {
+        Some(o) => o,
+        None => return outcome.to_string(),
+    };
+    let mut parts = vec![];
+    for k in ["error", "message", "hint", "reason"] {
+        if let Some(s) = obj.get(k).and_then(|x| x.as_str()) {
+            if !s.is_empty() {
+                parts.push(format!("{k}: {s}"));
+            }
+        }
+    }
+    if parts.is_empty() {
+        return outcome.to_string();
+    }
+    parts.join("\n")
 }
 
 /// Human-readable `ape_status` body: version, provider, engine build state.
@@ -436,6 +532,7 @@ pub struct Menu {
     history: Vec<String>,
     hist_pos: Option<usize>,
     hist_draft: String,
+    status_loaded: bool,
 }
 
 impl Menu {
@@ -450,13 +547,25 @@ impl Menu {
             history: Vec::new(),
             hist_pos: None,
             hist_draft: String::new(),
+            status_loaded: false,
         }
     }
 
-    /// One-line chrome for the status line: provider when a Status view has
-    /// loaded it this session, default profile from local state, always
-    /// truthful about what is (not) known yet. During a run it goes live:
-    /// run id, profile, state, and spent cost.
+    /// One prime effect per menu lifetime: a single `ape_status` call on
+    /// entry so the status line shows the provider without a Status visit.
+    /// Quiet by design — it must never yank the user into the Status view.
+    pub fn prime(&mut self) -> Vec<MenuEffect> {
+        if self.status_loaded {
+            return vec![];
+        }
+        self.status_loaded = true;
+        vec![MenuEffect::PrimeStatus]
+    }
+
+    /// One-line chrome for the status line: provider when known (primed on
+    /// menu entry, refreshed by Status visits), default profile from local
+    /// state. Unknowns say "unknown" — never "…" and never blank.
+    /// During a run it goes live: run id, profile, state, and spent cost.
     pub fn status_line(&self, version: &str) -> String {
         if let MenuView::RunProgress { run_id, profile, budget, last_status, .. } = &self.view {
             let short: String = run_id.chars().take(16).collect();
@@ -467,8 +576,8 @@ impl Menu {
         }
         format!(
             "provider: {} · profile: {} · ape-mcp {}",
-            self.provider_cache.as_deref().unwrap_or("…"),
-            self.default_profile.as_deref().unwrap_or("…"),
+            self.provider_cache.as_deref().unwrap_or("unknown"),
+            self.default_profile.as_deref().unwrap_or("unknown"),
             version,
         )
     }
@@ -954,13 +1063,23 @@ impl Menu {
     }
 
     pub fn apply_status(&mut self, status: &serde_json::Value) {
+        self.cache_provider(status);
+        self.view = MenuView::StatusShow { text: status_body(status) };
+    }
+
+    /// Quiet twin: caches the provider without touching the view. The
+    /// entry prime and only the prime uses this.
+    pub fn apply_status_quiet(&mut self, status: &serde_json::Value) {
+        self.cache_provider(status);
+    }
+
+    fn cache_provider(&mut self, status: &serde_json::Value) {
         self.provider_cache = status
             .get("active_provider")
             .and_then(|a| a.get("provider"))
             .and_then(|p| p.as_str())
             .filter(|p| *p != "none")
             .map(str::to_string);
-        self.view = MenuView::StatusShow { text: status_body(status) };
     }
 }
 
@@ -1095,6 +1214,21 @@ mod tests {
         assert!(row.line().contains("explicit_final_answer"), "stop shown, got: {}", row.line());
         let e = LedgerEntry { ts: "2026-09-30T10:11:12".into(), kind: "agent.destructive".into(), summary: "tool=x".into() };
         assert!(e.line().contains("agent.destructive"));
+    }
+
+    #[test]
+    fn prime_loads_provider_quietly_once() {
+        let mut m = Menu::new();
+        assert_eq!(m.prime(), vec![MenuEffect::PrimeStatus]);
+        assert_eq!(m.prime(), vec![], "second call is a no-op");
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"active_provider":{"provider":"opencode","source":"s"}}"#,
+        )
+        .unwrap();
+        m.apply_status_quiet(&v);
+        assert_eq!(m.provider_cache.as_deref(), Some("opencode"));
+        assert!(matches!(m.view, MenuView::Main { .. }), "view untouched");
+        assert!(m.status_line("1.0.0").contains("provider: opencode"));
     }
 
     #[test]
@@ -1455,6 +1589,40 @@ mod tests {
     }
 
     #[test]
+    fn wrap_text_breaks_words_and_cuts_long_tokens() {
+        assert_eq!(wrap_text("ab cd ef", 5), vec!["ab cd", "ef"]);
+        assert_eq!(wrap_text("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
+        assert_eq!(wrap_text("", 10), Vec::<String>::new());
+        assert_eq!(wrap_text("a b c", 1), vec!["a", "b", "c"]);
+        // Char (not byte) widths: 2-wide CJK counts per char here.
+        assert_eq!(wrap_text("aa bb cc", 4), vec!["aa", "bb", "cc"]);
+    }
+
+    #[test]
+    fn profile_lines_caps_and_marks() {
+        let rows = profile_lines("writer", "one two three four five six", 12, true);
+        assert!(rows[0].0.contains("writer"));
+        assert!(rows.len() <= 6, "name + 4 desc + marker, got {rows:?}");
+        let long = profile_lines("w", &"word ".repeat(30), 12, false);
+        assert!(long.last().unwrap().0.contains('…'), "overflow marked, got {long:?}");
+    }
+
+    #[test]
+    fn json_outcome_renders_human_fields() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"status":"failed","stop_reason":"model_error","step_count":2,"total_cost":0.01,"total_tokens":50,"outcome":"{\"error\":\"opencode 500\",\"message\":\"Internal server error\"}"}"#,
+        )
+        .unwrap();
+        let t = status_text(&v);
+        assert!(t.contains("error: opencode 500"), "got: {t}");
+        assert!(t.contains("model_error"), "stop reason kept, got: {t}");
+        assert!(!t.contains("{\"error\""), "no raw blob, got: {t}");
+        // Non-JSON prose passes through untouched.
+        assert_eq!(humanize_outcome("plain words"), "plain words");
+        assert_eq!(humanize_outcome(""), "");
+    }
+
+    #[test]
     fn status_text_shapes() {
         let v: serde_json::Value = serde_json::from_str(r#"{"status":"done","stop_reason":"explicit_final_answer","step_count":3,"total_cost":0.02,"total_tokens":120,"outcome":"fine"}"#).unwrap();
         let t = status_text(&v);
@@ -1465,8 +1633,7 @@ mod tests {
     }
 
     #[test]
-    fn status_text_omits_missing_stop_and_empty_outcome() {
-        let v: serde_json::Value = serde_json::from_str(r#"{"status":"running","step_count":2,"total_cost":0}"#).unwrap();
+    fn status_text_omits_missing_stop_and_empty_outcome() {        let v: serde_json::Value = serde_json::from_str(r#"{"status":"running","step_count":2,"total_cost":0}"#).unwrap();
         let t = status_text(&v);
         assert!(!t.contains("null"), "got: {t}");
         assert!(!t.ends_with('\n'), "no trailing blank line, got: {t:?}");

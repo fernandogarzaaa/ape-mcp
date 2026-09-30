@@ -12,6 +12,89 @@ use ratatui::{
 
 pub const BANNER: &str = include_str!("../assets/ape.txt");
 
+/// Side art for the main menu: "APE-MCP" in box-drawing capitals, 6 rows.
+/// NOTE: built from a text description, not from the reference screenshot
+/// (no image arrived) — letterforms are an interpretation, flagged as such.
+/// One Line per row; each letter has its own color.
+///
+/// Layout contract (see main.rs): shown only when the terminal fits menu +
+/// art + gutter; never shrunk or wrapped; main menu only; NO_COLOR strips
+/// styling but keeps the shapes.
+pub const SIDE_GLYPHS: [[&str; 6]; 7] = [
+    // A — cyan
+    [" ┌──┐ ", " │  │ ", " ├──┤ ", " │  │ ", " │  │ ", " │  │ "],
+    // P — red
+    [" ┌──┐ ", " │  │ ", " ├──┘ ", " │    ", " │    ", " │    "],
+    // E — yellow
+    [" ┌───┐", " │    ", " ├─── ", " │    ", " │    ", " └───┘"],
+    // - — dark gray
+    ["    ", "    ", " ─── ", "    ", "    ", "    "],
+    // M — green
+    ["┌─┐┌─┐", "│ ││ │", "│ ││ │", "│ ││ │", "│ ││ │", "│ ││ │"],
+    // C — blue
+    [" ┌───┐", " │    ", " │    ", " │    ", " │    ", " └───┘"],
+    // P — magenta
+    [" ┌──┐ ", " │  │ ", " ├──┘ ", " │    ", " │    ", " │    "],
+];
+
+pub const SIDE_COLORS: [Color; 7] = [
+    Color::Cyan,
+    Color::Red,
+    Color::Yellow,
+    Color::DarkGray,
+    Color::Green,
+    Color::Blue,
+    Color::Magenta,
+];
+
+/// Art width in columns (glyphs joined with one-space gutters). Rows are
+/// padded to their glyph width at render (trailing spaces don't survive
+/// file writes), so this measures padded widths, not raw string lengths.
+pub fn side_art_width() -> usize {
+    let mut w = 0;
+    for (li, glyph) in SIDE_GLYPHS.iter().enumerate() {
+        if li > 0 {
+            w += 1;
+        }
+        w += glyph.iter().map(|r| r.chars().count()).max().unwrap_or(0);
+    }
+    w
+}
+
+/// Show the art only when menu + art + gutter fit; never shrink or wrap it.
+/// Minimum menu width 30, gutter 4, plus the art width.
+pub fn art_visible(term_width: u16) -> bool {
+    term_width as usize >= 30 + 4 + side_art_width()
+}
+
+/// One styled Line per art row, or plain when NO_COLOR is set.
+pub fn side_art_lines() -> Vec<Line<'static>> {
+    let plain = std::env::var("NO_COLOR").is_ok();
+    let widths: Vec<usize> = SIDE_GLYPHS
+        .iter()
+        .map(|g| g.iter().map(|r| r.chars().count()).max().unwrap_or(0))
+        .collect();
+    (0..6)
+        .map(|row| {
+            let mut spans = vec![];
+            for (li, glyph) in SIDE_GLYPHS.iter().enumerate() {
+                if li > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                let mut text = glyph[row].to_string();
+                let pad = widths[li].saturating_sub(text.chars().count());
+                text.extend(std::iter::repeat(' ').take(pad));
+                if plain {
+                    spans.push(Span::raw(text));
+                } else {
+                    spans.push(Span::styled(text, Style::default().fg(SIDE_COLORS[li])));
+                }
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 #[allow(dead_code)] // Welcome/Menu are navigation vocabulary for future flows.
 pub enum Screen {
@@ -70,6 +153,32 @@ pub fn render_welcome(f: &mut Frame, version: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn side_art_threshold() {
+        let w = side_art_width();
+        assert!((40..=60).contains(&w), "art is ~50 cols, got {w}");
+        assert!(art_visible(120), "120 cols shows art");
+        assert!(!art_visible(80), "80 cols hides art");
+        assert!(!art_visible(w as u16 + 30), "need menu + gutter too");
+        assert!(art_visible(w as u16 + 34));
+    }
+
+    #[test]
+    fn side_art_six_lines_plain_under_no_color() {
+        // NOTE: single-env-test pattern — env vars are process-global.
+        let prev = std::env::var("NO_COLOR").ok();
+        std::env::set_var("NO_COLOR", "1");
+        let lines = side_art_lines();
+        assert_eq!(lines.len(), 6);
+        assert!(lines.iter().all(|l| l.spans.iter().all(|s| s.style.fg.is_none())));
+        match prev {
+            Some(v) => std::env::set_var("NO_COLOR", v),
+            None => std::env::remove_var("NO_COLOR"),
+        }
+        let styled = side_art_lines();
+        assert!(styled.iter().any(|l| l.spans.iter().any(|s| s.style.fg.is_some())));
+    }
 
     #[test]
     fn banner_asset_loads() {

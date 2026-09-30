@@ -1,9 +1,9 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│  run-<id> · repo-triage · running · $0.01 · 3 steps · 2026-09-30 10:11     │
-│showing 1–1 of 1                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+│finished:                                                                     │
+│run run-<id>                                                                │
+│failed · 2 steps · $0.01 · 50 tokens · stopped: model_error                   │
+│error: opencode 500                                                           │
+│message: Internal server error                                                │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -18,6 +18,6 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-            [↑/↓] move   [Enter] open (live if running)   [Esc] back
+                             [any key] back to menu
 
               provider: unknown · profile: unknown · ape-mcp 1.1.1

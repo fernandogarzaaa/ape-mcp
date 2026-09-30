@@ -34,12 +34,23 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const VERSION_CRATE: &str = env!("CARGO_PKG_VERSION");
+/// package.json version embedded at build time (tui/build.rs); absent only
+/// for vendored crate builds without the npm tree around them.
+const VERSION_PKG: Option<&str> = option_env!("APE_TUI_PKG_VERSION");
 
-/// Display version: the release version passed by the `ape-mcp tui`
-/// launcher (`APE_TUI_VERSION` from package.json), falling back to the TUI
-/// crate version when launched some other way (cargo, direct binary).
+/// Display version. Priority: launcher-passed release version, then the
+/// build-embedded package.json version, then the crate version. Every path
+/// yields a real version string — never "0.1.0" from a stale fallback.
 fn tui_version() -> String {
-    std::env::var("APE_TUI_VERSION").unwrap_or_else(|_| VERSION_CRATE.to_string())
+    if let Ok(v) = std::env::var("APE_TUI_VERSION") {
+        if !v.trim().is_empty() {
+            return v;
+        }
+    }
+    if let Some(v) = VERSION_PKG {
+        return v.to_string();
+    }
+    VERSION_CRATE.to_string()
 }
 
 struct Ctx {
@@ -104,6 +115,15 @@ fn run(force_onboard: bool) -> io::Result<()> {
     while !quit {
         terminal.draw(|f| render(&top, f))?;
         drive_effects(&mut top, &ctx, &mut last_poll);
+        // One prime per menu lifetime: a single ape_status so the status
+        // line shows the provider without a Status visit. Quiet — the view
+        // never changes here.
+        if let Top::Menu(menu) = &mut top {
+            let fx = menu.prime();
+            for f in fx {
+                exec_menu_effect(menu, &ctx, f);
+            }
+        }
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -131,7 +151,15 @@ fn run(force_onboard: bool) -> io::Result<()> {
 /// arrows first-class, Alt+Enter newline, Ctrl+J newline (Windows Terminal
 /// eats Alt+Enter for fullscreen), characters pass through, the rest is
 /// ignored (never a trap). Ctrl+C never reaches here (handled in the loop).
+///
+/// Key-kind filter lives here — the single place all key events pass
+/// through. Windows terminals emit Press AND Release per physical key; only
+/// Press (and Repeat for held keys) may act, otherwise every keystroke
+/// doubles ("review" -> "rerevvieewew", arrows jump two rows).
 fn normalize_key(key: event::KeyEvent) -> Option<Key> {
+    if matches!(key.kind, event::KeyEventKind::Release) {
+        return None;
+    }
     match key.code {
         KeyCode::Up => Some(Key::Up),
         KeyCode::Down => Some(Key::Down),
@@ -344,6 +372,13 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
                 None => menu.apply_status(&serde_json::Value::Null),
             },
             _ => menu.apply_status(&serde_json::Value::Null),
+        },
+        PrimeStatus => match ctx.tool("ape_status", "{}") {
+            Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                Some(r) => menu.apply_status_quiet(r),
+                None => menu.apply_status_quiet(&serde_json::Value::Null),
+            },
+            _ => {}
         },
         LoadRuns => match ctx.tool("ape_agent_list", r#"{"limit":20}"#) {
             Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
@@ -634,13 +669,16 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
         }
         RunProfile { profiles, selected } => {
             lines.push(Line::from("pick a profile (Esc back):"));
+            let inner = (f.area().width.saturating_sub(2)) as usize;
             for (i, (name, desc)) in profiles.iter().enumerate() {
                 let style = if i == *selected {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
-                lines.push(Line::from(Span::styled(format!("  {name} — {desc}"), style)));
+                for (text, _) in menu::profile_lines(name, desc, inner, i == *selected) {
+                    lines.push(Line::from(Span::styled(text, style)));
+                }
             }
             if profiles.is_empty() {
                 lines.push(Line::from("loading profiles…"));
@@ -788,8 +826,11 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             footer = "[any key] back to menu";
         }
         ProfilesList { profiles, offset } => {
+            let inner = (f.area().width.saturating_sub(2)) as usize;
             for (name, desc) in profiles.iter().skip(*offset).take(20) {
-                lines.push(Line::from(format!("  {name} — {desc}")));
+                for (text, _) in menu::profile_lines(name, desc, inner, false) {
+                    lines.push(Line::from(text));
+                }
             }
             footer = "[↑/↓] scroll   [Esc] back";
         }
@@ -868,10 +909,26 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             footer = "[any key] back to menu";
         }
     }
-    f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" APE ")),
-        chunks[0],
-    );
+    // Side art: main menu only, only when menu + art + gutter fit, never
+    // shrunk or wrapped. All other views keep the full-width body.
+    let show_art = matches!(&menu.view, Main { .. }) && screens::art_visible(area.width);
+    if show_art {
+        let art_w = screens::side_art_width() as u16 + 2;
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(art_w)])
+            .split(chunks[0]);
+        f.render_widget(
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" APE ")),
+            cols[0],
+        );
+        f.render_widget(Paragraph::new(screens::side_art_lines()), cols[1]);
+    } else {
+        f.render_widget(
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" APE ")),
+            chunks[0],
+        );
+    }
     f.render_widget(Paragraph::new(footer).alignment(Alignment::Center), chunks[1]);
     f.render_widget(
         Paragraph::new(menu.status_line(&tui_version())).alignment(Alignment::Center),
@@ -929,6 +986,26 @@ mod tests {
     }
 
     #[test]
+    fn release_version_priority() {
+        // NOTE: single test on purpose — env vars are process-global and
+        // Rust runs tests on threads, so split tests would race.
+        let prev = std::env::var("APE_TUI_VERSION").ok();
+        std::env::set_var("APE_TUI_VERSION", "9.9.9-test");
+        assert_eq!(tui_version(), "9.9.9-test", "launcher env wins");
+        std::env::set_var("APE_TUI_VERSION", "  ");
+        let fallback = tui_version();
+        assert!(!fallback.is_empty(), "blank env falls through, got empty");
+        std::env::remove_var("APE_TUI_VERSION");
+        let plain = tui_version();
+        assert!(plain.contains('.'), "embedded or crate version, got: {plain}");
+        assert_ne!(plain, "0.1.0", "crate fallback must not leak: build.rs embeds package.json");
+        match (prev) {
+            Some(v) => std::env::set_var("APE_TUI_VERSION", v),
+            None => std::env::remove_var("APE_TUI_VERSION"),
+        }
+    }
+
+    #[test]
     fn ctrl_j_maps_to_newline_key() {
         // The Windows Terminal path: Ctrl+J arrives as Char('j')+CONTROL.
         assert_eq!(
@@ -952,6 +1029,32 @@ mod tests {
         // Arrows and the rest.
         assert_eq!(normalize_key(ev(KeyCode::Up, KeyModifiers::NONE)), Some(Key::Up));
         assert_eq!(normalize_key(ev(KeyCode::Esc, KeyModifiers::NONE)), Some(Key::Esc));
+    }
+
+    #[test]
+    fn release_events_never_act() {
+        // Regression: Windows emits Press+Release per physical key; the old
+        // harness bypassed normalize_key, so double-typing went uncaught.
+        // Each pair below must yield exactly one action (Some) then silence.
+        let presses = [
+            (KeyCode::Char('r'), KeyModifiers::NONE),
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Enter, KeyModifiers::NONE),
+            (KeyCode::Esc, KeyModifiers::NONE),
+            (KeyCode::Enter, KeyModifiers::ALT),
+            (KeyCode::Char('j'), KeyModifiers::CONTROL),
+        ];
+        for (code, mods) in presses {
+            let press = ev(code, mods);
+            let mut release = ev(code, mods);
+            release.kind = event::KeyEventKind::Release;
+            let mut repeat = ev(code, mods);
+            repeat.kind = event::KeyEventKind::Repeat;
+            assert!(normalize_key(press).is_some(), "press acts: {code:?}");
+            assert_eq!(normalize_key(release), None, "release silent: {code:?}");
+            assert!(normalize_key(repeat).is_some(), "held-key repeat acts: {code:?}");
+        }
     }
 
     #[test]

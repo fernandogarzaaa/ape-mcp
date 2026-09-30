@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                      [↑/↓] scroll   [f] filter   [Esc] back
 
-                    provider: … · profile: … · ape-mcp 0.1.0
+              provider: unknown · profile: unknown · ape-mcp 1.1.1

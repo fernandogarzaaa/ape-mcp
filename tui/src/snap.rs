@@ -267,6 +267,15 @@ mod snap_impl {
         );
         m.apply_poll(&done_value);
         shot("menu-done", 80, 24, |f| render_menu(&m, f));
+        // Model-error JSON outcome renders human, not raw.
+        let mut m = Menu::new();
+        let err_status: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"run-abc123","status":"failed","stop_reason":"model_error","step_count":2,"total_cost":0.01,"total_tokens":50,"outcome":"{\"error\":\"opencode 500\",\"message\":\"Internal server error\"}"}"#,
+        )
+        .unwrap();
+        m.apply_run_started("run-abc123".to_string(), "repo-triage".to_string());
+        m.apply_poll(&err_status);
+        shot("menu-done-error", 80, 24, |f| render_menu(&m, f));
         // Markdown outcome (canned text, real renderer): headings, list,
         // inline code, and a highlighted fenced block.
         let mut m = Menu::new();
