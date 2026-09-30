@@ -78,7 +78,10 @@ test("cli: run with a missing tool exits 1 with the name on stderr", () => {
 
 test("cli: run ape_agent_run returns promptly while the run is still going", () => {
   // Regression: the start call used to hang until the whole run finished
-  // (worker held the parent's stdio/ipc). A 3s mock run must return fast.
+  // (worker held the parent's stdio/ipc). The load-bearing assertion is
+  // behavioral — the run is still going when start returns — not a wall
+  // clock bound (loaded CI Windows runners boot node slowly). The mock run
+  // lasts 9s+ (3 turns x 3000ms) so any sane start passes with huge margin.
   const env = {
     ...process.env,
     APE_ALLOW_MOCK_INPUT: "1",
@@ -89,22 +92,24 @@ test("cli: run ape_agent_run returns promptly while the run is still going", () 
   };
   const script = [
     { tool: "skein.orchestrate", args: { op: "status" } },
+    { tool: "skein.orchestrate", args: { op: "status" } },
+    { tool: "skein.orchestrate", args: { op: "status" } },
     { tool: "finish", args: { summary: "prompt" } },
   ];
   const t0 = Date.now();
   const out = execFileSync(
     "node",
     [bin, "run", "ape_agent_run", JSON.stringify({ profile: "repo-triage", objective: "promptness", _mockScript: script })],
-    { encoding: "utf8", env, timeout: 15000 }
+    { encoding: "utf8", env, timeout: 30000 }
   );
   const dt = Date.now() - t0;
   const runId = JSON.parse(out).structuredContent.result.run_id;
   assert.ok(runId, "run started");
-  assert.ok(dt < 2500, `start returned in ${dt}ms, well before the 3s+ run ends`);
   const st = JSON.parse(
     execFileSync("node", [bin, "run", "ape_agent_status", JSON.stringify({ run_id: runId })], { encoding: "utf8", env, timeout: 15000 })
   ).structuredContent.result;
-  assert.equal(st.status, "running", "run genuinely still going after prompt start");
+  assert.equal(st.status, "running", `run genuinely still going after prompt start (start took ${dt}ms)`);
+  assert.ok(dt < 8000, `start returned in ${dt}ms, well inside the 9s+ run`);
 });
 
 test("cli: templates list is header + scannable id/tier/pitch rows", () => {
