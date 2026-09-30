@@ -111,25 +111,8 @@ fn run(force_onboard: bool) -> io::Result<()> {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     break;
                 }
-                // Normalize once: arrows are first-class, characters pass
-                // through, everything else is ignored (never a trap).
-                // Alt+Enter is a newline for multiline editors.
-                let input = match key.code {
-                    KeyCode::Up => Some(Key::Up),
-                    KeyCode::Down => Some(Key::Down),
-                    KeyCode::Left => Some(Key::Left),
-                    KeyCode::Right => Some(Key::Right),
-                    KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => Some(Key::AltEnter),
-                    KeyCode::Enter => Some(Key::Enter),
-                    // Ctrl+J arrives as Char('j')+CONTROL: the reliable
-                    // newline key (Windows Terminal eats Alt+Enter).
-                    KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Key::CtrlJ),
-                    KeyCode::Esc => Some(Key::Esc),
-                    KeyCode::Backspace => Some(Key::Backspace),
-                    KeyCode::Delete => Some(Key::Backspace),
-                    KeyCode::Char(c) => Some(Key::Char(c)),
-                    _ => None,
-                };
+                // Normalize once through the testable function below.
+                let input = normalize_key(key);
                 if let Some(k) = input {
                     quit = handle_key(&mut top, &ctx, k, force_onboard);
                 }
@@ -141,6 +124,28 @@ fn run(force_onboard: bool) -> io::Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+/// Normalize one crossterm key event to the TUI vocabulary. Pure function
+/// so the mapping (including Ctrl+J) is unit-testable without a terminal:
+/// arrows first-class, Alt+Enter newline, Ctrl+J newline (Windows Terminal
+/// eats Alt+Enter for fullscreen), characters pass through, the rest is
+/// ignored (never a trap). Ctrl+C never reaches here (handled in the loop).
+fn normalize_key(key: event::KeyEvent) -> Option<Key> {
+    match key.code {
+        KeyCode::Up => Some(Key::Up),
+        KeyCode::Down => Some(Key::Down),
+        KeyCode::Left => Some(Key::Left),
+        KeyCode::Right => Some(Key::Right),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => Some(Key::AltEnter),
+        KeyCode::Enter => Some(Key::Enter),
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Key::CtrlJ),
+        KeyCode::Esc => Some(Key::Esc),
+        KeyCode::Backspace => Some(Key::Backspace),
+        KeyCode::Delete => Some(Key::Backspace),
+        KeyCode::Char(c) => Some(Key::Char(c)),
+        _ => None,
+    }
 }
 
 /// Returns true when the app should quit.
@@ -912,4 +917,57 @@ fn editor_lines(editor: &LineEditor) -> Vec<Line<'static>> {
 #[allow(dead_code)]
 fn editor_line(editor: &LineEditor) -> Line<'static> {
     editor_lines(editor).into_iter().next().unwrap_or_else(|| Line::from(""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    fn ev(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn ctrl_j_maps_to_newline_key() {
+        // The Windows Terminal path: Ctrl+J arrives as Char('j')+CONTROL.
+        assert_eq!(
+            normalize_key(ev(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            Some(Key::CtrlJ)
+        );
+        // Plain j stays a character.
+        assert_eq!(
+            normalize_key(ev(KeyCode::Char('j'), KeyModifiers::NONE)),
+            Some(Key::Char('j'))
+        );
+        // Alt+Enter is the other newline key.
+        assert_eq!(
+            normalize_key(ev(KeyCode::Enter, KeyModifiers::ALT)),
+            Some(Key::AltEnter)
+        );
+        assert_eq!(
+            normalize_key(ev(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Key::Enter)
+        );
+        // Arrows and the rest.
+        assert_eq!(normalize_key(ev(KeyCode::Up, KeyModifiers::NONE)), Some(Key::Up));
+        assert_eq!(normalize_key(ev(KeyCode::Esc, KeyModifiers::NONE)), Some(Key::Esc));
+    }
+
+    #[test]
+    fn ctrl_j_inserts_newline_end_to_end() {
+        // normalize_key output feeds straight into the editor path.
+        let mut m = menu::Menu::new();
+        m.view = menu::MenuView::RunObjective {
+            profile: "p".to_string(),
+            editor: input::LineEditor::with_text("ab"),
+            slash_sel: 0,
+        };
+        let (fx, _) = m.on_key(normalize_key(ev(KeyCode::Char('j'), KeyModifiers::CONTROL)).unwrap());
+        assert_eq!(fx, vec![]);
+        match &m.view {
+            menu::MenuView::RunObjective { editor, .. } => assert_eq!(editor.text(), "ab\n"),
+            other => panic!("expected RunObjective, got {other:?}"),
+        }
+    }
 }
