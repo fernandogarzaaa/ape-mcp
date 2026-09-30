@@ -92,6 +92,11 @@ test("ape_beliefs + genome route to vendored ADAM (real binary or explicit unava
   if (gr._adam === "ok") assert.equal(gr.tool, "adam_genome");
   else assert.ok(nonOk.includes(gr._adam), "explicit not silent: " + gr._adam);
 });
+test("adam-client: adamCall never rejects bare (always an _adam marker)", async () => {
+  const { adamCall } = await import("../src/adam-client.js");
+  const r = await adamCall("adam_beliefs", {});
+  assert.equal(typeof r._adam, "string", "explicit marker, got: " + JSON.stringify(r).slice(0, 200));
+});
 test("ape_remember persists through real adam-mcp when present", async () => {
   const r = await dispatchCall("ape_remember", { kind: "episodic", content: "test-marker", organism_id: "testorg" });
   const res = r.structuredContent.result;
