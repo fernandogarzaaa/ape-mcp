@@ -39,10 +39,14 @@ function serve(opts = {}) {
 }
 const ASSET = `ape-tui-${tuiPlatform()}${process.platform === "win32" ? ".exe" : ""}`;
 
-function fakeRoot() {
+function fakeRoot({ withSources = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ape-tui-launch-"));
   mkdirSync(join(dir, "vendors", "ape-tui", tuiPlatform()), { recursive: true });
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x", version: "9.9.9" }));
+  if (withSources) {
+    mkdirSync(join(dir, "tui"), { recursive: true });
+    writeFileSync(join(dir, "tui", "Cargo.toml"), "[package]\nname = \"fake\"\n");
+  }
   return dir;
 }
 function destFor(dir) {
@@ -81,7 +85,7 @@ test("launcher: missing prebuilt downloads verified bytes", async (t) => {
 });
 
 test("launcher: offline fetch falls back to cargo path", async () => {
-  const dir = fakeRoot();
+  const dir = fakeRoot({ withSources: true });
   const logs = [];
   const got = await ensureTui({
     fromRoot: dir,
@@ -93,10 +97,27 @@ test("launcher: offline fetch falls back to cargo path", async () => {
   assert.ok(logs.some((m) => /offline/.test(m)), "failure reason surfaced");
 });
 
+test("launcher: npm install without sources names the remedies", async () => {
+  const dir = fakeRoot();
+  await assert.rejects(
+    ensureTui({
+      fromRoot: dir,
+      fetchImpl: async () => { throw new Error("offline"); },
+      buildFn: () => { throw new Error("must not reach cargo without sources"); },
+      log: () => {},
+    }),
+    (e) => {
+      assert.match(e.message, /no TUI sources/);
+      assert.match(e.message, /install-scripts approve/);
+      return true;
+    }
+  );
+});
+
 test("launcher: mismatch falls back and leaves nothing", async (t) => {
   const { server, base } = await serve({ asset: Buffer.from("tampered") });
   t.after(() => server.close());
-  const dir = fakeRoot();
+  const dir = fakeRoot({ withSources: true });
   const got = await ensureTui({
     fromRoot: dir,
     fetchBase: base,

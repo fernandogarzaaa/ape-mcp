@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // `ape` entry: resolves the prebuilt ape-tui binary for this platform and
 // spawns it (stdio/stdin inherited, so the TUI owns the terminal).
-// Fallback chain: prebuilt -> `cargo run` from a source checkout -> clear
-// error (never a silent downgrade). Non-TTY stdin falls through to plain
+// Fallback chain lives in tui-bin.js: prebuilt -> verified release download
+// -> one-time cargo build (source checkouts only) -> clear error naming the
+// remedy (never a silent downgrade). Non-TTY stdin falls through to plain
 // `ape-mcp` behavior via the TUI's own guard... instead this shim refuses:
 // scripted use must call `ape-mcp` directly so pipes never hang on prompts.
 import { spawnSync } from "node:child_process";
@@ -11,7 +12,6 @@ import { root, runTui } from "./tui-bin.js";
 
 function fail(msg) {
   console.error(`ape: ${msg}`);
-  console.error("hint: run `ape-mcp` directly for scripted use, or build the TUI with `cargo build --release -p ape-tui` in tui/.");
   process.exit(1);
 }
 
@@ -27,6 +27,8 @@ if (process.argv.length > 2) {
 }
 try {
   process.exit(await runTui(process.argv.slice(2)));
-} catch {
-  fail("no prebuilt TUI for this platform and cargo build failed.");
+} catch (e) {
+  // ensureTui already names the exact remedy (approve scripts, release
+  // download, or source checkout); surface it instead of a generic hint.
+  fail(e?.message ?? "no prebuilt TUI for this platform and cargo build failed.");
 }

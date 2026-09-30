@@ -15,8 +15,11 @@ target
 .skein
 .fastembed_cache
 .tmp-*/
-# Repo tooling & CI (not shipped) — except scripts/postinstall.mjs, which npm
-# runs on install and therefore must ship (see package.json "files").
+# Repo tooling & CI (not shipped) — package.json "files" is the allowlist and
+# wins for listed dirs, so this mostly guards non-listed paths. scripts/
+# ships whole (postinstall + launcher fetch need their siblings). tui/
+# sources are DELIBERATELY not shipped: npm crashes walking a local 900MB+
+# tui/target on Windows, and cargo fallback needs a source checkout anyway.
 scripts/*
 !scripts/postinstall.mjs
 tests

@@ -66,7 +66,16 @@ export async function ensureTui({ fromRoot = root, fetchImpl = fetch, fetchBase 
     log(`ape: TUI prebuilt ready (${r.bytes} bytes, checksum verified).`);
     return dest;
   }
-  log(`ape: ${r.reason}; building once via cargo…`);
+  log(`ape: ${r.reason}; trying a local cargo build…`);
+  if (!existsSync(join(fromRoot, "tui", "Cargo.toml"))) {
+    throw new Error(
+      "no TUI prebuilt and no TUI sources in this install. " +
+      "Fix one of: `npm install-scripts approve ape-mcp` then reinstall " +
+      "(fetches the verified prebuilt), download ape-tui-<platform> from the " +
+      "GitHub release into vendors/ape-tui/<platform>/, or run from a source " +
+      "checkout with a Rust toolchain."
+    );
+  }
   return (buildFn ?? (() => buildLocal(fromRoot)))();
 }
 
