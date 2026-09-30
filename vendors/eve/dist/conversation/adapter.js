@@ -28,6 +28,7 @@
  * confidence, not its intent classifier — a user of a support bot sees none
  * of those either.
  */
+import { ADAPTER_VERSION } from "../core/versions.js";
 import { getPersona } from "../personas/library.js";
 import { workingMemoryCapacity } from "../personas/persona.js";
 import { CONVERSATION_VERBS, CONVERSATIONAL_SURFACE } from "../surface/capabilities.js";
@@ -37,6 +38,7 @@ import { detectNonAnswer, offersHandoff } from "./types.js";
 export class ConversationAdapter {
     options;
     name = "conversation";
+    version = ADAPTER_VERSION;
     capabilities = { ...CONVERSATIONAL_SURFACE, actionVerbs: CONVERSATION_VERBS };
     backend;
     persona;
