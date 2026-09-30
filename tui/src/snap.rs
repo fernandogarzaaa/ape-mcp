@@ -172,6 +172,12 @@ mod snap_impl {
                 render_menu(&m2, f);
             });
         }
+        // Threshold pair: art at exactly 81 cols, gone at 80 (covered by
+        // menu-main-80x24 above).
+        shot("menu-art-edge", 81, 24, |f| {
+            let mut m2 = Menu::new();
+            render_menu(&m2, f);
+        });
         let _ = m;
         let mut m = Menu::new();
         let (fx, _) = m.on_key(Key::Enter); // Run an agent

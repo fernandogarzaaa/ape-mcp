@@ -10,9 +10,10 @@ Run an agent, Check a run, Profiles, Doctor, Console info, Status, Runs,
 Ledger, Tasks, Quit. Every list scrolls with ↑/↓ and goes back with Esc;
 footers name the keys per screen.
 
-- **Main menu**: list on the left, `APE-MCP` box art on the right when the
-  terminal fits both (hidden below ~96 columns, never shrunk). The art is
-  a clean-room interpretation (see note below), honoring `NO_COLOR`.
+- **Main menu**: list on the left, the welcome banner on the right when the
+  terminal fits both (one source of truth — same constant, single cyan
+  accent, plain under `NO_COLOR`). Hidden below the computed threshold
+  (art + widest item + gutter), never shrunk.
 - **Runs**: newest-first run rows (id, profile, status, cost, steps,
   start). Enter opens a running run into the live progress view, else
   the finished view. Empty when no runs exist yet.

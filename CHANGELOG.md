@@ -14,9 +14,11 @@ TUI live-testing fixes from Windows PowerShell:
   `ape_status`; unknowns read "unknown".
 - Failed runs with JSON `model_error` payloads show human fields plus
   the stop reason; raw blob stays on expand.
-- Main menu gains an `APE-MCP` box-art side panel (responsive hide below
-  ~96 cols, `NO_COLOR` respected). Letterforms are a clean-room
-  interpretation — no reference screenshot was received.
+- Main menu gains the welcome banner as a side panel (same constant, one
+  cyan accent, `NO_COLOR`-plain). Computed show/hide threshold (banner +
+  widest item + gutter; 81 cols), main menu only, never shrunk. The
+  earlier per-letter-color draft was wrong: the reference colors were
+  subpixel rendering, not real colors.
 
 ## 1.1.1
 

@@ -268,6 +268,12 @@ pub fn profile_lines(name: &str, desc: &str, max: usize, selected: bool) -> Vec<
     out
 }
 
+/// Minimum menu column budget for the art threshold: widest item plus
+/// indent plus block borders. Computed from the items, never hard-coded.
+pub fn menu_min_width() -> usize {
+    MENU_ITEMS.iter().map(|s| s.chars().count()).max().unwrap_or(0) + 2 + 2
+}
+
 /// Budget limits for one profile, from `ape_agent_profiles` (same call that
 /// feeds the picker — no second round-trip). All optional: a profile may
 /// omit any ceiling, and then the meter shows spent only.
