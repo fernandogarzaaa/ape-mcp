@@ -23,11 +23,11 @@
     "profiles",
     "connectors",
     "docs",
+    "scripts",
     "ape.config.example.yaml",
     "README.md",
     "NOTICE.md",
-    "LICENSE",
-    "scripts/postinstall.mjs"
+    "LICENSE"
   ],
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
