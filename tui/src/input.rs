@@ -15,6 +15,11 @@ pub enum Key {
     /// Alt+Enter: newline inside multiline editors (where the terminal
     /// delivers it; otherwise Enter alone sends).
     AltEnter,
+    /// Ctrl+J: newline inside multiline editors. Windows Terminal binds
+    /// Alt+Enter to fullscreen by default, so this is the reliable key
+    /// there. (A bare Ctrl+J arrives as LF; crossterm reports it as
+    /// Char('j')+CONTROL, mapped by the main loop to this variant.)
+    CtrlJ,
     Esc,
     Backspace,
     Char(char),

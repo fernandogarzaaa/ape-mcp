@@ -35,7 +35,9 @@ footers name the keys per screen.
 ## Objective box keys
 
 - Enter sends (empty sends nothing). Alt+Enter inserts a newline for
-  multiline objectives (where the terminal delivers Alt+Enter).
+  multiline objectives (where the terminal delivers Alt+Enter); Ctrl+J
+  does the same and is the reliable key on Windows, where Windows
+  Terminal binds Alt+Enter to fullscreen by default.
 - ↑/↓ recalls session input history (oldest ↔ newest, draft restored
   past the end). ←/→ move by character, across lines.
 - Typing `/` opens the slash menu (fuzzy): /profile /runs /ledger

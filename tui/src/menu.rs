@@ -639,7 +639,7 @@ impl Menu {
                     self.history_push(objective.clone());
                     (vec![MenuEffect::StartRun { profile, objective }], false)
                 }
-                Key::AltEnter => {
+                Key::AltEnter | Key::CtrlJ => {
                     editor.insert('\n');
                     (vec![], false)
                 }
@@ -782,7 +782,7 @@ impl Menu {
                     self.history_push(id.clone());
                     (vec![MenuEffect::FetchStatus(id)], false)
                 }
-                Key::AltEnter => {
+                Key::AltEnter | Key::CtrlJ => {
                     editor.insert('\n');
                     (vec![], false)
                 }
@@ -1173,6 +1173,19 @@ mod tests {
         // Esc from the objective goes back to the profile list.
         m.on_key(Key::Esc);
         assert!(matches!(m.view, MenuView::RunProfile { .. }));
+    }
+
+    #[test]
+    fn ctrl_j_inserts_newline_like_alt_enter() {
+        for key in [Key::AltEnter, Key::CtrlJ] {
+            let mut m = Menu::new();
+            m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("ab"), slash_sel: 0 };
+            m.on_key(key);
+            match &m.view {
+                MenuView::RunObjective { editor, .. } => assert_eq!(editor.text(), "ab\n"),
+                other => panic!("expected RunObjective, got {other:?}"),
+            }
+        }
     }
 
     #[test]

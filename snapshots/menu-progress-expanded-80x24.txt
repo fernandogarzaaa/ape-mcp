@@ -1,7 +1,7 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
 │run run-<id> [repo-triage] — running:                                 │
-│budget $0/$0.5 · 0/12 steps · 0/120000 tok [░░░░░░░░░░]                       │
-│> step 1 · model · 407ms · 2 tok · $0                                         │
+│budget $0/$0.5 · 1/12 steps · 2/120000 tok [░░░░░░░░░░]                       │
+│> step 1 · model · 408ms · 2 tok · $0                                         │
 │    (empty result)                                                            │
 │                                                                              │
 │                                                                              │

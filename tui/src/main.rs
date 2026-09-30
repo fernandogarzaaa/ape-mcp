@@ -121,6 +121,9 @@ fn run(force_onboard: bool) -> io::Result<()> {
                     KeyCode::Right => Some(Key::Right),
                     KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => Some(Key::AltEnter),
                     KeyCode::Enter => Some(Key::Enter),
+                    // Ctrl+J arrives as Char('j')+CONTROL: the reliable
+                    // newline key (Windows Terminal eats Alt+Enter).
+                    KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Key::CtrlJ),
                     KeyCode::Esc => Some(Key::Esc),
                     KeyCode::Backspace => Some(Key::Backspace),
                     KeyCode::Delete => Some(Key::Backspace),
@@ -654,9 +657,9 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
                     };
                     lines.push(Line::from(Span::styled(format!("  /{name} — {blurb}"), style)));
                 }
-                footer = "[↑/↓] pick   [Enter] jump   [Esc] back   [Alt+Enter] newline";
+                footer = "[↑/↓] pick   [Enter] jump   [Esc] back   [Alt+Enter/Ctrl+J] newline";
             } else {
-                footer = "[←/→] move   [↑/↓] history   [Enter] run   [Alt+Enter] newline   [Esc] back";
+                footer = "[←/→] move   [↑/↓] history   [Enter] run   [Alt+Enter/Ctrl+J] newline   [Esc] back";
             }
         }
         RunProgress { run_id, profile, blocks, budget, last_status, selected, expanded, .. } => {

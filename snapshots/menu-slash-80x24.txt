@@ -18,6 +18,6 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-          [↑/↓] pick   [Enter] jump   [Esc] back   [Alt+Enter] newline
+       [↑/↓] pick   [Enter] jump   [Esc] back   [Alt+Enter/Ctrl+J] newline
 
                     provider: … · profile: … · ape-mcp 0.1.0
