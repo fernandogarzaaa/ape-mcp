@@ -1,8 +1,8 @@
 // Run ledger — every agent run persists here: run_id, profile, model, step records
 // (tool, argsHash, durationMs, tokens, cost), stop reason, total cost.
 // SQLite via node:sqlite (WAL for concurrent writer/reader between worker + server).
-import { join } from "node:path";
-import { mkdirSync, readFileSync } from "node:fs";
+import { join, basename } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "./sqlite.js";
 import { dataDir } from "./trace.js";
@@ -256,7 +256,74 @@ export function updateRun(runId, patch) {
   d.prepare(`UPDATE runs SET ${cols} WHERE run_id = ?`).run(...keys.map((k) => patch[k]), runId);
 }
 
-// Run claims (stateful protocol, phase 1): ownership without accounts.
+// Worker-log retention: delete per-run logs for finished runs older than
+// maxAgeDays. Scoped HARD to <dataDir>/workers/*.log — every candidate path
+// is rebuilt as join(dir, entry-name) with separator and extension guards,
+// so nothing outside that directory can be touched (proven by test).
+// Missing rows count as finished (orphans); live runs are never eligible.
+// Dry-run reports without deleting. Returns removal lists for logging.
+export function pruneWorkerLogs({ maxAgeDays = 14, dryRun = false, nowMs = Date.now() } = {}) {
+  const dir = join(dataDir(), "workers");
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return { removed: [], kept: 0, errors: [], note: "no workers dir" };
+  }
+  const removed = [];
+  const errors = [];
+  let kept = 0;
+  for (const name of names) {
+    const full = join(dir, name);
+    // Scope guards: plain *.log filenames only. readdir cannot return
+    // separators, but belt-and-braces keeps a weird filesystem honest, and
+    // basename equality proves join() did not escape dir.
+    if (!name.endsWith(".log") || name.includes("/") || name.includes("\\") || basename(full) !== name) {
+      kept++;
+      continue;
+    }
+    if (full !== join(dir, basename(name))) {
+      kept++;
+      continue;
+    }
+    let st;
+    try {
+      st = statSync(full);
+    } catch (e) {
+      errors.push({ file: name, error: String(e?.message ?? e).slice(0, 120) });
+      continue;
+    }
+    if (!st.isFile()) {
+      kept++;
+      continue;
+    }
+    const ageDays = (nowMs - st.mtimeMs) / 86400000;
+    if (ageDays <= maxAgeDays) {
+      kept++;
+      continue;
+    }
+    const runId = name.slice(0, -".log".length);
+    let status = null;
+    try {
+      status = getRun(runId).status;
+    } catch { /* treat lookup failure as orphan-eligible below */ }
+    if (status === "running") {
+      kept++;
+      continue;
+    }
+    if (dryRun) {
+      removed.push(name);
+      continue;
+    }
+    try {
+      unlinkSync(full);
+      removed.push(name);
+    } catch (e) {
+      errors.push({ file: name, error: String(e?.message ?? e).slice(0, 120) });
+    }
+  }
+  return { removed, kept, errors };
+}
 // - Live run held by someone else -> claim_conflict (409-class); only the
 //   holder (or nobody, when unclaimed) may drive it.
 // - Unclaimed run -> claim granted.

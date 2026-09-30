@@ -41,6 +41,16 @@ test("cli: unknown flag fails fast with exit 2 (never hangs on stdin)", () => {
   assert.match(r.stderr, /unknown flag/);
 });
 
+test("cli: templates rejects bad subcommands; prune dry-run is safe", () => {
+  const bad = spawnSync("node", [bin, "templates", "bogussub"], { encoding: "utf8", timeout: 15000 });
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /usage: ape-mcp templates/);
+  const env = { ...process.env, APE_DATA_DIR: mkdtempSync(join(tmpdir(), "ape-prune-cli-")) };
+  const r = spawnSync("node", [bin, "prune", "--dry-run"], { encoding: "utf8", env, timeout: 15000 });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /prune: 0 removed, 0 kept \(dry run\)/);
+});
+
 test("cli: stdio initialize reports the package version", () => {
   const req = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2026-07-28" } }) + "\n";
   const r = spawnSync("node", [bin], { input: req, encoding: "utf8", timeout: 15000 });

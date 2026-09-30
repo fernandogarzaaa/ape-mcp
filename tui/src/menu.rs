@@ -21,12 +21,12 @@ pub const MENU_ITEMS: [&str; 10] = [
 pub enum MenuView {
     Main { selected: usize },
     RunProfile { profiles: Vec<(String, String)>, selected: usize },
-    RunObjective { profile: String, editor: LineEditor },
+    RunObjective { profile: String, editor: LineEditor, slash_sel: usize },
     RunProgress { run_id: String, profile: String, blocks: Vec<StepBlock>, seen: usize, budget: Budget, last_status: String, selected: usize, expanded: bool },
     RunDone { run_id: String, summary: String },
     RunCancelled { run_id: String, summary: String },
     CheckId { editor: LineEditor },
-    CheckShow { text: String },
+    CheckShow { text: String, blocks: Vec<StepBlock> },
     ProfilesList { profiles: Vec<(String, String)>, offset: usize },
     DoctorShow { text: String },
     StatusShow { text: String },
@@ -169,6 +169,41 @@ impl LedgerFilter {
             LedgerFilter::Genesis => e.kind.contains("genesis"),
         }
     }
+}
+
+/// Slash commands: (name, menu index, blurb). Enter on a match calls the
+/// SAME `goto_item` the menu uses — one implementation, two doors.
+pub const SLASH_ITEMS: [(&str, usize, &str); 6] = [
+    ("profile", 0, "pick a profile and run"),
+    ("runs", 6, "recent runs, open one live"),
+    ("ledger", 7, "governance audit stream"),
+    ("tasks", 8, "skein task graph"),
+    ("status", 5, "versions, provider, engines"),
+    ("doctor", 3, "environment checks"),
+];
+
+/// Menu index for the current slash text, if it matches anything.
+pub fn slash_target(text: &str, sel: usize) -> Option<usize> {
+    let q = text.strip_prefix('/')?.trim();
+    let hits: Vec<usize> = SLASH_ITEMS
+        .iter()
+        .filter(|(name, _, _)| name.contains(q))
+        .map(|(_, idx, _)| *idx)
+        .collect();
+    hits.get(sel.min(hits.len().saturating_sub(1))).copied()
+}
+
+/// Visible slash matches for the render layer (name, blurb).
+pub fn slash_menu(text: &str) -> Vec<(&'static str, &'static str)> {
+    let q = match text.strip_prefix('/') {
+        Some(q) => q.trim(),
+        None => return vec![],
+    };
+    SLASH_ITEMS
+        .iter()
+        .filter(|(name, _, _)| name.contains(q))
+        .map(|(name, _, blurb)| (*name, *blurb))
+        .collect()
 }
 
 /// Budget limits for one profile, from `ape_agent_profiles` (same call that
@@ -398,6 +433,9 @@ pub struct Menu {
     limits_cache: HashMap<String, ProfileLimits>,
     provider_cache: Option<String>,
     default_profile: Option<String>,
+    history: Vec<String>,
+    hist_pos: Option<usize>,
+    hist_draft: String,
 }
 
 impl Menu {
@@ -409,6 +447,9 @@ impl Menu {
             provider_cache: None,
             // Local state, read once: the onboarded default, if any.
             default_profile: ape::load_default_profile(),
+            history: Vec::new(),
+            hist_pos: None,
+            hist_draft: String::new(),
         }
     }
 
@@ -453,6 +494,91 @@ impl Menu {
         }
     }
 
+    /// One implementation for menu selection AND slash jumps: index in,
+    /// (view, effects, quit) out. Slash commands call this, never a copy.
+    pub fn goto_item(&mut self, idx: usize) -> (Vec<MenuEffect>, bool) {
+        match idx {
+            0 => {
+                self.view = MenuView::RunProfile { profiles: vec![], selected: 0 };
+                (vec![MenuEffect::LoadProfiles], false)
+            }
+            2 => {
+                self.view = MenuView::ProfilesList { profiles: vec![], offset: 0 };
+                (vec![MenuEffect::LoadProfiles], false)
+            }
+            1 => {
+                self.view = MenuView::CheckId { editor: LineEditor::new() };
+                (vec![], false)
+            }
+            3 => (vec![MenuEffect::LoadDoctor], false),
+            4 => {
+                self.view = MenuView::ConsoleInfo;
+                (vec![], false)
+            }
+            5 => (vec![MenuEffect::LoadStatus], false),
+            6 => {
+                self.view = MenuView::RunsList { runs: vec![], selected: 0, offset: 0, note: "loading runs…".to_string() };
+                (vec![MenuEffect::LoadRuns], false)
+            }
+            7 => {
+                self.view = MenuView::LedgerList { entries: vec![], offset: 0, filter: LedgerFilter::All, note: "loading ledger…".to_string() };
+                (vec![MenuEffect::LoadLedger], false)
+            }
+            8 => (vec![MenuEffect::LoadTasks], false),
+            _ => (vec![], true),
+        }
+    }
+
+    /// History navigation over disjoint fields (no whole-self borrow while
+    /// an editor from the view is held).
+    fn history_step(
+        history: &[String],
+        pos: &mut Option<usize>,
+        draft: &mut String,
+        editor: &mut LineEditor,
+        up: bool,
+    ) {
+        if history.is_empty() {
+            return;
+        }
+        if up {
+            match *pos {
+                None => {
+                    *draft = editor.text();
+                    *pos = Some(history.len() - 1);
+                }
+                Some(i) => *pos = Some(i.saturating_sub(1)),
+            }
+        } else {
+            match *pos {
+                None => return,
+                Some(i) if i + 1 >= history.len() => {
+                    *pos = None;
+                    let d = draft.clone();
+                    editor.replace(&d);
+                    return;
+                }
+                Some(i) => *pos = Some(i + 1),
+            }
+        }
+        let text = history[pos.unwrap()].clone();
+        editor.replace(&text);
+    }
+
+    fn history_push(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        if self.history.last().map(|l| l != &text).unwrap_or(true) {
+            self.history.push(text);
+            while self.history.len() > 50 {
+                self.history.remove(0);
+            }
+        }
+        self.hist_pos = None;
+        self.hist_draft.clear();
+    }
+
     /// Key handling. Returns (effects, quit_app).
     /// Arrows are primary; `j`/`k` are secondary aliases. Text-entry views
     /// consume printable chars into their editors; only Esc navigates back,
@@ -468,36 +594,10 @@ impl Menu {
                     Self::move_sel(selected, MENU_ITEMS.len(), false);
                     (vec![], false)
                 }
-                Key::Enter => match *selected {
-                    0 => {
-                        self.view = MenuView::RunProfile { profiles: vec![], selected: 0 };
-                        (vec![MenuEffect::LoadProfiles], false)
-                    }
-                    2 => {
-                        self.view = MenuView::ProfilesList { profiles: vec![], offset: 0 };
-                        (vec![MenuEffect::LoadProfiles], false)
-                    }
-                    1 => {
-                        self.view = MenuView::CheckId { editor: LineEditor::new() };
-                        (vec![], false)
-                    }
-                    3 => (vec![MenuEffect::LoadDoctor], false),
-                    4 => {
-                        self.view = MenuView::ConsoleInfo;
-                        (vec![], false)
-                    }
-                    5 => (vec![MenuEffect::LoadStatus], false),
-                    6 => {
-                        self.view = MenuView::RunsList { runs: vec![], selected: 0, offset: 0, note: "loading runs…".to_string() };
-                        (vec![MenuEffect::LoadRuns], false)
-                    }
-                    7 => {
-                        self.view = MenuView::LedgerList { entries: vec![], offset: 0, filter: LedgerFilter::All, note: "loading ledger…".to_string() };
-                        (vec![MenuEffect::LoadLedger], false)
-                    }
-                    8 => (vec![MenuEffect::LoadTasks], false),
-                    _ => (vec![], true),
-                },
+                Key::Enter => {
+                    let idx = *selected;
+                    self.goto_item(idx)
+                }
                 Key::Char('q') | Key::Char('Q') => (vec![], true),
                 _ => (vec![], false),
             },
@@ -512,7 +612,7 @@ impl Menu {
                 }
                 Key::Enter => {
                     if let Some((name, _)) = profiles.get(*selected).cloned() {
-                        self.view = MenuView::RunObjective { profile: name, editor: LineEditor::new() };
+                        self.view = MenuView::RunObjective { profile: name, editor: LineEditor::new(), slash_sel: 0 };
                     }
                     (vec![], false)
                 }
@@ -522,13 +622,26 @@ impl Menu {
                 }
                 _ => (vec![], false),
             },
-            MenuView::RunObjective { profile, editor } => match key {
+            MenuView::RunObjective { profile, editor, slash_sel } => match key {
                 Key::Enter => {
+                    // Slash jump first: same goto_item the menu uses.
+                    if editor.text().starts_with('/') {
+                        if let Some(idx) = slash_target(&editor.text(), *slash_sel) {
+                            return self.goto_item(idx);
+                        }
+                    }
                     if editor.is_empty() {
                         return (vec![], false);
                     }
+                    // Own everything before the &mut history call below.
+                    let profile = profile.clone();
                     let objective = editor.text();
-                    (vec![MenuEffect::StartRun { profile: profile.clone(), objective }], false)
+                    self.history_push(objective.clone());
+                    (vec![MenuEffect::StartRun { profile, objective }], false)
+                }
+                Key::AltEnter => {
+                    editor.insert('\n');
+                    (vec![], false)
                 }
                 Key::Backspace => {
                     editor.backspace();
@@ -542,8 +655,27 @@ impl Menu {
                     editor.move_right();
                     (vec![], false)
                 }
+                Key::Up => {
+                    if editor.text().starts_with('/') {
+                        let n = slash_menu(&editor.text()).len();
+                        *slash_sel = (*slash_sel).saturating_sub(1).min(n.saturating_sub(1));
+                    } else {
+                        Self::history_step(&self.history, &mut self.hist_pos, &mut self.hist_draft, editor, true);
+                    }
+                    (vec![], false)
+                }
+                Key::Down => {
+                    if editor.text().starts_with('/') {
+                        let n = slash_menu(&editor.text()).len();
+                        *slash_sel = (*slash_sel + 1).min(n.saturating_sub(1));
+                    } else {
+                        Self::history_step(&self.history, &mut self.hist_pos, &mut self.hist_draft, editor, false);
+                    }
+                    (vec![], false)
+                }
                 Key::Char(c) if !c.is_control() => {
                     editor.insert(c);
+                    *slash_sel = 0;
                     (vec![], false)
                 }
                 Key::Esc => {
@@ -646,7 +778,21 @@ impl Menu {
                     if editor.is_empty() {
                         return (vec![], false);
                     }
-                    (vec![MenuEffect::FetchStatus(editor.text())], false)
+                    let id = editor.text();
+                    self.history_push(id.clone());
+                    (vec![MenuEffect::FetchStatus(id)], false)
+                }
+                Key::AltEnter => {
+                    editor.insert('\n');
+                    (vec![], false)
+                }
+                Key::Up => {
+                    Self::history_step(&self.history, &mut self.hist_pos, &mut self.hist_draft, editor, true);
+                    (vec![], false)
+                }
+                Key::Down => {
+                    Self::history_step(&self.history, &mut self.hist_pos, &mut self.hist_draft, editor, false);
+                    (vec![], false)
                 }
                 Key::Backspace => {
                     editor.backspace();
@@ -759,7 +905,18 @@ impl Menu {
     }
 
     pub fn apply_check_status(&mut self, status: &serde_json::Value) {
-        self.view = MenuView::CheckShow { text: status_text(status) };
+        // The done view carries the recent timeline too: a cancelled run
+        // opened by id must show its interruption marker (Check 2).
+        const TAIL: usize = 8;
+        let blocks: Vec<StepBlock> = status
+            .get("steps")
+            .and_then(|s| s.as_array())
+            .map(|a| {
+                let n = a.len().saturating_sub(TAIL);
+                a.iter().skip(n).map(StepBlock::from_json).collect()
+            })
+            .unwrap_or_default();
+        self.view = MenuView::CheckShow { text: status_text(status), blocks };
     }
 
     pub fn apply_doctor(&mut self, text: String) {
@@ -984,7 +1141,7 @@ mod tests {
     #[test]
     fn stray_control_chars_keep_editor_text() {
         let mut m = Menu::new();
-        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("do it") };
+        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("do it"), slash_sel: 0 };
         // A stray control char (e.g. Ctrl-S) must not nuke the typed text.
         m.on_key(Key::Char('\x13'));
         assert!(matches!(m.view, MenuView::RunObjective { .. }));
@@ -1019,9 +1176,63 @@ mod tests {
     }
 
     #[test]
+    fn slash_jump_uses_goto_item() {
+        let mut m = Menu::new();
+        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("/runs"), slash_sel: 0 };
+        let (fx, _) = m.on_key(Key::Enter);
+        assert_eq!(fx, vec![MenuEffect::LoadRuns]);
+        assert!(matches!(m.view, MenuView::RunsList { .. }));
+        // Unmatched slash text sends as a literal objective.
+        let mut m = Menu::new();
+        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("/zzz"), slash_sel: 0 };
+        let (fx, _) = m.on_key(Key::Enter);
+        assert!(matches!(fx[..], [MenuEffect::StartRun { .. }]));
+        // Fuzzy menu navigates with Up/Down.
+        assert_eq!(slash_menu("/"), vec![
+            ("profile", "pick a profile and run"),
+            ("runs", "recent runs, open one live"),
+            ("ledger", "governance audit stream"),
+            ("tasks", "skein task graph"),
+            ("status", "versions, provider, engines"),
+            ("doctor", "environment checks"),
+        ]);
+        assert_eq!(slash_menu("/run"), vec![("runs", "recent runs, open one live")]);
+        assert_eq!(slash_target("/doc", 0), Some(3));
+        assert_eq!(slash_target("/zzz", 0), None);
+    }
+
+    #[test]
+    fn history_recalls_and_restores_draft() {
+        let mut m = Menu::new();
+        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("first"), slash_sel: 0 };
+        m.on_key(Key::Enter);
+        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("second"), slash_sel: 0 };
+        m.on_key(Key::Enter);
+        let mut m2 = Menu::new();
+        m2.history = m.history.clone();
+        m2.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("draft"), slash_sel: 0 };
+        m2.on_key(Key::Up);
+        match &m2.view {
+            MenuView::RunObjective { editor, .. } => assert_eq!(editor.text(), "second"),
+            other => panic!("expected RunObjective, got {other:?}"),
+        }
+        m2.on_key(Key::Up);
+        match &m2.view {
+            MenuView::RunObjective { editor, .. } => assert_eq!(editor.text(), "first"),
+            other => panic!("expected RunObjective, got {other:?}"),
+        }
+        m2.on_key(Key::Down);
+        m2.on_key(Key::Down);
+        match &m2.view {
+            MenuView::RunObjective { editor, .. } => assert_eq!(editor.text(), "draft", "draft restored past newest"),
+            other => panic!("expected RunObjective, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn objective_enter_starts_run() {
         let mut m = Menu::new();
-        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("do it") };
+        m.view = MenuView::RunObjective { profile: "p".to_string(), editor: LineEditor::with_text("do it"), slash_sel: 0 };
         let (fx, _) = m.on_key(Key::Enter);
         assert_eq!(fx, vec![MenuEffect::StartRun { profile: "p".to_string(), objective: "do it".to_string() }]);
     }
@@ -1209,6 +1420,24 @@ mod tests {
                 assert_eq!(blocks.len(), 2, "blocks still come from the rows");
             }
             other => panic!("expected RunProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_show_carries_recent_steps() {
+        let mut m = Menu::new();
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"stopped","stop_reason":"cancelled","step_count":1,"total_cost":0.01,"total_tokens":40,"outcome":"","steps":[{"step":1,"kind":"tool","tool":"a","duration_ms":1,"tokens":1,"cost":0,"result_summary":"ok"},{"step":2,"kind":"cancel","tool":"a","duration_ms":0,"tokens":0,"cost":0,"result_summary":"interrupted:cancelled after step 1 (a) — in-flight work discarded"}]}"#,
+        )
+        .unwrap();
+        m.apply_check_status(&v);
+        match &m.view {
+            MenuView::CheckShow { text, blocks } => {
+                assert!(text.contains("cancelled"), "got: {text}");
+                assert_eq!(blocks.len(), 2);
+                assert!(blocks[1].summary.contains("interrupted:cancelled"));
+            }
+            other => panic!("expected CheckShow, got {other:?}"),
         }
     }
 

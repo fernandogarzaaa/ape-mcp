@@ -3,6 +3,12 @@
 // to a one-time cargo build from a source checkout, then spawn it with an
 // inherited stdio so the TUI owns the terminal. Used by both `ape`
 // (bin/ape.js) and `ape-mcp tui` (bin/ape-mcp.js) — one resolution path.
+//
+// Binary provenance (no committed prebuilts): postinstall downloads the
+// matching `ape-tui-<platform>[.exe]` asset from the GitHub Release for the
+// installed version into vendors/ape-tui/<platform>/ (see
+// .github/workflows/tui-binaries.yml); a local `cargo build --release`
+// output satisfies the same path for source checkouts.
 import { spawnSync, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";

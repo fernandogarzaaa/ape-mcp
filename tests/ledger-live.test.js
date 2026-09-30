@@ -109,6 +109,19 @@ test("ledger: ape_ledger reads the audit stream with limit + kind filter", async
   assert.equal(cut.structuredContent.result.truncated, true, "truncation reported honestly");
 });
 
+test("ledger: ape_ledger caps limit at 200 and stays read-only", async () => {  const { appendFileSync } = await import("node:fs");
+  const p = join(process.env.APE_DATA_DIR, "ledger.jsonl");
+  for (let i = 0; i < 210; i++) {
+    appendFileSync(p, JSON.stringify({ kind: "cap.probe", i }) + "\n");
+  }
+  const r = await dispatchCall("ape_ledger", { limit: 500 });
+  assert.equal(r.structuredContent.result.returned, 200, "capped at 200");
+  assert.equal(r.structuredContent.result.truncated, true);
+  // Read-only: the file still holds every line we wrote.
+  const { readFileSync } = await import("node:fs");
+  assert.ok(readFileSync(p, "utf8").split("\n").filter(Boolean).length >= 210, "nothing removed");
+});
+
 test("ledger: destructive-denied step rows carry the reason", async () => {
   // The loop deny path needs adam.evolve as a declared engine tool with a
   // deny policy (same shape as agent.test.js's audit test).
@@ -154,4 +167,63 @@ test("ledger: destructive-denied step rows carry the reason", async () => {
     /denies unattended destructive calls/,
     "human reason in the row, not just the marker"
   );
+});
+
+test("prune: only finished-and-old logs inside .ape/workers/ are removed", async () => {
+  const fs = await import("node:fs");
+  const { pruneWorkerLogs } = await import("../src/runs.js");
+  const dir = process.env.APE_DATA_DIR;
+  const wdir = join(dir, "workers");
+  fs.mkdirSync(wdir, { recursive: true });
+  const old = Date.now() - 20 * 86400000;
+  const fresh = Date.now();
+  const backdate = (p, t) => fs.utimesSync(p, new Date(t), new Date(t));
+
+  // Finished run, old log -> removed.
+  const doneId = await startRun("prune-done", [{ tool: "finish", args: { summary: "x" } }]);
+  await waitFor(doneId, (s) => s.status !== "running");
+  // Live run, old log -> kept.
+  const liveId = await startRun("prune-live", [
+    { tool: "skein.orchestrate", args: { op: "status" } },
+    { tool: "skein.orchestrate", args: { op: "status" } },
+    { tool: "skein.orchestrate", args: { op: "status" } },
+    { tool: "finish", args: { summary: "x" } },
+  ]);
+  await waitFor(liveId, (s) => s.status === "running" && (s.steps?.length ?? 0) >= 1);
+  const doneLog = join(wdir, `${doneId}.log`);
+  const liveLog = join(wdir, `${liveId}.log`);
+  fs.writeFileSync(doneLog, "done worker output\n");
+  fs.writeFileSync(liveLog, "live worker output\n");
+  backdate(doneLog, old);
+  backdate(liveLog, old);
+  // Fresh finished log -> kept.
+  const freshLog = join(wdir, "run-fresh.log");
+  fs.writeFileSync(freshLog, "fresh\n");
+  backdate(freshLog, fresh);
+  // Decoys OUTSIDE workers/: must all survive.
+  const decoys = [
+    join(dir, "run-decoy.log"),
+    join(dir, "profiles", "decoy.log"),
+    join(wdir, "nested", "deep.log"),
+  ];
+  fs.mkdirSync(join(dir, "profiles"), { recursive: true });
+  fs.mkdirSync(join(wdir, "nested"), { recursive: true });
+  for (const d of decoys) {
+    fs.writeFileSync(d, "decoy\n");
+    backdate(d, old);
+  }
+
+  const r = pruneWorkerLogs({ maxAgeDays: 14 });
+  assert.deepEqual(r.removed, [`${doneId}.log`], "exactly the old finished log");
+  assert.ok(!fs.existsSync(doneLog), "removed from disk");
+  assert.ok(fs.existsSync(liveLog), "live run log kept");
+  assert.ok(fs.existsSync(freshLog), "fresh log kept");
+  for (const d of decoys) assert.ok(fs.existsSync(d), `outside scope survives: ${d}`);
+  assert.ok(fs.existsSync(join(wdir, "nested")), "subdirectory untouched");
+
+  // Dry run removes nothing.
+  const r2 = pruneWorkerLogs({ maxAgeDays: 14, dryRun: true });
+  assert.ok(!fs.existsSync(doneLog), "already gone stays gone");
+  assert.ok(r2.removed.length === 0 || fs.existsSync(join(wdir, r2.removed[0])), "dry run deletes nothing");
+  await dispatchCall("ape_agent_cancel", { run_id: liveId });
 });

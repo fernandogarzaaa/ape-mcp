@@ -17,7 +17,7 @@ npm i -g ape-mcp
 ape               # ASCII banner → guided onboarding → menu (needs a terminal)
 ```
 
-Prefer scripted commands? `ape-mcp doctor`, `ape-mcp run …`, and `ape-mcp --http` work as before — `ape` with arguments behaves exactly like `ape-mcp`.
+Prefer scripted commands? `ape-mcp doctor`, `ape-mcp run …`, and `ape-mcp --http` work as before — `ape` with arguments behaves exactly like `ape-mcp`. `ape-mcp tui` opens the same terminal UI as `ape` from inside scripts and menus.
 
 
 **Run your first job.** Pick a *profile* (which specialist) and write one *objective* sentence:

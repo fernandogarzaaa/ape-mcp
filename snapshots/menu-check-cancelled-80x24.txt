@@ -1,10 +1,10 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│run id (Enter checks, Esc back):                                              │
-│> run-<id>█                                                                 │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+│stopped · 1 steps · $0.01 · 40 tokens · stopped: cancelled                    │
+│recent steps:                                                                 │
+│  step 1 · skein.orchestrate · 120ms · 40 tok · $0.01                         │
+│    ok                                                                        │
+│  step 2 · skein.orchestrate · 0ms · 0 tok · $0                               │
+│    interrupted:cancelled after step 1 (skein.orchestrate) — in-flight work di│
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -18,6 +18,6 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-             [←/→] move   [↑/↓] history   [Enter] check   [Esc] back
+                             [any key] back to menu
 
                     provider: … · profile: … · ape-mcp 0.1.0

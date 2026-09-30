@@ -186,6 +186,31 @@ mod snap_impl {
         m.on_key(Key::Left);
         m.on_key(Key::Left);
         shot("menu-objective", 80, 24, |f| render_menu(&m, f));
+        // Multiline objective (Alt+Enter newline) with cursor on line 2.
+        let mut m = Menu::new();
+        m.view = MenuView::RunObjective {
+            profile: "repo-triage".to_string(),
+            editor: crate::input::LineEditor::new(),
+            slash_sel: 0,
+        };
+        for c in "triage the inbox".chars() {
+            m.on_key(Key::Char(c));
+        }
+        m.on_key(Key::AltEnter);
+        for c in "starting with login".chars() {
+            m.on_key(Key::Char(c));
+        }
+        m.on_key(Key::Left);
+        m.on_key(Key::Left);
+        shot("menu-objective-multi", 80, 24, |f| render_menu(&m, f));
+        // Slash menu: fuzzy matches, same destinations as the menu.
+        let mut m = Menu::new();
+        m.view = MenuView::RunObjective {
+            profile: "repo-triage".to_string(),
+            editor: crate::input::LineEditor::with_text("/ru"),
+            slash_sel: 0,
+        };
+        shot("menu-slash", 80, 24, |f| render_menu(&m, f));
 
         // --- Run progress: drive apply_poll with REAL samples so the
         // timeline diff/append path is exercised, not hand-built.
@@ -282,8 +307,16 @@ mod snap_impl {
         }
         shot("menu-check-id", 80, 24, |f| render_menu(&m, f));
         let mut m = Menu::new();
-        m.view = MenuView::CheckShow { text: menu::status_text(&done_value) };
+        m.view = MenuView::CheckShow { text: menu::status_text(&done_value), blocks: vec![] };
         shot("menu-check-show", 80, 24, |f| render_menu(&m, f));
+        // Check 2 proof: a cancelled run opened by id shows its marker.
+        let cancelled_status: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"run-abc123","status":"stopped","stop_reason":"cancelled","step_count":1,"total_cost":0.01,"total_tokens":40,"outcome":"","steps":[{"step":1,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"},{"step":2,"kind":"cancel","tool":"skein.orchestrate","duration_ms":0,"tokens":0,"cost":0,"result_summary":"interrupted:cancelled after step 1 (skein.orchestrate) — in-flight work discarded, no graceful drain"}]}"#,
+        )
+        .unwrap();
+        let mut m = Menu::new();
+        m.apply_check_status(&cancelled_status);
+        shot("menu-check-cancelled", 80, 24, |f| render_menu(&m, f));
 
         // --- Lists / info.
         let mut m = Menu::new();

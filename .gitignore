@@ -11,6 +11,11 @@ adam_memory.db
 target/
 .venv/
 __pycache__/
+# ape-tui prebuilts are CI release artifacts, never source:
+# built per platform by .github/workflows/tui-binaries.yml, fetched at
+# install by scripts/postinstall.mjs, or built once locally by the launcher.
+vendors/ape-tui/*/ape-tui
+vendors/ape-tui/*/ape-tui.exe
 # Standalone prebuilt outputs ARE committed:
 # `target/` ignores every dir named target; re-include ONLY the vendored ADAM release
 # binaries. Chain must re-include each parent dir before its children, then re-ignore

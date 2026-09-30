@@ -43,6 +43,8 @@ usage:
   ape-mcp run <tool> k=v [...]            same, shell-friendly args
   ape-mcp doctor                           environment checks, exit 1 on FAIL
   ape-mcp templates [list|install <id>]    starter agent profiles
+  ape-mcp prune [--days N] [--dry-run]  delete .ape/workers logs for finished
+                                        runs older than N days (default 14)
   ape-mcp trace | mods                     engine state | mod policy gates
   ape-mcp (piped stdin)                    MCP stdio server (JSON-RPC)`;
 if (cmd === "--version" || cmd === "-V" || cmd === "-v") {
@@ -197,6 +199,19 @@ if (args.includes("--http")) {
   } else {
     console.error("usage: ape-mcp templates [list|install <id>]");
     process.exit(2);
+  }
+} else if (cmd === "prune") {
+  const { pruneWorkerLogs } = await import("../src/runs.js");
+  const di = rest.indexOf("--days");
+  const days = di >= 0 ? Number(rest[di + 1]) : Number(process.env.APE_WORKER_LOG_DAYS ?? 14);
+  const maxAgeDays = Number.isFinite(days) && days > 0 ? days : 14;
+  const dryRun = rest.includes("--dry-run");
+  const r = pruneWorkerLogs({ maxAgeDays, dryRun });
+  for (const f of r.removed) console.log(`${dryRun ? "would remove" : "removed"}: ${f}`);
+  console.log(`prune: ${r.removed.length} removed, ${r.kept} kept${dryRun ? " (dry run)" : ""}${r.errors.length ? `, ${r.errors.length} errors` : ""}`);
+  if (r.errors.length) {
+    for (const e of r.errors) console.error(`prune error: ${e.file}: ${e.error}`);
+    process.exit(1);
   }
 } else {
     // stdio: newline-delimited JSON-RPC {id, method, params}

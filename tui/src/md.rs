@@ -16,16 +16,25 @@ fn syntax_set() -> &'static SyntaxSet {
     SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-fn theme() -> &'static syntect::highlighting::Theme {
+fn theme_for(mode: ThemeMode) -> &'static syntect::highlighting::Theme {
     static THEMES: OnceLock<ThemeSet> = OnceLock::new();
-    static THEME: OnceLock<syntect::highlighting::Theme> = OnceLock::new();
+    static DARK: OnceLock<syntect::highlighting::Theme> = OnceLock::new();
+    static LIGHT: OnceLock<syntect::highlighting::Theme> = OnceLock::new();
     let set = THEMES.get_or_init(ThemeSet::load_defaults);
-    THEME.get_or_init(|| {
-        set.themes
-            .get("base16-ocean.dark")
-            .cloned()
-            .unwrap_or_else(|| syntect::highlighting::Theme::default())
-    })
+    match mode {
+        ThemeMode::Dark => DARK.get_or_init(|| {
+            set.themes
+                .get("base16-ocean.dark")
+                .cloned()
+                .unwrap_or_else(syntect::highlighting::Theme::default)
+        }),
+        ThemeMode::Light => LIGHT.get_or_init(|| {
+            set.themes
+                .get("InspiredGitHub")
+                .cloned()
+                .unwrap_or_else(syntect::highlighting::Theme::default)
+        }),
+    }
 }
 
 fn syn_color(c: syntect::highlighting::Color) -> Color {
@@ -46,13 +55,51 @@ fn text_style(bold: bool, italic: bool, code: bool) -> Style {
     s
 }
 
+/// Terminal theme for syntax highlighting. Detection order:
+/// `APE_TUI_THEME` (light|dark) wins; otherwise `COLORFGBG`'s background
+/// number (>6 means a light background — xterm convention); otherwise dark.
+/// Windows conhost/Terminal expose no theme signal, so the env override is
+/// the documented path there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeMode {
+    #[default]
+    Dark,
+    Light,
+}
+
+pub fn theme_mode() -> ThemeMode {
+    if let Ok(v) = std::env::var("APE_TUI_THEME") {
+        match v.to_ascii_lowercase().as_str() {
+            "light" => return ThemeMode::Light,
+            "dark" => return ThemeMode::Dark,
+            _ => {}
+        }
+    }
+    if let Ok(bg) = std::env::var("COLORFGBG") {
+        // Trailing "default" means the terminal default (dark consoles);
+        // only a numeric high background flips to light.
+        if let Some(last) = bg.rsplit(';').next().and_then(|s| {
+            if s.eq_ignore_ascii_case("default") {
+                None
+            } else {
+                s.parse::<u8>().ok()
+            }
+        }) {
+            if last > 6 {
+                return ThemeMode::Light;
+            }
+        }
+    }
+    ThemeMode::Dark
+}
+
 /// Highlight one fenced block into one Line per source line.
-fn highlight_block(lang: &str, code: &str) -> Vec<Line<'static>> {
+fn highlight_block(lang: &str, code: &str, mode: ThemeMode) -> Vec<Line<'static>> {
     let syntax = syntax_set()
         .find_syntax_by_token(lang)
         .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
     let mut out = vec![];
-    match HighlightLines::new(syntax, theme()) {
+    match HighlightLines::new(syntax, theme_for(mode)) {
         h => {
             let mut h = h;
             for line in LinesWithEndings::from(code) {
@@ -105,6 +152,10 @@ fn push_text(
 }
 
 pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
+    render_markdown_themed(text, theme_mode())
+}
+
+pub fn render_markdown_themed(text: &str, mode: ThemeMode) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![];
     let mut cur: Vec<Span<'static>> = vec![];
     let mut bold = false;
@@ -152,7 +203,7 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code = false;
-                lines.extend(highlight_block(&code_lang, &code_buf));
+                lines.extend(highlight_block(&code_lang, &code_buf, mode));
                 code_buf.clear();
             }
             Event::Start(Tag::BlockQuote(_)) => quote = true,
@@ -276,5 +327,53 @@ mod tests {
         assert!(render_markdown("").is_empty());
         let out = render_markdown("just text");
         assert_eq!(flat(&out), "just text");
+    }
+
+    #[test]
+    fn theme_override_and_colorfgbg() {
+        // Env override wins; COLORFGBG background >6 means light; else dark.
+        // NOTE: single test on purpose — env vars are process-global and
+        // Rust runs tests on threads, so split tests would race.
+        let prev_theme = std::env::var("APE_TUI_THEME").ok();
+        let prev_bg = std::env::var("COLORFGBG").ok();
+        std::env::remove_var("COLORFGBG");
+        std::env::set_var("APE_TUI_THEME", "light");
+        assert_eq!(theme_mode(), ThemeMode::Light);
+        std::env::set_var("APE_TUI_THEME", "dark");
+        assert_eq!(theme_mode(), ThemeMode::Dark);
+        std::env::set_var("APE_TUI_THEME", "banana");
+        assert_eq!(theme_mode(), ThemeMode::Dark, "unknown value falls back");
+        std::env::remove_var("APE_TUI_THEME");
+        std::env::set_var("COLORFGBG", "0;default;15");
+        assert_eq!(theme_mode(), ThemeMode::Light);
+        std::env::set_var("COLORFGBG", "0;default;0");
+        assert_eq!(theme_mode(), ThemeMode::Dark);
+        std::env::remove_var("COLORFGBG");
+        assert_eq!(theme_mode(), ThemeMode::Dark, "no signal means dark");
+        match (prev_theme, prev_bg) {
+            (Some(t), Some(b)) => {
+                std::env::set_var("APE_TUI_THEME", t);
+                std::env::set_var("COLORFGBG", b);
+            }
+            (Some(t), None) => {
+                std::env::set_var("APE_TUI_THEME", t);
+                std::env::remove_var("COLORFGBG");
+            }
+            (None, Some(b)) => {
+                std::env::remove_var("APE_TUI_THEME");
+                std::env::set_var("COLORFGBG", b);
+            }
+            (None, None) => {
+                std::env::remove_var("APE_TUI_THEME");
+                std::env::remove_var("COLORFGBG");
+            }
+        }
+    }
+
+    #[test]
+    fn light_theme_highlights_too() {
+        let out = render_markdown_themed("```rust\nfn main() {}\n```\n", ThemeMode::Light);
+        assert_eq!(flat(&out), "fn main() {}");
+        assert!(out[0].spans.iter().any(|s| matches!(s.style.fg, Some(Color::Rgb(..)))));
     }
 }

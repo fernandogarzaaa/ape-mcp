@@ -1,0 +1,59 @@
+# First-party Rust TUI binaries: matrix build on tag push (or manual), assets
+# attached to the GitHub Release. Postinstall downloads the matching asset;
+# the `ape` / `ape-mcp tui` launcher falls back to a one-time cargo build.
+# Prebuilts are NEVER committed (see .gitignore) — the release is the source.
+name: tui-binaries
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: ape-tui-win-x64.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: ape-tui-linux-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: ape-tui-darwin-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: ape-tui-darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: ape-tui unit tests (each platform builds what it ships)
+        run: cargo test --manifest-path tui/Cargo.toml
+      - run: cargo build --release --manifest-path tui/Cargo.toml --target ${{ matrix.target }}
+      - name: Rename binary to platform asset name (so platforms don't collide on download)
+        shell: bash
+        run: |
+          src="tui/target/${{ matrix.target }}/release/ape-tui${{ contains(matrix.os, 'windows') && '.exe' || '' }}"
+          cp "$src" "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+          ls -la "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+  release:
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-tui
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist-tui/*

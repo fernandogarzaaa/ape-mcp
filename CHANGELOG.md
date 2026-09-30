@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 TUI M4 views (Runs, Ledger, Tasks) + runtime ledger fixes.
 

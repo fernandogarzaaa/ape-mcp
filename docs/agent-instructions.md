@@ -56,6 +56,7 @@ read the name and adapt. An *unknown* tool name is a transport error (JSON-RPC
 | Experience validation (EVE) / MCP eval | `ape_validate_experience` / `ape_mcp_eval` |
 | List / call a connector | `ape_connector_list` / `ape_connector_call` |
 | Background tasks | `ape_task_start` / `ape_task_get` |
+| Governance audit entries | `ape_ledger {limit?, kind?}` |
 
 ## Agent runs
 

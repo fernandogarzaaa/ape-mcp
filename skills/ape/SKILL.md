@@ -37,5 +37,6 @@ EVOLVE: ape_evolve propose → measure (EVE) → accept/reject (governance: valu
 | tasks | ape_orchestrate {op: graph/claim/release/status/log} |
 | evolve | ape_evolve {action, proposal_id} (+confirm) |
 | reports | ape_report |
+| audit ledger | ape_ledger {limit?, kind?} |
 
 Seeds always for reproducibility. Long runs return task handles (poll). Console: `ape-mcp` opens Live Trace + CLI pane (same dispatch as MCP).

@@ -113,11 +113,13 @@ fn run(force_onboard: bool) -> io::Result<()> {
                 }
                 // Normalize once: arrows are first-class, characters pass
                 // through, everything else is ignored (never a trap).
+                // Alt+Enter is a newline for multiline editors.
                 let input = match key.code {
                     KeyCode::Up => Some(Key::Up),
                     KeyCode::Down => Some(Key::Down),
                     KeyCode::Left => Some(Key::Left),
                     KeyCode::Right => Some(Key::Right),
+                    KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => Some(Key::AltEnter),
                     KeyCode::Enter => Some(Key::Enter),
                     KeyCode::Esc => Some(Key::Esc),
                     KeyCode::Backspace => Some(Key::Backspace),
@@ -637,10 +639,25 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             }
             footer = "[↑/↓] move   [Enter] choose   [Esc] back";
         }
-        RunObjective { profile, editor } => {
+        RunObjective { profile, editor, slash_sel } => {
             lines.push(Line::from(format!("objective for {profile} (Enter runs, Esc back):")));
-            lines.push(editor_line(editor));
-            footer = "[←/→] move in text   [Enter] run   [Esc] back";
+            lines.extend(editor_lines(editor));
+            // Slash menu under the editor: same destinations as the menu.
+            let slash = menu::slash_menu(&editor.text());
+            if !slash.is_empty() {
+                let sel = (*slash_sel).min(slash.len() - 1);
+                for (i, (name, blurb)) in slash.iter().enumerate() {
+                    let style = if i == sel {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    lines.push(Line::from(Span::styled(format!("  /{name} — {blurb}"), style)));
+                }
+                footer = "[↑/↓] pick   [Enter] jump   [Esc] back   [Alt+Enter] newline";
+            } else {
+                footer = "[←/→] move   [↑/↓] history   [Enter] run   [Alt+Enter] newline   [Esc] back";
+            }
         }
         RunProgress { run_id, profile, blocks, budget, last_status, selected, expanded, .. } => {
             lines.push(Line::from(format!("run {run_id} [{profile}] — {last_status}:")));
@@ -740,12 +757,25 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
         }
         CheckId { editor } => {
             lines.push(Line::from("run id (Enter checks, Esc back):"));
-            lines.push(editor_line(editor));
-            footer = "[←/→] move in text   [Enter] check   [Esc] back";
+            lines.extend(editor_lines(editor));
+            footer = "[←/→] move   [↑/↓] history   [Enter] check   [Esc] back";
         }
-        CheckShow { text } => {
-            for l in text.lines().take(30) {
+        CheckShow { text, blocks } => {
+            for l in text.lines().take(10) {
                 lines.push(Line::from(l.to_string()));
+            }
+            if !blocks.is_empty() {
+                lines.push(Line::from("recent steps:"));
+                for b in blocks.iter() {
+                    let mut style = Style::default();
+                    if b.denied {
+                        style = style.fg(Color::Red);
+                    }
+                    lines.push(Line::from(Span::styled(format!("  {}", b.header()), style)));
+                    if !b.body().is_empty() {
+                        lines.push(Line::from(format!("    {}", b.body())));
+                    }
+                }
             }
             footer = "[any key] back to menu";
         }
@@ -841,24 +871,42 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
     );
 }
 
-/// Text-entry line with the cursor block drawn at the real cursor column
-/// (char-safe split), so ←/→ movement is visible instead of implied.
-fn editor_line(editor: &LineEditor) -> Line<'static> {
-    let col = editor.cursor();
-    let mut before = String::new();
-    let mut after = String::new();
-    for (i, c) in editor.text().chars().enumerate() {
-        if i < col {
-            before.push(c);
-        } else {
-            after.push(c);
-        }
-    }
+/// Text-entry lines with the cursor block drawn at the real (line, column).
+/// One Line per editor line — the wrap-bug class stays out.
+fn editor_lines(editor: &LineEditor) -> Vec<Line<'static>> {
+    let (crow, ccol) = editor.line_col();
     let style = Style::default().fg(Color::Cyan);
-    Line::from(vec![
-        Span::raw("> "),
-        Span::styled(before, style),
-        Span::styled("█", style.add_modifier(Modifier::BOLD)),
-        Span::styled(after, style),
-    ])
+    editor
+        .text()
+        .split('\n')
+        .enumerate()
+        .map(|(i, l)| {
+            let prefix = if i == 0 { "> " } else { "  " };
+            if i == crow {
+                let mut before = String::new();
+                let mut after = String::new();
+                for (j, c) in l.chars().enumerate() {
+                    if j < ccol {
+                        before.push(c);
+                    } else {
+                        after.push(c);
+                    }
+                }
+                Line::from(vec![
+                    Span::raw(prefix),
+                    Span::styled(before, style),
+                    Span::styled("█", style.add_modifier(Modifier::BOLD)),
+                    Span::styled(after, style),
+                ])
+            } else {
+                Line::from(vec![Span::raw(prefix), Span::styled(l.to_string(), style)])
+            }
+        })
+        .collect()
+}
+
+/// Kept for single-line prompts: first editor line only.
+#[allow(dead_code)]
+fn editor_line(editor: &LineEditor) -> Line<'static> {
+    editor_lines(editor).into_iter().next().unwrap_or_else(|| Line::from(""))
 }
