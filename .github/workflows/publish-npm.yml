@@ -47,7 +47,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       - run: npm install --omit=dev --no-audit --no-fund
       - run: npm --prefix vendors/genesis install --ignore-scripts --no-audit --no-fund
