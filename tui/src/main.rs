@@ -4,6 +4,7 @@
 //! prints a one-line pointer and exits without taking over the terminal.
 mod ape;
 mod input;
+mod md;
 mod menu;
 mod onboard;
 mod screens;
@@ -572,7 +573,7 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             lines.push(editor_line(editor));
             footer = "[←/→] move in text   [Enter] run   [Esc] back";
         }
-        RunProgress { run_id, profile, blocks, budget, last_status, .. } => {
+        RunProgress { run_id, profile, blocks, budget, last_status, selected, expanded, .. } => {
             lines.push(Line::from(format!("run {run_id} [{profile}] — {last_status}:")));
             // Budget meter first: always visible while the run is live.
             lines.push(Line::from(Span::styled(
@@ -589,26 +590,52 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             if blocks.is_empty() {
                 lines.push(Line::from("run started — waiting for the first step…"));
             }
-            for b in blocks.iter().skip(skip) {
-                lines.push(Line::from(Span::styled(
-                    b.header(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )));
-                if !b.body().is_empty() {
+            for (bi, b) in blocks.iter().enumerate().skip(skip) {
+                let is_sel = bi == *selected;
+                let mut style = Style::default().add_modifier(Modifier::BOLD);
+                if b.denied {
+                    style = style.fg(Color::Red);
+                }
+                let marker = if is_sel { "> " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::raw(marker),
+                    Span::styled(b.header(), style),
+                ]));
+                if is_sel && *expanded {
+                    // Full result_summary, one Line per source line (never a
+                    // joined multi-line Line). Denied blocks name what the
+                    // ledger does NOT carry: the human policy reason.
+                    for l in b.summary.lines() {
+                        lines.push(Line::from(format!("    {l}")));
+                    }
+                    if b.summary.lines().count() == 0 {
+                        lines.push(Line::from("    (empty result)"));
+                    }
+                    if b.denied {
+                        lines.push(Line::from(Span::styled(
+                            "    reason recorded in the run receipt/audit, not in this step row",
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                } else if !b.body().is_empty() {
                     lines.push(Line::from(format!("  {}", b.body())));
                 }
             }
-            footer = "[Esc] cancel run   (stays pollable by id)";
+            footer = "[↑/↓] step   [Enter] expand   [Esc] cancel run (stays pollable by id)";
         }
         RunDone { run_id, summary } => {
             lines.push(Line::from(Span::styled("finished:", Style::default().fg(Color::Green))));
             if !run_id.is_empty() {
                 lines.push(Line::from(format!("run {run_id}")));
             }
-            // Split, never one multi-line Line: ratatui wraps those instead
-            // of breaking them (same bug class as the old banner render).
-            for l in summary.lines() {
-                lines.push(Line::from(l.to_string()));
+            // Head line plain, outcome as markdown: status_text guarantees
+            // the head has no newline, so the split is exact.
+            let mut parts = summary.splitn(2, '\n');
+            if let Some(head) = parts.next() {
+                lines.push(Line::from(head.to_string()));
+            }
+            if let Some(outcome) = parts.next() {
+                lines.extend(md::render_markdown(outcome));
             }
             footer = "[any key] back to menu";
         }

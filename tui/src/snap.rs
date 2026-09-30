@@ -230,6 +230,10 @@ mod snap_impl {
         }
         // Real-data progress frame (80x24 only; ids normalized).
         shot("menu-progress-real", 80, 24, |f| render_menu(&m, f));
+        // Expanded step: full summary lines, one Line each.
+        m.on_key(Key::Up);
+        m.on_key(Key::Enter);
+        shot("menu-progress-expanded", 80, 24, |f| render_menu(&m, f));
         // Natural finish keeps the id.
         let mut m = Menu::new();
         m.apply_run_started(
@@ -238,6 +242,16 @@ mod snap_impl {
         );
         m.apply_poll(&done_value);
         shot("menu-done", 80, 24, |f| render_menu(&m, f));
+        // Markdown outcome (canned text, real renderer): headings, list,
+        // inline code, and a highlighted fenced block.
+        let mut m = Menu::new();
+        m.view = MenuView::RunDone {
+            run_id: "run-abc123".to_string(),
+            summary: "finished · 3 steps · $0.02 · 120 tokens · stopped: explicit_final_answer\n# Verdict\n\nThe claim holds:\n\n- checked `ledger.ts` against the receipt\n- reran the probe twice\n\n```js\nconst ok = verify(receipt);\n```\n\nDone.".to_string(),
+        };
+        for (w, h) in [(120u16, 40u16), (80u16, 24u16)] {
+            shot("menu-done-md", w, h, |f| render_menu(&m, f));
+        }
         // Cancelled run keeps the id and stays pollable.
         let mut m = Menu::new();
         m.apply_run_started("run-abc123".to_string(), "repo-triage".to_string());

@@ -19,7 +19,7 @@ pub enum MenuView {
     Main { selected: usize },
     RunProfile { profiles: Vec<(String, String)>, selected: usize },
     RunObjective { profile: String, editor: LineEditor },
-    RunProgress { run_id: String, profile: String, blocks: Vec<StepBlock>, seen: usize, budget: Budget, last_status: String },
+    RunProgress { run_id: String, profile: String, blocks: Vec<StepBlock>, seen: usize, budget: Budget, last_status: String, selected: usize, expanded: bool },
     RunDone { run_id: String, summary: String },
     RunCancelled { run_id: String, summary: String },
     CheckId { editor: LineEditor },
@@ -105,12 +105,19 @@ pub struct StepBlock {
     pub tokens: i64,
     pub cost: f64,
     pub summary: String,
+    /// A loop policy denial (`destructive:denied…` / `:cap-reached…`). The
+    /// ledger row carries the marker but NOT the human reason (that lives
+    /// in the model's res.hint, unrecorded) — the TUI shows the marker
+    /// distinctly and says where the reason is not.
+    pub denied: bool,
 }
 
 impl StepBlock {
     fn from_json(v: &serde_json::Value) -> Self {
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
         let n = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+        let summary = s("result_summary");
+        let denied = summary.starts_with("destructive:");
         Self {
             step: n("step"),
             kind: s("kind"),
@@ -118,19 +125,18 @@ impl StepBlock {
             duration_ms: n("duration_ms"),
             tokens: n("tokens"),
             cost: v.get("cost").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            summary: s("result_summary"),
+            summary,
+            denied,
         }
     }
 
     pub fn header(&self) -> String {
         let what = if self.tool.is_empty() { self.kind.clone() } else { self.tool.clone() };
+        let what = if what.is_empty() { "?".to_string() } else { what };
+        let what = if self.denied { format!("[DENIED] {what}") } else { what };
         format!(
             "step {} · {} · {}ms · {} tok · ${}",
-            self.step,
-            if what.is_empty() { "?".to_string() } else { what },
-            self.duration_ms,
-            self.tokens,
-            fmt_usd(self.cost),
+            self.step, what, self.duration_ms, self.tokens, fmt_usd(self.cost),
         )
     }
 
@@ -159,6 +165,16 @@ pub fn status_text(result: &serde_json::Value) -> String {
             Some(serde_json::Value::String(s)) => s.clone(),
             Some(other) => other.to_string(),
         }
+    }
+    // Named tool-level errors (claim_required, connector_not_found, …) lead:
+    // the head line must never pretend an error is a state.
+    if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
+        let hint = result.get("hint").and_then(|h| h.as_str()).unwrap_or("");
+        return if hint.is_empty() {
+            format!("error: {err}")
+        } else {
+            format!("error: {err}\n{hint}")
+        };
     }
     fn human_status(s: &str) -> &str {
         match s {
@@ -378,14 +394,27 @@ impl Menu {
                 }
                 _ => (vec![], false),
             },
-            MenuView::RunProgress { run_id, .. } => {
-                // Esc cancels the run server-side (ape_agent_cancel: the
-                // worker is killed, the row goes stopped/cancelled and stays
-                // pollable by id). Polling continues until the cancel lands.
-                if key == Key::Esc {
-                    (vec![MenuEffect::CancelRun { run_id: run_id.clone() }], false)
-                } else {
-                    (vec![], false)
+            MenuView::RunProgress { run_id, blocks, selected, expanded, .. } => {
+                match key {
+                    // Esc cancels the run server-side (ape_agent_cancel: the
+                    // worker is killed, the row goes stopped/cancelled and stays
+                    // pollable by id). Polling continues until the cancel lands.
+                    Key::Esc => (vec![MenuEffect::CancelRun { run_id: run_id.clone() }], false),
+                    // Step inspection: move across blocks, Enter expands the
+                    // full result_summary (real fields only).
+                    Key::Up | Key::Char('k') => {
+                        *selected = selected.saturating_sub(1);
+                        (vec![], false)
+                    }
+                    Key::Down | Key::Char('j') => {
+                        *selected = (*selected + 1).min(blocks.len().saturating_sub(1));
+                        (vec![], false)
+                    }
+                    Key::Enter => {
+                        *expanded = !*expanded;
+                        (vec![], false)
+                    }
+                    _ => (vec![], false),
                 }
             }
             MenuView::RunDone { .. }
@@ -477,27 +506,56 @@ impl Menu {
                 ..Budget::default()
             },
             last_status: "starting".to_string(),
+            selected: 0,
+            expanded: false,
         };
     }
 
     /// Feed one `ape_agent_status` poll. Appends only steps never seen (by
     /// position in the ledger array) — the timeline grows, never clears.
+    /// Spent aggregates come from the step ROWS, not the run row: the row's
+    /// totals are written once at completion (0 mid-run), while step rows
+    /// stream live. Model-turn rows count as steps (matches max_steps).
     /// Returns true when the run reached a terminal state.
     pub fn apply_poll(&mut self, status: &serde_json::Value) -> bool {
         let state = status.get("status").and_then(|s| s.as_str()).unwrap_or("running").to_string();
         let terminal = state != "running";
         let status_id = status.get("run_id").and_then(|r| r.as_str()).unwrap_or("").to_string();
         match &mut self.view {
-            MenuView::RunProgress { run_id: view_id, blocks, seen, budget, last_status, .. } => {
+            MenuView::RunProgress { run_id: view_id, blocks, seen, budget, last_status, selected, expanded: _, .. } => {
                 if let Some(steps) = status.get("steps").and_then(|s| s.as_array()) {
+                    let prev = *seen;
                     for s in steps.iter().skip(*seen) {
                         blocks.push(StepBlock::from_json(s));
                     }
                     *seen = steps.len();
+                    // Follow the live tail while the selection was at the
+                    // end; once the user moves up, it stays where put.
+                    if *selected + 1 >= prev.max(1) {
+                        *selected = blocks.len().saturating_sub(1);
+                    }
+                    // Live aggregates over the whole ledger (cumulative array):
+                    // cost/tokens sum all rows; steps counts model turns to
+                    // match max_steps semantics. Falls back to row totals when
+                    // no step rows are present (defensive: older servers).
+                    let mut cost = 0.0;
+                    let mut toks = 0i64;
+                    let mut turns = 0i64;
+                    for s in steps {
+                        cost += s.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        toks += s.get("tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        if s.get("kind").and_then(|v| v.as_str()) == Some("model") {
+                            turns += 1;
+                        }
+                    }
+                    budget.spent_usd = cost;
+                    budget.spent_tokens = toks;
+                    budget.steps = turns;
+                } else {
+                    budget.spent_usd = status.get("total_cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    budget.spent_tokens = status.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                    budget.steps = status.get("step_count").and_then(|v| v.as_i64()).unwrap_or(0);
                 }
-                budget.spent_usd = status.get("total_cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                budget.spent_tokens = status.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                budget.steps = status.get("step_count").and_then(|v| v.as_i64()).unwrap_or(0);
                 *last_status = state.clone();
                 if terminal {
                     // Prefer the view's id; the status envelope should echo
@@ -679,6 +737,8 @@ mod tests {
             seen: 0,
             budget: Budget::default(),
             last_status: "starting".to_string(),
+            selected: 0,
+            expanded: false,
         };
         let poll1: serde_json::Value = serde_json::from_str(
             r#"{"run_id":"r","status":"running","step_count":1,"total_cost":0.01,"total_tokens":40,"steps":[{"step":1,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"}]}"#,
@@ -711,6 +771,8 @@ mod tests {
             seen: 0,
             budget: Budget::default(),
             last_status: "running".to_string(),
+            selected: 0,
+            expanded: false,
         };
         let (fx, quit) = m.on_key(Key::Esc);
         assert!(!quit);
@@ -757,11 +819,80 @@ mod tests {
             seen: 0,
             budget: Budget { spent_usd: 0.02, ..Budget::default() },
             last_status: "running".to_string(),
+            selected: 0,
+            expanded: false,
         };
         let t = m.status_line("1.0.4");
         assert!(t.contains("run-abc123"), "got: {t}");
         assert!(t.contains("running"), "got: {t}");
         assert!(t.contains("0.02"), "got: {t}");
+    }
+
+    #[test]
+    fn expand_toggles_and_selection_moves() {
+        let mut m = Menu::new();
+        m.apply_run_started("r".to_string(), "p".to_string());
+        let poll: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"running","steps":[{"step":1,"kind":"tool","tool":"a","duration_ms":1,"tokens":1,"cost":0,"result_summary":"one"},{"step":2,"kind":"tool","tool":"b","duration_ms":1,"tokens":1,"cost":0,"result_summary":"two"}]}"#,
+        )
+        .unwrap();
+        m.apply_poll(&poll);
+        m.on_key(Key::Down);
+        m.on_key(Key::Down);
+        m.on_key(Key::Enter);
+        match &m.view {
+            MenuView::RunProgress { selected, expanded, .. } => {
+                assert_eq!(*selected, 1, "clamped to last block");
+                assert!(*expanded);
+            }
+            other => panic!("expected RunProgress, got {other:?}"),
+        }
+        m.on_key(Key::Up);
+        match &m.view {
+            MenuView::RunProgress { selected, expanded, .. } => {
+                assert_eq!(*selected, 0);
+                assert!(*expanded, "expand survives moves");
+            }
+            other => panic!("expected RunProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn denied_blocks_carry_marker_not_reason() {
+        let mut m = Menu::new();
+        m.apply_run_started("r".to_string(), "p".to_string());
+        let poll: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"running","steps":[{"step":1,"kind":"tool","tool":"ape_evolve","duration_ms":1,"tokens":0,"cost":0,"result_summary":"destructive:denied"}]}"#,
+        )
+        .unwrap();
+        m.apply_poll(&poll);
+        match &m.view {
+            MenuView::RunProgress { blocks, .. } => {
+                assert!(blocks[0].denied);
+                assert!(blocks[0].header().contains("[DENIED]"));
+            }
+            other => panic!("expected RunProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn live_aggregates_come_from_step_rows() {
+        // Run-row totals stay 0 mid-run; the meter must read the rows.
+        let mut m = Menu::new();
+        m.apply_run_started("r".to_string(), "p".to_string());
+        let poll: serde_json::Value = serde_json::from_str(
+            r#"{"run_id":"r","status":"running","step_count":0,"total_cost":0,"total_tokens":0,"steps":[{"step":1,"kind":"model","tool":"","duration_ms":407,"tokens":2,"cost":0,"result_summary":""},{"step":2,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"}]}"#,
+        )
+        .unwrap();
+        m.apply_poll(&poll);
+        match &m.view {
+            MenuView::RunProgress { budget, .. } => {
+                assert_eq!(budget.spent_tokens, 42);
+                assert_eq!(budget.steps, 1, "model turns, not rows");
+                assert!((budget.spent_usd - 0.01).abs() < 1e-9);
+            }
+            other => panic!("expected RunProgress, got {other:?}"),
+        }
     }
 
     #[test]

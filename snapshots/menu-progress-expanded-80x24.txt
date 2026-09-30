@@ -1,10 +1,10 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│run run-<id> [repo-triage] — running:                                       │
-│budget $0.02 · 0 steps · 80 tok                                               │
-│  step 1 · skein.orchestrate · 120ms · 40 tok · $0.01                         │
-│  ok 1                                                                        │
-│> step 2 · skein.orchestrate · 120ms · 40 tok · $0.01                         │
-│  ok 2                                                                        │
+│run run-<id> [repo-triage] — running:                                 │
+│budget $0/$0.5 · 1/12 steps · 2/120000 tok [░░░░░░░░░░]                       │
+│> step 1 · model · 407ms · 2 tok · $0                                         │
+│    (empty result)                                                            │
+│                                                                              │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
       [↑/↓] step   [Enter] expand   [Esc] cancel run (stays pollable by id)
 
-         run run-<id> · repo-triage · running · $0.02 · ape-mcp 0.1.0
+        run run-<id> · repo-triage · running · $0 · ape-mcp 0.1.0
