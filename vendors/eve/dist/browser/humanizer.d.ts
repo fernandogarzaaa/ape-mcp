@@ -17,10 +17,41 @@ export interface Gesture {
     readonly point: Point;
     /** True when the scatter landed outside the intended target. */
     readonly missed: boolean;
+    /**
+     * What the miss MEANT (P1.1):
+     * - "hit": landed on target.
+     * - "corrected": mis-aim noticed and corrected (re-aimed at center) with
+     *   a time cost — the environment sees the intended target.
+     * - "stray": true wrong-target interaction — `point` is the actual
+     *   scattered landing and the environment receives it.
+     */
+    readonly disposition: "hit" | "corrected" | "stray";
     readonly durationMs: number;
 }
-export declare function planClick(target: VisibleElement, persona: Persona, rng: Rng): Gesture;
-export declare function planTap(target: VisibleElement, persona: Persona, rng: Rng, viewport: Viewport): Gesture;
+/**
+ * Miss-disposition policy (reviewer decision 5).
+ *
+ * Hierarchy (most → least general): global physical interaction model →
+ * device/surface parameters → persona motor parameters. The threshold is
+ * therefore a property of the PLAN CALL (device-aware defaults), not of the
+ * persona — a 12px miss means something different on a touch phone than
+ * under a desktop mouse, and it is normalized against the live scatter
+ * (which already folds in persona accuracy, target geometry and device).
+ *
+ * HEURISTIC PARAMETER — provisional deterministic rule, explicitly
+ * uncalibrated. Do not fit per-persona values until human trajectory data
+ * justifies them.
+ */
+export interface MisclickPolicy {
+    /** Misses within this px distance (near-edge slips) are corrected. */
+    readonly nearMissThresholdPx: number;
+    /** ...or within scatter × this multiple, whichever is larger. */
+    readonly scatterMultiple: number;
+}
+export declare const CLICK_MISCLICK_POLICY: MisclickPolicy;
+export declare const TAP_MISCLICK_POLICY: MisclickPolicy;
+export declare function planClick(target: VisibleElement, persona: Persona, rng: Rng, policy?: MisclickPolicy): Gesture;
+export declare function planTap(target: VisibleElement, persona: Persona, rng: Rng, viewport: Viewport, policy?: MisclickPolicy): Gesture;
 export interface TypingPlan {
     /** The keystroke sequence, including typo + backspace corrections. */
     readonly keystrokes: readonly string[];

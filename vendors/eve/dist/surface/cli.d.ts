@@ -16,6 +16,7 @@ export interface CliAdapterOptions {
 export declare class CliAdapter implements BrowserAdapter {
     private readonly options;
     readonly name = "cli";
+    readonly version = "0.5.0";
     readonly capabilities: import("./capabilities.js").SurfaceCapabilities;
     private child;
     private lines;

@@ -52,9 +52,29 @@ export interface ScreenEdge {
     traversals: number;
 }
 /**
+ * Availability rule (reviewer concern 12): stable-identity familiarity must
+ * NEVER prove current-state availability.
+ *
+ * `stableIdentityKey` answers "this is basically the same place";
+ * `sensitiveStateKey` answers "this is the state I'm actually in". A tried
+ * affordance learned in state A (button enabled, field present) says nothing
+ * about state B (button disabled, field gone). Cognition must therefore gate
+ * every tried-mark read on the CURRENT percept: the label must belong to an
+ * element that is interactive and enabled RIGHT NOW.
+ *
+ * Returns false for empty labels (never match anything by accident).
+ */
+export declare function isAffordanceAvailable(percept: Percept, label: string): boolean;
+/**
  * A perceptual signature for "which screen am I on". Humans recognize
  * screens by their gist — URL path, title and dominant headings — not by
  * exact pixel identity.
+ *
+ * NOTE (P0.5): this legacy signature aliases query tabs, open dialogs and
+ * form state. New code should prefer `surfaceIdentity()` from
+ * `./surfaceIdentity.js`, which keeps the same "same perceptual state →
+ * same identity" contract while distinguishing modal/query/interaction
+ * state. Kept byte-identical for backwards compatibility.
  */
 export declare function screenSignature(percept: Percept): string;
 export declare class OperatorMemory {
@@ -67,7 +87,8 @@ export declare class OperatorMemory {
     private readonly edges;
     private readonly navigationTrail;
     private readonly capacity;
-    constructor(persona: Persona, rng: Rng);
+    private readonly identityOf;
+    constructor(persona: Persona, rng: Rng, identityOf?: (percept: Percept) => string);
     hold(content: string, step: number): void;
     /** Distraction or overload can knock an item out of working memory. */
     maybeForgetWorkingItem(): string | null;
