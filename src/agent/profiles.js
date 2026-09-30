@@ -121,6 +121,19 @@ export function listProfiles() {
   return [...names].sort();
 }
 
+export function listProfileDetails() {
+  // Details for every loadable profile. Files that exist in the profiles
+  // dir but do not parse (empty/corrupt YAML) are skipped instead of
+  // surfacing as null entries, which crashes listing consumers that read
+  // `.name` off each entry.
+  const out = [];
+  for (const n of listProfiles()) {
+    const d = describeProfile(n);
+    if (d) out.push(d);
+  }
+  return out;
+}
+
 export function describeProfile(name) {
   const p = loadProfile(name);
   if (!p) return null;

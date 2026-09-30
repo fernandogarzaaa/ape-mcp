@@ -11,7 +11,7 @@ import { loadMods } from "./mods.js";
 import { dataDir } from "./trace.js";
 import { listRuns, getRun, runningCount, spendSince, stepsSince, maxStepId, resolveShareToken, consolePortFile } from "./runs.js";
 import { connectorList } from "./connectors.js";
-import { listProfiles, describeProfile, loadProfile } from "./agent/profiles.js";
+import { listProfiles, describeProfile, listProfileDetails, loadProfile } from "./agent/profiles.js";
 import { protectedResourceDoc, checkBearer } from "./auth.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -406,7 +406,7 @@ export function startConsole({ port = 0, open = false, host } = {}) {
     }
     if (req.method === "GET" && url.pathname === "/api/profiles") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ profiles: listProfiles().map((n) => describeProfile(n)) }));
+      return res.end(JSON.stringify({ profiles: listProfileDetails() }));
     }
     if (req.method === "GET" && url.pathname === "/api/profile") {
       const name = String(url.searchParams.get("name") ?? "");
