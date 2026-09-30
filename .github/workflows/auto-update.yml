@@ -109,7 +109,7 @@ jobs:
           node --test tests/ape.test.js
           node scripts/fetch-adam.mjs --check || true
       - name: Open update PR
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           # Default GITHUB_TOKEN works once the repo setting
           # "Allow GitHub Actions to create and approve pull requests" is ON.
