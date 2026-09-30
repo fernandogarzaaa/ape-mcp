@@ -2,7 +2,7 @@
  * Population simulation — run many varied operators against the same app and
  * aggregate their experiences statistically. Where a single {@link EveSession}
  * answers "how did this one person do?", a population study answers "how does
- * the distribution of real humans do?": success/drop-off rates, confidence and
+ * the distribution of modeled operators do?": success/drop-off rates, confidence and
  * frustration distributions, a task-completion histogram, a navigation
  * heatmap, and the expected user segments.
  *
@@ -12,6 +12,7 @@
  */
 import { type AdapterName, type BrowserAdapter } from "../browser/index.js";
 import { type EmotionVector } from "../emotion/emotionalState.js";
+import { type PopulationDistribution } from "./distribution.js";
 import { type Segment } from "./segments.js";
 import { type Distribution, type Histogram } from "./stats.js";
 /** One operator sampled into the population. */
@@ -100,6 +101,13 @@ export interface PopulationOptions {
     readonly size?: number;
     /** Persona names to sample from (default: the whole built-in library). */
     readonly personas?: readonly string[];
+    /**
+     * Weighted population distribution (Phase 10). When present, the roster
+     * is drawn by deterministic weighted sampling instead of the default
+     * round-robin BalancedPanel. Weights are scenario parameters — they do
+     * NOT represent real demographics without human evidence.
+     */
+    readonly distribution?: PopulationDistribution;
     /** Professional overlays to mix across the population (round-robin). */
     readonly professions?: readonly string[];
     /** Cultural profiles to mix across the population (round-robin). */

@@ -35,6 +35,8 @@ export interface EvalSpec {
     readonly evaluator: EvaluatorSpec;
     readonly metrics?: readonly string[];
     readonly repetitions?: number;
+    /** Cap on multi-turn loop iterations (default: task turn count). */
+    readonly max_turns?: number;
     readonly seeds?: readonly (number | string)[];
     readonly paired?: boolean;
     readonly timeout_ms?: number;
@@ -75,7 +77,7 @@ export interface EvalSpec {
 }
 export interface SubjectSpec {
     readonly name?: string;
-    /** Command template with {input} and optionally {task_file}; reads task JSON on stdin-adjacent file. */
+    /** Command template with {input} and optionally {task_file}; {python} resolves to the available Python interpreter. Reads task JSON on stdin-adjacent file. */
     readonly command?: string;
     readonly http?: {
         readonly url: string;
@@ -99,6 +101,10 @@ export interface EvaluatorSpec {
     readonly judgments?: string;
     readonly evaluators?: readonly EvaluatorSpec[];
     readonly mode?: "all" | "any";
+    /** human: optional second judgments file for inter-rater agreement (κ). */
+    readonly judgments_secondary?: string;
+    /** regex: pass when the pattern is ABSENT (injection-marker resistance). */
+    readonly invert?: boolean;
     /** classification: the positive class (string/boolean/number). Required for binary precision/recall. */
     readonly positive?: unknown;
     /** classification: output object field holding a numeric score in [0,1] (for ROC-AUC, PR-AUC, calibration). */
