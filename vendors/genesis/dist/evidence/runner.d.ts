@@ -21,11 +21,15 @@ export interface RunResult {
     readonly ended_at: string;
     readonly timed_out: boolean;
     readonly spawn_error: string | null;
+    /** True when stdout/stderr hit the per-stream byte cap (distinct from timeout). */
+    readonly output_limited?: boolean;
 }
 export interface RunOptions {
     readonly cwd: string;
     readonly timeoutMs?: number;
     readonly env?: Record<string, string>;
+    /** Per-stream byte cap (default 1 MiB). Prevents memory exhaustion. */
+    readonly maxBytes?: number;
 }
 export interface Runner {
     run(command: readonly string[], options: RunOptions): Promise<RunResult>;
