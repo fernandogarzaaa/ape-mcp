@@ -75,6 +75,11 @@ proves the gate end to end. Notes:
   fully green dry run needs a tag whose version equals the tree — i.e.
   run this again after tagging the real version (dispatch is dry-run,
   so it stays safe).
+- Reading a red dry-run: if the tag is already live on npm, expect exit
+  1 with `You cannot publish over the previously published versions`
+  — even `--dry-run` checks availability against the registry. That
+  message IS the pass: the pipeline reached the publish step with valid
+  OIDC auth and the registry refused the overwrite, so nothing changed.
 
 ## 2. Tag the release
 
