@@ -99,7 +99,12 @@ if (args.includes("--http")) {
   // one-time cargo build), with the package version passed through so the
   // TUI status line reports the real release, not the TUI crate version.
   const { runTui } = await import("./tui-bin.js");
-  process.exit(runTui(rest, { ...process.env, APE_TUI_VERSION: APE_VERSION }));
+  try {
+    process.exit(await runTui(rest, { ...process.env, APE_TUI_VERSION: APE_VERSION }));
+  } catch (e) {
+    console.error(`ape-mcp tui: ${e?.message ?? e}`);
+    process.exit(1);
+  }
 } else if (cmd === "serve") {
   const noOpen = rest.includes("--no-open");
   const { port, host } = await startConsole({ port: 0 });

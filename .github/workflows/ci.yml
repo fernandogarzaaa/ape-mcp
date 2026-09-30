@@ -55,3 +55,54 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: ape-tui unit tests
         run: cargo test --manifest-path tui/Cargo.toml
+  # Tarball install proof: pack the tree, fail on any missing runtime module,
+  # install the .tgz into a clean prefix, and exercise the launcher fetch
+  # against a localhost fixture serving the just-built binary. The guard
+  # exit (2) proves the fetched bytes execute — end to end, no network.
+  tui-pack-install:
+    runs-on: ubuntu-latest
+    env:
+      APE_TUI_FETCH_BASE: http://127.0.0.1:18787
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the binary the fixture will serve
+        run: cargo build --release --manifest-path tui/Cargo.toml
+      - name: Pack and fail on missing runtime modules
+        run: |
+          PKG="$(npm pack --silent | tail -n 1)"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          tar -tzf "$PKG" | grep -qx "package/scripts/tui-fetch.mjs" || { echo "::error::tui-fetch.mjs missing from tarball"; exit 1; }
+          tar -tzf "$PKG" | grep -qx "package/bin/tui-bin.js" || { echo "::error::tui-bin.js missing from tarball"; exit 1; }
+          tar -tzf "$PKG" | grep -qx "package/scripts/postinstall.mjs" || { echo "::error::postinstall.mjs missing from tarball"; exit 1; }
+          echo "tarball modules present: $PKG"
+      - name: Fixture up, install tarball, manual postinstall through fixture
+        run: |
+          node scripts/ci-tui-fixture.mjs tui/target/release/ape-tui ape-tui-linux-x64 18787 "$RUNNER_TEMP/req.log" &
+          echo $! > "$RUNNER_TEMP/fixture.pid"
+          sleep 1
+          npm install "./$PKG" --prefix "$RUNNER_TEMP/tuiprefix" --no-audit --no-fund
+          # npm's allowScripts policy may skip postinstall: run it directly so
+          # the script path is proven regardless of npm policy.
+          node "$RUNNER_TEMP/tuiprefix/node_modules/ape-mcp/scripts/postinstall.mjs"
+          test -x "$RUNNER_TEMP/tuiprefix/node_modules/ape-mcp/vendors/ape-tui/linux-x64/ape-tui" \
+            || { echo "::error::postinstall did not produce a verified binary"; exit 1; }
+      - name: Launcher fetch path (binary removed first) + entrypoints
+        run: |
+          APE="node $RUNNER_TEMP/tuiprefix/node_modules/ape-mcp/bin/ape-mcp.js"
+          rm "$RUNNER_TEMP/tuiprefix/node_modules/ape-mcp/vendors/ape-tui/linux-x64/ape-tui"
+          $APE --version
+          $APE doctor
+          # set +e: the guard exit is 2 by design and the shell has set -e.
+          set +e
+          echo | $APE tui > tui-out.txt 2>&1
+          code=$?
+          set -e
+          cat tui-out.txt
+          test "$code" -eq 2 || { echo "::error::tui guard exit $code, want 2"; exit 1; }
+          kill "$(cat $RUNNER_TEMP/fixture.pid)"
+          grep -q "/SHA256SUMS" "$RUNNER_TEMP/req.log" || { echo "::error::fixture never saw sums fetch"; exit 1; }
+          grep -q "/ape-tui-linux-x64" "$RUNNER_TEMP/req.log" || { echo "::error::fixture never saw binary fetch"; exit 1; }
+          echo "launcher fetch verified against fixture"

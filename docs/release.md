@@ -8,9 +8,27 @@ assets ships a TUI that can only build via cargo.
 ## 0. Preconditions (on `main`, clean tree)
 
 - `npm test` green (all files in the `test` script), `cargo test --manifest-path tui/Cargo.toml` green.
+- New test files are wired into the `package.json` `test` script (merges
+  have dropped entries before — the count in CI output is the check).
 - `npm run tui:snap` green (capture + snapshots current).
 - `package.json` version bumped, `package-lock.json` in sync, CHANGELOG entry written.
 - No `console.log` debugging, no stray temp files (`git status --short` clean apart from intended).
+
+## One-time repo settings (do once, not per release)
+
+- **Environment `npm-publish` with a required reviewer:** repo Settings →
+  Environments → New environment → name `npm-publish` → Required
+  reviewers → add yourself. The publish job pauses here on every tag
+  until you approve; use the pause to eyeball the release assets.
+- **Trusted publishing (already done, verify if publish auth fails):**
+  npm package Settings → Trusted Publisher must name workflow
+  `publish-npm.yml` in this repo.
+- **Install-scripts approval (tell users, not a repo setting):**
+  current npm holds `postinstall` behind an approval
+  (`npm install-scripts approve ape-mcp`, or answer the install prompt).
+  Until approved, the TUI prebuilt is not fetched and `ape` falls back
+  to the one-time cargo build. Mention it in release notes; the
+  `tui-pack-install` CI job proves both the script and the fallback.
 
 ## 1. Dry run on a pre-release tag (proves the workflow without publishing)
 
@@ -64,6 +82,10 @@ git push origin v<VERSION>
   `npm publish --access public` (or `--otp=`).
 - CI path: `publish-npm` runs automatically on the tag via OIDC
   (`--provenance`). Either path, never both for one version.
+  The CI path additionally enforces, in order: version match, all 5
+  release assets present (job fails otherwise — this is what caught the
+  v1.1.0 asset gap pattern), tests, BOM check, then a human approval in
+  the `npm-publish` environment. Approve only after step 3 above.
 - Verify after: `npm view ape-mcp version` and
   `npm view ape-mcp dist-tags --json` show the new version as `latest`.
 

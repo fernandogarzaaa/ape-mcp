@@ -26,7 +26,7 @@ if (process.argv.length > 2) {
   process.exit(r.status ?? 1);
 }
 try {
-  process.exit(runTui(process.argv.slice(2)));
+  process.exit(await runTui(process.argv.slice(2)));
 } catch {
   fail("no prebuilt TUI for this platform and cargo build failed.");
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.1
+
+- Pack ships the whole `scripts/` dir (1.1.0 excluded `tui-fetch.mjs`,
+  breaking the postinstall TUI fetch).
+- Launcher (`ape` / `ape-mcp tui`) fetches the checksum-verified release
+  binary when no prebuilt is present, then falls back to cargo as before.
+- `publish-npm` fails unless the release already carries all TUI assets
+  + SHA256SUMS, and pauses in the `npm-publish` environment for a human
+  reviewer. CI gains a tarball install proof (`tui-pack-install`).
+
 ## 1.1.0
 
 TUI M4 views (Runs, Ledger, Tasks) + runtime ledger fixes.

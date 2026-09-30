@@ -24,9 +24,8 @@ for (const v of ["vendors/genesis", "vendors/eve"]) {
 
 // TUI prebuilt: download the matching release asset (best-effort). Prebuilts
 // are CI release artifacts, never committed — see .github/workflows/tui-binaries.yml.
-// The binary is checksum-verified against the release SHA256SUMS before it
-// touches disk; anything missing or mismatched warns and falls back to the
-// one-time cargo build, and `ape-mcp` (non-TUI) never needs the binary.
+// ensurePrebuilt never throws (a throwing postinstall fails local installs);
+// anything unresolved warns and the launcher falls back to cargo at runtime.
 {
   const skip = process.env.APE_SKIP_TUI_DOWNLOAD === "1";
   const plat = process.platform === "win32" ? "win-x64"
@@ -39,19 +38,12 @@ for (const v of ["vendors/genesis", "vendors/eve"]) {
     let version = null;
     try {
       version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
-    } catch { /* fall through to warning */ }
-    if (!version) {
-      console.error("postinstall: cannot determine package version; skipping TUI download (cargo fallback at runtime).");
-    } else {
-      console.log(`postinstall: fetching TUI prebuilt for release v${version}…`);
-      try {
-        const { fetchTui } = await import("./tui-fetch.mjs");
-        const r = await fetchTui({ tag: `v${version}`, platform: plat, isWindows, dest });
-        if (r.ok) console.log(`postinstall: TUI prebuilt ready (${r.bytes} bytes, checksum verified).`);
-        else console.error(`postinstall: ${r.reason}; 'ape' will build once via cargo, 'ape-mcp' unaffected.`);
-      } catch (e) {
-        console.error(`postinstall: TUI download failed (${e?.message ?? e}); 'ape' will build once via cargo, 'ape-mcp' unaffected.`);
-      }
-    }
+    } catch { /* ensurePrebuilt reports it */ }
+    const { ensurePrebuilt } = await import("./tui-fetch.mjs");
+    const fetchBase = process.env.APE_TUI_FETCH_BASE || null;
+    const r = await ensurePrebuilt({ version, platform: plat, isWindows, dest, fetchBase });
+    if (r.status === "ready") console.log(`postinstall: TUI prebuilt ready (${r.bytes} bytes, checksum verified).`);
+    else if (r.status === "skipped") console.error(`postinstall: skipping TUI download (${r.reason}); cargo fallback at runtime.`);
+    else console.error(`postinstall: ${r.reason}; 'ape' will build once via cargo, 'ape-mcp' unaffected.`);
   }
 }
