@@ -81,6 +81,8 @@ ape-mcp run ape_agent_run '{"profile":"research-verify","objective":"Verify: Wik
 
 Set a model key first (`APE_ANTHROPIC_API_KEY` or `APE_OPENAI_API_KEY`); `ape_agent_status` polls the run and shows every step and its cost. No key needed in most setups: `provider: auto` detects the host platform's active provider (OpenCode, Claude Code, or Codex session state, env, or a local model) and reuses its credentials; `ape_status` shows what was detected.
 
+**Environment.** `APE_DATA_DIR` overrides the data directory (default `<cwd>/.ape`). `APE_PYTHON` points at the Python 3 interpreter used by the vendored Skein task-graph engine (`ape_orchestrate`); when unset, APE probes `python` then `python3` on PATH, so Linux/macOS systems without a bare `python` alias work out of the box.
+
 **Why this exists:** (1) host-chained tool calls are brittle and expensive to orchestrate — APE moves the loop server-side where each step is budgeted, traced, and recoverable; (2) agents need memory, audit, and budgets to be trustworthy — per-step ledger, governed mutations with confirmation gates, destructive-deny by default; (3) third-party access without per-service wrappers — declarative connectors (YAML endpoints, host allowlists, env-referenced auth; nothing outside the allowlist is contactable).
 
 ## Docs
