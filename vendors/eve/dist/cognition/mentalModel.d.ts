@@ -13,19 +13,36 @@ export declare function visibleText(percept: Percept): string;
  */
 export declare function passiveText(percept: Percept): string;
 /**
+ * Layered error evidence (P1.4). Plain lexical matching confuses "Error
+ * rate: 1.2%", "Required reading" or "Failed experiments" (content ABOUT
+ * failure) with an application failure the operator faces. Strength order:
+ *
+ * 1. semantic role (alert/dialog) — strong, "observed";
+ * 2. native dialog carrying error text — strong, "observed";
+ * 3. form-validation context (disabled/invalid-adjacent interactive element
+ *    with error text) — moderate, "derived";
+ * 4. bare lexical match — weak fallback, "heuristic", filtered against
+ *    known false-positive prose contexts.
+ *
+ * Lexical detection is kept (backwards compat) but graded weak.
+ */
+export type ErrorEvidenceLevel = "strong" | "moderate" | "weak" | "none";
+export interface ErrorEvidence {
+    readonly level: ErrorEvidenceLevel;
+    readonly provenance: "observed" | "derived" | "heuristic";
+    readonly snippets: readonly string[];
+}
+export declare function classifyErrorEvidence(percept: Percept, modality?: Modality): ErrorEvidence;
+/**
  * Is a visible error message perceivable on this screen?
  *
- * The patterns match prose, which is the right call on a surface the operator
- * is *driving*: "Invalid password" on a login form is an error they are
- * facing. On a document surface it is the wrong call, and badly so — a
- * quarterly report line reading "Error rate: 0.4%" is a *topic*, not a
- * failure, and a stack trace quoted in a bug report is something the reader
- * is reading about rather than something happening to them. There is nothing
- * to retry or dismiss on a page of text, so a document never presents the
- * reader with an error to recover from. What the artifact says about errors
- * is the comprehension model's business (`src/humanity/comprehension.ts`),
- * where an unexplained failure with no next step is a finding about the
- * *writing*.
+ * Layered evidence (P1.4) via {@link classifyErrorEvidence}: semantic
+ * role/dialog matches count as strong observed evidence; bare lexical
+ * matches are weak heuristic evidence filtered against false-positive
+ * prose ("Error rate", "Required reading", ...).
+ *
+ * Document-modality gating is unchanged (see history): prose *about*
+ * failures on a page of text is not a failure the reader faces.
  */
 export declare function perceivesError(percept: Percept, modality?: Modality): boolean;
 /** Error text snippets, for evidence in findings. See {@link perceivesError}. */
