@@ -134,7 +134,7 @@ test("zero silent stubs across the full tool list", async () => {
     assert.ok(["complete", "input_required"].includes(r.resultType), `${n} resultType=${r.resultType}`);
     const res = r.structuredContent?.result ?? {};
     if (res.error) {
-      assert.ok(["engine_not_configured", "unknown_tool", "handler_failed", "profile_not_found", "connector_not_found", "connector_unknown_operation", "missing_args", "run_not_found", "share_not_found", "claim_conflict", "claim_required", "not_claim_holder", "invalid_bundle", "unsupported_bundle_version", "no_checkpoint", "upstream_error", "provider_unavailable"].includes(res.error), `${n} honest error (${res.error})`);
+      assert.ok(["engine_not_configured", "unknown_tool", "handler_failed", "profile_not_found", "connector_not_found", "connector_unknown_operation", "missing_args", "run_not_found", "share_not_found", "claim_conflict", "claim_required", "not_claim_holder", "invalid_bundle", "unsupported_bundle_version", "no_checkpoint", "upstream_error", "provider_unavailable", "no_provider_detected"].includes(res.error), `${n} honest error (${res.error})`);
     }
   }
 });
