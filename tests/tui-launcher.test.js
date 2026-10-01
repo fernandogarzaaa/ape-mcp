@@ -53,6 +53,34 @@ function destFor(dir) {
   return join(dir, "vendors", "ape-tui", tuiPlatform(), EXE);
 }
 
+test("launcher: APE_TUI_BIN override wins over everything", async () => {
+  const dir = fakeRoot({ withSources: true });
+  const prev = process.env.APE_TUI_BIN;
+  const wanted = join(dir, "custom-ape-tui");
+  writeFileSync(wanted, "x");
+  process.env.APE_TUI_BIN = wanted;
+  try {
+    const got = await ensureTui({
+      fromRoot: dir,
+      fetchImpl: async () => { throw new Error("must not fetch"); },
+      buildFn: () => { throw new Error("must not build"); },
+      log: () => {},
+    });
+    assert.equal(got, wanted);
+  } finally {
+    if (prev === undefined) delete process.env.APE_TUI_BIN;
+    else process.env.APE_TUI_BIN = prev;
+  }
+  const prev2 = process.env.APE_TUI_BIN;
+  process.env.APE_TUI_BIN = join(dir, "missing");
+  try {
+    await assert.rejects(ensureTui({ fromRoot: dir, log: () => {} }), /points nowhere/);
+  } finally {
+    if (prev2 === undefined) delete process.env.APE_TUI_BIN;
+    else process.env.APE_TUI_BIN = prev2;
+  }
+});
+
 test("launcher: prebuilt present wins without network", async () => {
   const dir = fakeRoot();
   const dest = destFor(dir);

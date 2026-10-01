@@ -1707,6 +1707,15 @@ mod tests {
     }
 
     #[test]
+    fn key_env_for_known_providers() {
+        assert_eq!(key_env_for("anthropic"), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(key_env_for("nebius"), Some("APE_NEBIUS_API_KEY"));
+        assert_eq!(key_env_for("mock"), None, "keyless");
+        assert_eq!(key_env_for("opencode"), None, "session-based");
+        assert_eq!(key_env_for("bogus"), None, "unknown");
+    }
+
+    #[test]
     fn status_text_shapes() {
         let v: serde_json::Value = serde_json::from_str(r#"{"status":"done","stop_reason":"explicit_final_answer","step_count":3,"total_cost":0.02,"total_tokens":120,"outcome":"fine"}"#).unwrap();
         let t = status_text(&v);

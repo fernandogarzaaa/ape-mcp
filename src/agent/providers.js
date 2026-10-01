@@ -48,16 +48,23 @@ const COST_PER_MTok = {
 };
 const DEFAULT_RATE = { in: 2, out: 8 };
 
-// Provider → OpenAI-compatible base URL (anthropic + mock are special-cased).
-const BASE_URLS = {
-  openai: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+// Provider base URLs. Read per call, not frozen at import: operators (and
+// tests) must be able to point a provider at another base AFTER this module
+// loads (env overrides only worked when set before import).
+const BASE_URLS_STATIC = {
   openrouter: "https://openrouter.ai/api/v1",
   groq: "https://api.groq.com/openai/v1",
-  nebius: process.env.APE_NEBIUS_BASE_URL || "https://api.studio.nebius.com/v1",
-  opencode: process.env.APE_OPENCODE_BASE_URL || "https://opencode.ai/zen/v1",
   google: "https://generativelanguage.googleapis.com/v1beta/openai",
-  local: process.env.APE_LOCAL_BASE_URL || "http://localhost:11434/v1",
 };
+export function baseUrlFor(provider) {
+  switch (provider) {
+    case "openai": return process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+    case "nebius": return process.env.APE_NEBIUS_BASE_URL || "https://api.studio.nebius.com/v1";
+    case "local": return process.env.APE_LOCAL_BASE_URL || "http://localhost:11434/v1";
+    case "opencode": return process.env.APE_OPENCODE_BASE_URL || "https://opencode.ai/zen/v1";
+    default: return BASE_URLS_STATIC[provider];
+  }
+}
 const OPENAI_COMPAT = new Set(["openai", "openrouter", "groq", "nebius", "opencode", "google", "local"]);
 
 // Providers APE can actually invoke. Anything detected but not in this set (e.g.
@@ -85,21 +92,37 @@ export function estimateCost(modelId, usage) {
 
 export function egressHosts() {
   const hosts = ["https://api.anthropic.com"];
-  for (const b of Object.values(BASE_URLS)) {
-    try { hosts.push(new URL(b).origin); } catch { /* skip */ }
+  for (const p of ["openai", "openrouter", "groq", "nebius", "opencode", "google", "local"]) {
+    try { hosts.push(new URL(baseUrlFor(p)).origin); } catch { /* skip */ }
   }
   return [...new Set(hosts)];
 }
 
 // --- provider:auto resolution ---
+// Layer order (first hit wins per field): explicit overrides > env >
+// pinned file > profile > auto-detect. The pinned MODEL only counts when
+// the pinned PROVIDER is the one being used — otherwise a stale pin would
+// leak one provider's model id into another's calls.
 export async function resolveModel(modelCfg, overrides = {}) {
   const pinned = userDefaults();
   const requestedProvider = overrides.provider || process.env.APE_PROVIDER || pinned.provider || modelCfg?.provider || "auto";
-  const requestedModel = overrides.model || process.env.APE_MODEL || pinned.model || (modelCfg?.id && modelCfg.id !== "auto" ? modelCfg.id : null);
+  const providerLayer = overrides.provider ? "override"
+    : process.env.APE_PROVIDER ? "env"
+    : pinned.provider ? "pin"
+    : (modelCfg?.provider && modelCfg.provider !== "auto") ? "profile"
+    : "auto";
+  const pinModel = pinned.provider && pinned.provider === requestedProvider ? pinned.model : null;
+  const requestedModel = overrides.model || process.env.APE_MODEL || pinModel || (modelCfg?.id && modelCfg.id !== "auto" ? modelCfg.id : null);
+  const modelLayer = overrides.model ? "override"
+    : process.env.APE_MODEL ? "env"
+    : pinModel ? "pin"
+    : (modelCfg?.id && modelCfg.id !== "auto") ? "profile"
+    : "auto";
+  const layers = { provider: providerLayer, model: modelLayer };
 
   // 1. mock / local never need a key.
   if (requestedProvider === "mock") {
-    return { provider: "mock", id: requestedModel || "mock-model", key: null, resolution: "explicit", source: "mock" };
+    return { provider: "mock", id: requestedModel || "mock-model", key: null, resolution: "explicit", source: "mock", layers };
   }
 
   // 2. Explicit provider: resolve its credential (env → host stores).
@@ -112,7 +135,7 @@ export async function resolveModel(modelCfg, overrides = {}) {
         id = probe?.model ?? null;
         if (probe) source = probe.source;
       }
-      return { provider: "local", id, key: null, baseUrl: BASE_URLS.local, resolution: "explicit", source };
+      return { provider: "local", id, key: null, baseUrl: baseUrlFor("local"), resolution: "explicit", source, layers };
     }
     const cred = await credentialFor(requestedProvider);
     if (cred) {
@@ -124,6 +147,7 @@ export async function resolveModel(modelCfg, overrides = {}) {
         resolution: "explicit",
         oauth: cred.oauth,
         refreshToken: cred.refreshToken,
+        layers,
       };
     }
     return {
@@ -131,6 +155,7 @@ export async function resolveModel(modelCfg, overrides = {}) {
       provider: requestedProvider,
       detected: await detectProviders(),
       hint: "no credential found for this provider; set its env key or use provider:auto",
+      layers,
     };
   }
 
@@ -145,6 +170,7 @@ export async function resolveModel(modelCfg, overrides = {}) {
       resolution: "active",
       oauth: active.oauth,
       refreshToken: active.refreshToken,
+      layers,
     };
   }
 
@@ -154,12 +180,12 @@ export async function resolveModel(modelCfg, overrides = {}) {
     const first = stored[0];
     const cred = await credentialFor(first);
     if (cred) {
-      return { provider: first, id: requestedModel || defaultModelFor(first), key: cred.key, source: cred.source, resolution: "best-effort" };
+      return { provider: first, id: requestedModel || defaultModelFor(first), key: cred.key, source: cred.source, resolution: "best-effort", layers };
     }
   }
 
   // 5. Nothing detected.
-  return { error: "no_provider_detected", detected: stored, hint: "set APE_PROVIDER or a provider key, or run a local model" };
+  return { error: "no_provider_detected", detected: stored, hint: "set APE_PROVIDER or a provider key, or run a local model", layers };
 }
 
 // Ordered resolved provider chain: primary first, then profile fallbacks.
@@ -273,7 +299,7 @@ async function refreshAnthropicOAuth(refreshToken) {
 
 // --- OpenAI-compatible ---
 async function openaiChat(cfg, system, messages, tools, timeoutMs) {
-  const base = cfg.baseUrl ?? BASE_URLS[cfg.provider];
+  const base = cfg.baseUrl ?? baseUrlFor(cfg.provider);
   const key = cfg.key ?? (cfg.provider === "local" ? null : process.env.OPENAI_API_KEY);
   const wire = [];
   for (const m of messages) {

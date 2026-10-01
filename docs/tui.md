@@ -156,8 +156,36 @@ rather than implying more text exists.
   signal, so set this explicitly there. Default: dark.
 - `APE_MCP_JS` — override path to `bin/ape-mcp.js` for the TUI bridge
   (dev/testing).
+- `APE_TUI_BIN` — override path to the `ape-tui` binary itself. The
+  launcher prefers this over everything (prebuilt, download, cargo
+  build). Dev/testing escape hatch; never needed in normal use.
+- `npm run tui:dev` — builds the workspace binary fresh (`cargo run`,
+  debug profile) and runs it, so a stale prebuilt can never shadow new
+  code. Extra args pass through (`npm run tui:dev -- --onboard`).
 - `APE_DATA_DIR` — data dir (runs, ledger, worker logs); the TUI inherits
   the caller's environment like every other surface.
+
+## State lives per data dir (pin it to share it)
+
+Everything the TUI reads and writes — the config (`config.json`: default
+profile, pinned provider/model; never secrets), run rows, step ledger,
+worker logs, installed profiles — lives under one directory:
+`$APE_DATA_DIR`, defaulting to `./.ape` in the launch directory. Two
+shells in different directories see different state; point them at the
+same dir to share it:
+
+```powershell
+$env:APE_DATA_DIR = "C:\Users\you\.ape"   # this shell (and children)
+setx APE_DATA_DIR "C:\Users\you\.ape"     # persistent, new shells
+```
+
+```bash
+export APE_DATA_DIR="$HOME/.ape"          # this shell (and children)
+```
+
+The provider pin, default profile, runs, and ledger follow the dir, so a
+fresh checkout starts unconfigured until onboarded or pinned there.
+(Input history is session-local and never written to disk.)
 - `APE_WORKER_LOG_DAYS` — retention for `ape-mcp prune` (default 14).
 - `APE_SKIP_TUI_DOWNLOAD` — `1` skips the postinstall prebuilt fetch.
 - `APE_MOCK_STEP_DELAY_MS` — test-only: per-turn delay in mock runs

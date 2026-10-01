@@ -4,7 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { dispatch, engineFail, eveEntry, runNode, failEve, genesisEntry } from "./dispatch.js";
-import { emitTrace, newTraceId, shaShort, dataDir } from "./trace.js";
+import { emitTrace, newTraceId, shaShort, dataDir, redactSecrets } from "./trace.js";
 import { loadMods } from "./mods.js";
 import { taskCreate, taskGet, taskList, taskFinish } from "./tasks.js";
 import { adamCall } from "./adam-client.js";
@@ -325,6 +325,9 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         const active = await detectActiveProvider();
         const safeActive = active ? (({ key, token, ...rest }) => rest)(active) : null;
         const sources = await detectProviderSources();
+        // Which layer would decide a run right now (override/env/pin/
+        // profile/auto, per field) — same resolveModel the loop uses.
+        const resolved = await resolveModel({ provider: "auto", id: "auto" });
         result = {
           ...base,
           active_provider: safeActive,
@@ -332,6 +335,9 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
           // Picker-grade inventory: provider + source + default model.
           // detected_providers stays a plain string list (unchanged shape).
           provider_sources: sources.map((s) => ({ ...s, default_model: defaultModelFor(s.provider) })),
+          resolution: resolved.error
+            ? { error: resolved.error, layers: resolved.layers }
+            : { provider: resolved.provider, model: resolved.id, source: resolved.source, layers: resolved.layers },
         };
         break;
       }
@@ -378,7 +384,9 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
             model: cfg.id,
             latency_ms: Date.now() - t0,
             error: "upstream_error",
-            message: String(e?.message ?? e).slice(0, 400),
+            // Upstream errors sometimes echo credentials; redact before
+            // the message is displayed, traced, or stored anywhere.
+            message: redactSecrets(String(e?.message ?? e)).slice(0, 400),
             hint: "upstream failure: check key, model id, and network",
           };
         }

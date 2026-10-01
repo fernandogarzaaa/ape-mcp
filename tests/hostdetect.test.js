@@ -3,6 +3,9 @@ import assert from "node:assert";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+// Isolate user config: resolveModel now reads APE_DATA_DIR/config.json, so a
+// stray repo pin would leak into these tests (same guard as scripts/test.mjs).
+process.env.APE_DATA_DIR ??= mkdtempSync(join(tmpdir(), "ape-hostdetect-"));
 import { DatabaseSync } from "node:sqlite";
 import { resolveModel, userDefaults, defaultModelFor } from "../src/agent/providers.js";
 import { opencodeActive, claudeActive, codexActive, storedCredentials, detectProviders, detectProviderSources } from "../src/agent/hostdetect.js";
@@ -231,6 +234,26 @@ test("userDefaults: garbage config is ignored, never throws", () => {
   }
 });
 
+test("resolveModel: pinned model never leaks into another provider", async () => {
+  const prevData = process.env.APE_DATA_DIR;
+  const d = tempDir();
+  process.env.APE_DATA_DIR = d;
+  try {
+    writeFileSync(join(d, "config.json"), JSON.stringify({ provider: "openai", model: "gpt-4.1" }));
+    // Explicit mock must resolve the mock default, not the pinned gpt-4.1.
+    const r = await resolveModel({ provider: "auto", id: "auto" }, { provider: "mock" });
+    assert.equal(r.provider, "mock");
+    assert.equal(r.id, "mock-model", `pinned model leaked: ${r.id}`);
+    assert.deepEqual(r.layers, { provider: "override", model: "auto" });
+    // And the pin still wins when nothing overrides it.
+    const r2 = await resolveModel({ provider: "auto", id: "auto" }, {});
+    assert.equal(r2.provider, "openai");
+    assert.equal(r2.layers.provider, "pin");
+  } finally {
+    if (prevData) process.env.APE_DATA_DIR = prevData; else delete process.env.APE_DATA_DIR;
+  }
+});
+
 test("detectProviderSources: names and sources, never keys", async () => {
   const prevHome = process.env.OPENCODE_HOME;
   process.env.OPENCODE_HOME = makeOpencodeHome();
@@ -258,6 +281,36 @@ test("ape_test_provider: mock succeeds with latency + cost; bogus fails honestly
   const b = bad.structuredContent.result;
   assert.equal(b.ok, false);
   assert.equal(b.error, "provider_unavailable");
+});
+
+test("redactSecrets: key echo from upstream never reaches display or trace", async () => {
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const secret = "sk-testsecret123456";
+  const server = createServer((req, res) => {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { message: `invalid key ${secret} rejected` } }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = server.address().port;
+  const prevBase = process.env.OPENAI_BASE_URL;
+  const prevKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}/v1`;
+  process.env.OPENAI_API_KEY = secret;
+  try {
+    const out = await dispatchCall("ape_test_provider", { provider: "openai" }, { headlessBypass: true });
+    const r = out.structuredContent.result;
+    assert.equal(r.ok, false);
+    assert.ok(!JSON.stringify(r).includes(secret), "message redacted");
+    assert.ok(JSON.stringify(r).includes("[redacted]"), "marker present");
+    // Trace file for this data dir must not contain it either.
+    const trace = readFileSync(join(process.env.APE_DATA_DIR, "trace.ndjson"), "utf8");
+    assert.ok(!trace.includes(secret), "trace redacted");
+  } finally {
+    if (prevBase) process.env.OPENAI_BASE_URL = prevBase; else delete process.env.OPENAI_BASE_URL;
+    if (prevKey) process.env.OPENAI_API_KEY = prevKey; else delete process.env.OPENAI_API_KEY;
+    server.close();
+  }
 });
 
 test.after(cleanup);
