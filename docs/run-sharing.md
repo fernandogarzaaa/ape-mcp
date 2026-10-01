@@ -81,18 +81,19 @@ The console binds `APE_CONSOLE_HOST` (default `127.0.0.1`). Setting it to
 (another machine, a tunnel, a shared screen). `APE_CONSOLE_PORT` pins the
 port; default is an ephemeral port.
 
-`APE_CONSOLE_TOKEN`, when set, protects every `/api/*` route:
-`Authorization: Bearer <token>` is required, else HTTP 401 with a Bearer
-challenge. Share routes (`/share/<token>`, `/share/<token>/stream`) stay
-accessible without the console bearer by design: the share token is the
-bearer. When `APE_CONSOLE_TOKEN` is unset, current behavior is unchanged
-(loopback-open; the pre-existing `APE_REQUIRE_AUTH`/`APE_TOKENS` gate still
-applies when configured).
+`APE_CONSOLE_TOKEN`, when set, replaces the per-session token: that static
+value is then the only accepted `/api/*` bearer. Share routes
+(`/share/<token>`, `/share/<token>/stream`) stay accessible without the
+console bearer by design: the share token is the bearer. Without
+`APE_CONSOLE_TOKEN`, every `/api/*` route (read and write) requires the
+per-session token the server minted at startup and embedded in the console
+URL the CLI opened (`?t=`).
 
-Binding a non-loopback host with no bearer configured prints a loud startup
-warning. For anything beyond a trusted LAN, put the console behind TLS and a
-real authenticating proxy; `APE_CONSOLE_TOKEN` is a shared secret, not a
-login system.
+Binding a non-loopback host answers only loopback `Host` values unless
+`APE_ALLOWED_HOSTS` lists the serving hostname — set it when remote-viewing.
+For anything beyond a trusted LAN, put the console behind TLS and a
+real authenticating proxy; the session token and `APE_CONSOLE_TOKEN` are
+shared secrets, not a login system.
 
 ## Threat model: the URL is the password
 

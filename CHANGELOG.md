@@ -2,6 +2,39 @@
 
 ## Unreleased (toward 1.1.2 — 1.1.1 is tagged and live)
 
+O1 console security hardening (audit verification first):
+- The audit's XSS and auth claims checked out against v1.1.1: console.html
+  built trace/ledger/experience/profile rows with innerHTML from
+  unescaped server data (9 sites) plus inline onclick handlers (9 sites),
+  served with no CSP, no framing/MIME/referrer guards, no Host allowlist,
+  and every /api/* route open on loopback by default. Proven by running
+  the new hostile-fixture suite against the v1.1.1 tree (7 of 9 fail
+  there; only share-page escaping and stream documentation pass).
+- Fixes: the console is now always authenticated — a per-session token
+  minted at startup gates every /api/* route (read and write), the CLI
+  opens /?t=<token>, the page strips it from the address bar and sends it
+  as Authorization: Bearer (APE_CONSOLE_TOKEN, when set, replaces it).
+  All rows render via textContent/createElement (no innerHTML, no inline
+  handlers); inline scripts/styles externalized to /app.js, /app.css,
+  /share.js, /share.css under a strict CSP with no inline code.
+  Host allowlist (403 before auth/dispatch); non-loopback serving
+  requires APE_ALLOWED_HOSTS. Ledger tab relabeled: it is an append-only
+  audit stream, not a hash-chained ledger. (The share page was already
+  escaped via escHtml; a guard test pins that.)
+- New tests/console-security.test.js (9 tests): forged Host → 403,
+  rebinding simulation → 403, no-token → 401, strict CSP + framing/MIME/
+  referrer headers on shell/API/share, no HTML-string rendering in the
+  clients, hostile trace payload served raw and inert, hostile share page
+  escaped, ledger label honest, stream auth behavior locked.
+- Security note: v1.1.1's console renders attacker-influenced trace/run
+  data as live HTML (stored XSS in a real browser; loopback-bound by
+  default, reachable remotely via DNS rebinding while the console runs).
+  1.1.1 users should upgrade to 1.1.2 when released and meanwhile run the
+  console only on trusted networks. Whether a GitHub advisory is filed is
+  an open operator decision (SECURITY.md now exists per PR #45).
+  Confirm-gate redesign and per-caller rate limits recorded as open
+  decisions in docs/security.md (options + costs, no choice made).
+
 M6.1 onboarding as a real setup flow (verified review first):
 - The old mock demo is gone (with its false "needs a working provider"
   failure text — the mock run never needed one).
