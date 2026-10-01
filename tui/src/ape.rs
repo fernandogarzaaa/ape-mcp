@@ -155,25 +155,56 @@ pub fn mark_onboarded() -> std::io::Result<()> {
     std::fs::write(onboarded_marker(), "1\n")
 }
 
-/// Minimal user config (today: default profile only). JSON, best-effort reads.
+/// Minimal user config (default profile + pinned provider/model).
+/// JSON, best-effort reads. One file, read-modify-write: savers never drop
+/// each other's keys. Provider and model ONLY — secrets never land here.
 pub fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
-pub fn save_default_profile(name: &str) -> std::io::Result<()> {
+fn read_config() -> serde_json::Value {
+    std::fs::read_to_string(config_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .filter(|v: &serde_json::Value| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn write_config(body: &serde_json::Value) -> std::io::Result<()> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir)?;
-    let body = serde_json::json!({ "default_profile": name });
-    std::fs::write(config_path(), serde_json::to_string_pretty(&body).unwrap_or_default())
+    std::fs::write(config_path(), serde_json::to_string_pretty(body).unwrap_or_default())
+}
+
+pub fn save_default_profile(name: &str) -> std::io::Result<()> {
+    let mut body = read_config();
+    body["default_profile"] = serde_json::Value::String(name.to_string());
+    write_config(&body)
 }
 
 pub fn load_default_profile() -> Option<String> {
-    let text = std::fs::read_to_string(config_path()).ok()?;
-    serde_json::from_str::<serde_json::Value>(&text)
-        .ok()?
+    read_config()
         .get("default_profile")?
         .as_str()
         .map(str::to_string)
+}
+
+/// Persist a provider+model pin. Feeds resolveModel on the Node side (same
+/// config file, read as the layer between env and profile) — no second
+/// resolution path, no secrets.
+pub fn save_provider_model(provider: &str, model: &str) -> std::io::Result<()> {
+    let mut body = read_config();
+    body["provider"] = serde_json::Value::String(provider.to_string());
+    body["model"] = serde_json::Value::String(model.to_string());
+    write_config(&body)
+}
+
+pub fn load_provider_model() -> Option<(String, String)> {
+    let body = read_config();
+    Some((
+        body.get("provider")?.as_str()?.to_string(),
+        body.get("model")?.as_str()?.to_string(),
+    ))
 }
 
 /// A throwaway mock-provider profile for the onboarding demo: a real run
@@ -205,6 +236,13 @@ mod local_state_tests {
         assert!(is_onboarded());
         save_default_profile("repo-triage").unwrap();
         assert_eq!(load_default_profile().as_deref(), Some("repo-triage"));
+        // Provider pin coexists with the profile pin in one file.
+        save_provider_model("mock", "mock-model").unwrap();
+        assert_eq!(
+            load_provider_model(),
+            Some(("mock".to_string(), "mock-model".to_string()))
+        );
+        assert_eq!(load_default_profile().as_deref(), Some("repo-triage"), "savers keep each other's keys");
         let p = write_demo_profile().unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.contains("provider: mock"));

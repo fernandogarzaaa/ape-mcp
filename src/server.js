@@ -12,7 +12,8 @@ import { loadProfile, listProfiles, describeProfile, listProfileDetails } from "
 import { familyOf, profileHash, envFingerprint } from "./agent/outcomes.js";
 import { createRun, getRun, updateRun, reconcileRuns, runningCount, spendSince, loadCheckpoint, familyStats, deprecateVariant, admitRun, claimRun, releaseRun, queryRuns, exportRun, importRun, shareRun, unshareRun, appendStep } from "./runs.js";
 import { loadConnector, connectorList } from "./connectors.js";
-import { detectActiveProvider, detectProviders } from "./agent/hostdetect.js";
+import { detectActiveProvider, detectProviders, detectProviderSources } from "./agent/hostdetect.js";
+import { defaultModelFor, resolveModel, chat, estimateCost } from "./agent/providers.js";
 import { APE_VERSION } from "./version.js";
 
 const runningAgents = new Map();
@@ -88,6 +89,7 @@ export function negotiateProtocolVersion(requested) {
 
 export const TOOL_DEFS = [
   { name: "ape_status", description: "APE status: versions, vendored engines, mods", inputSchema: { type: "object", properties: { organism_id: { type: "string", description: "ADAM organism scope (default \"default\")" } } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_test_provider", description: "Test a model provider with one minimal call: reports success, latency, usage and cost, or the honest upstream error. Omit both args to test current resolution. Costs a fraction of a cent on real providers; free on mock.", inputSchema: { type: "object", properties: { provider: { type: "string", description: "provider to test (omit for current resolution)" }, model: { type: "string", description: "model id (omit for the provider default)" } } }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_remember", description: "Store durable memory in ADAM organism (real stdio call to vendored adam-mcp)", inputSchema: { type: "object", properties: { kind: { type: "string", description: "memory kind: episodic|semantic|procedural|self_knowledge" }, content: { type: "string", description: "what to remember" }, origin: { type: "string", description: "provenance: observation|memory|reasoning|external_source|user_assertion" }, confidence: { type: "number", description: "0-1 confidence in this memory" }, organism_id: { type: "string", description: "ADAM organism scope (default \"default\")" } }, required: ["content"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_recall", description: "Query ADAM memory + prior decisions (real stdio call to vendored adam-mcp)", inputSchema: { type: "object", properties: { query: { type: "string", description: "what to look for" }, kind: { type: "string", description: "filter by memory kind" }, top_k: { type: "number", description: "max results (default 5)" }, organism_id: { type: "string", description: "ADAM organism scope (default \"default\")" } }, required: ["query"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_beliefs", description: "List ADAM beliefs or form one from evidence (real stdio call; statement form creates a new belief)", inputSchema: { type: "object", properties: { statement: { type: "string", description: "belief to form from evidence (omit to just list)" }, origin: { type: "string", description: "evidence provenance (default \"observation\")" }, organism_id: { type: "string", description: "ADAM organism scope (default \"default\")" } } }, annotations: { readOnly: false, idempotent: false } },
@@ -322,15 +324,67 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         // Never expose key/token material on any tool-visible surface.
         const active = await detectActiveProvider();
         const safeActive = active ? (({ key, token, ...rest }) => rest)(active) : null;
+        const sources = await detectProviderSources();
         result = {
           ...base,
           active_provider: safeActive,
           detected_providers: await detectProviders(),
+          // Picker-grade inventory: provider + source + default model.
+          // detected_providers stays a plain string list (unchanged shape).
+          provider_sources: sources.map((s) => ({ ...s, default_model: defaultModelFor(s.provider) })),
         };
         break;
       }
-      case "ape_remember": result = await adamCall("adam_memory_store", { kind: a.kind || "episodic", content: a.content, origin: a.origin || "observation", confidence: a.confidence ?? 0.9 }, a.organism_id); break;
-      case "ape_recall": result = await adamCall("adam_memory_query", { query: a.query, kind: a.kind, top_k: a.top_k ?? 5 }, a.organism_id); break;
+      case "ape_test_provider": {
+        // One minimal real call through the SAME resolveModel + chat the
+        // loop uses (no parallel resolution path). Honest errors, never a
+        // silent fallback: no credential means provider_unavailable, and
+        // upstream failures surface verbatim with latency.
+        const t0 = Date.now();
+        const cfg = await resolveModel(
+          { provider: a.provider ?? "auto", id: a.model ?? "auto" },
+          a.provider ? { provider: a.provider, ...(a.model ? { model: a.model } : {}) } : {}
+        );
+        if (cfg.error) {
+          result = { ok: false, ...cfg, latency_ms: Date.now() - t0 };
+          break;
+        }
+        try {
+          const resp = await chat(
+            cfg,
+            {
+              system: "connection test: reply with exactly the word ok",
+              messages: [{ role: "user", content: "ok?" }],
+              tools: [],
+              timeoutMs: 30000,
+            }
+          );
+          const usage = resp.usage ?? { inputTokens: 0, outputTokens: 0 };
+          result = {
+            ok: true,
+            provider: cfg.provider,
+            model: cfg.id,
+            source: cfg.source,
+            resolution: cfg.resolution,
+            latency_ms: Date.now() - t0,
+            usage,
+            cost_usd: estimateCost(cfg.id, usage),
+            reply: String(resp.content ?? "").slice(0, 200),
+          };
+        } catch (e) {
+          result = {
+            ok: false,
+            provider: cfg.provider,
+            model: cfg.id,
+            latency_ms: Date.now() - t0,
+            error: "upstream_error",
+            message: String(e?.message ?? e).slice(0, 400),
+            hint: "upstream failure: check key, model id, and network",
+          };
+        }
+        break;
+      }
+      case "ape_remember": result = await adamCall("adam_memory_store", { kind: a.kind || "episodic", content: a.content, origin: a.origin || "observation", confidence: a.confidence ?? 0.9 }, a.organism_id); break;      case "ape_recall": result = await adamCall("adam_memory_query", { query: a.query, kind: a.kind, top_k: a.top_k ?? 5 }, a.organism_id); break;
       case "ape_beliefs": result = await adamCall("adam_beliefs", a.statement ? { statement: a.statement, origin: a.origin || "observation" } : {}, a.organism_id); break;
       case "ape_genome": result = await adamCall("adam_genome", {}, a.organism_id); break;
       case "ape_mcp_eval": {

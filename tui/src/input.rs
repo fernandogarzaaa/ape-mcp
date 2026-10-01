@@ -20,6 +20,9 @@ pub enum Key {
     /// there. (A bare Ctrl+J arrives as LF; crossterm reports it as
     /// Char('j')+CONTROL, mapped by the main loop to this variant.)
     CtrlJ,
+    /// F5: test actions (provider connection test). Function keys never
+    /// collide with text entry, unlike letter shortcuts.
+    F5,
     Esc,
     Backspace,
     Char(char),

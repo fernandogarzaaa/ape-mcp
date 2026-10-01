@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
             [↑/↓] move   [Enter] open (live if running)   [Esc] back
 
-              provider: unknown · profile: unknown · ape-mcp 1.1.1
+      provider: unknown · model: unknown · profile: unknown · ape-mcp 1.1.1

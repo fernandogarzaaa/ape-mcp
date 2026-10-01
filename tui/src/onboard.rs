@@ -113,9 +113,11 @@ pub enum Step {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     LoadDoctor,
-    LoadStatus,
+    LoadProviders,
     LoadProfiles,
     SaveDefault(String),
+    SaveProvider { provider: String, model: String },
+    TestProvider { provider: String, model: String },
     DemoStart,
     Complete,
 }
@@ -133,6 +135,7 @@ pub struct Onboard {
     pub doctor: Vec<DoctorLine>,
     pub doctor_loaded: bool,
     pub provider: Option<String>,
+    pub form: super::provider::ProviderForm,
     pub profiles: Vec<(String, String)>,
     pub profiles_loaded: bool,
     pub selected: usize,
@@ -147,6 +150,7 @@ impl Onboard {
             doctor: Vec::new(),
             doctor_loaded: false,
             provider: None,
+            form: super::provider::ProviderForm::new(),
             profiles: Vec::new(),
             profiles_loaded: false,
             selected: 0,
@@ -159,7 +163,7 @@ impl Onboard {
     pub fn effects(&mut self) -> Vec<Effect> {
         match self.step {
             Step::Doctor if !self.doctor_loaded => vec![Effect::LoadDoctor],
-            Step::Provider if self.provider.is_none() => vec![Effect::LoadStatus],
+            Step::Provider if !self.form.loaded => vec![Effect::LoadProviders],
             Step::Profile if !self.profiles_loaded => vec![Effect::LoadProfiles],
             Step::Demo => match &self.demo {
                 DemoState::Idle => vec![Effect::DemoStart],
@@ -174,8 +178,13 @@ impl Onboard {
         self.doctor_loaded = true;
     }
 
-    pub fn apply_status(&mut self, result: &serde_json::Value) {
-        self.provider = Some(provider_summary(result));
+    pub fn apply_providers(&mut self, status: &serde_json::Value) {
+        self.form.apply_providers(status, crate::ape::load_provider_model());
+        self.provider = Some(provider_summary(status));
+    }
+
+    pub fn apply_test(&mut self, result: &serde_json::Value) {
+        self.form.apply_test(result);
     }
 
     pub fn apply_profiles(&mut self, profiles: Vec<(String, String)>) {
@@ -220,17 +229,31 @@ impl Onboard {
                 Key::Esc => (vec![], Flow::ToWelcome),
                 _ => (vec![], Flow::Stay),
             },
-            Step::Provider => match key {
-                Key::Enter => {
-                    self.step = Step::Profile;
-                    (self.effects(), Flow::Stay)
-                }
-                Key::Esc => {
+            Step::Provider => {
+                if key == Key::Esc {
                     self.step = Step::Doctor;
-                    (vec![], Flow::Stay)
+                    return (vec![], Flow::Stay);
                 }
-                _ => (vec![], Flow::Stay),
-            },
+                let saved = crate::ape::load_provider_model();
+                let (fx, done) = self.form.on_key(key, saved);
+                let mut out = fx
+                    .into_iter()
+                    .map(|e| match e {
+                        super::provider::ProviderEffect::LoadProviders => Effect::LoadProviders,
+                        super::provider::ProviderEffect::Save { provider, model } => {
+                            Effect::SaveProvider { provider, model }
+                        }
+                        super::provider::ProviderEffect::Test { provider, model } => {
+                            Effect::TestProvider { provider, model }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if done {
+                    self.step = Step::Profile;
+                    out.extend(self.effects());
+                }
+                (out, Flow::Stay)
+            }
             Step::Profile => match key {
                 Key::Up | Key::Char('k') if self.selected > 0 => {
                     self.selected -= 1;
@@ -349,7 +372,21 @@ mod tests {
         let (fx, flow) = o.on_key(Key::Enter);
         assert_eq!(flow, Flow::Stay);
         assert_eq!(o.step, Step::Provider);
-        assert_eq!(fx, vec![Effect::LoadStatus]);
+        assert_eq!(fx, vec![Effect::LoadProviders]);
+    }
+
+    #[test]
+    fn provider_enter_saves_and_advances() {
+        let mut o = Onboard::new();
+        o.step = Step::Provider;
+        o.apply_providers(
+            &serde_json::from_str(r#"{"provider_sources":[{"provider":"mock","source":"builtin","default_model":"mock-model"}]}"#).unwrap(),
+        );
+        let (fx, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Stay);
+        assert_eq!(o.step, Step::Profile);
+        assert!(fx.iter().any(|e| matches!(e, Effect::SaveProvider { .. })), "saves pin, got {fx:?}");
+        assert!(fx.iter().any(|e| matches!(e, Effect::LoadProfiles)), "then loads profiles");
     }
 
     #[test]

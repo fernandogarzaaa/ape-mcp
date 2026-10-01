@@ -8,8 +8,8 @@
 │  Runs          │
 │  Ledger        │
 │  Tasks         │
+│  Provider      │
 │  Quit          │
-│                │
 │                │
 │                │
 │                │
@@ -20,4 +20,4 @@
 └────────────────┘
                      [↑/↓] move   [Enter] select   [q] quit
 
-              provider: unknown · profile: unknown · ape-mcp 1.1.1
+      provider: unknown · model: unknown · profile: unknown · ape-mcp 1.1.1

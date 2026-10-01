@@ -84,7 +84,7 @@ mod snap_impl {
     }
 
     fn canned_status() -> serde_json::Value {
-        serde_json::from_str(r#"{"active_provider":{"provider":"opencode","source":"opencode session"}}"#).unwrap()
+        serde_json::from_str(r#"{"active_provider":{"provider":"opencode","source":"opencode session"},"provider_sources":[{"provider":"opencode","source":"opencode session","default_model":"muse-spark"},{"provider":"mock","source":"builtin","default_model":"mock-model"}]}"#).unwrap()
     }
 
     fn canned_limits() -> std::collections::HashMap<String, menu::ProfileLimits> {
@@ -135,8 +135,8 @@ mod snap_impl {
         ob.apply_doctor(canned_doctor());
         shot("onboard-doctor", 80, 24, |f| render_onboard(&ob, f));
         let (fx, _) = ob.on_key(Key::Enter);
-        assert_eq!(fx.len(), 1, "doctor->provider requests LoadStatus");
-        ob.apply_status(&canned_status());
+        assert_eq!(fx.len(), 1, "doctor->provider requests LoadProviders");
+        ob.apply_providers(&canned_status());
         shot("onboard-provider", 80, 24, |f| render_onboard(&ob, f));
         let _ = ob.on_key(Key::Enter);
         ob.apply_profiles(canned_profiles());
@@ -349,6 +349,20 @@ mod snap_impl {
         .unwrap();
         m.apply_status(&status);
         shot("menu-status", 80, 24, |f| render_menu(&m, f));
+        // --- Provider view (shared form, canned status) + tested state.
+        let mut m = Menu::new();
+        m.view = MenuView::ProviderForm(crate::provider::ProviderForm::new());
+        m.apply_providers_list(
+            &serde_json::from_str(
+                r#"{"active_provider":{"provider":"opencode","source":"opencode session"},"provider_sources":[{"provider":"opencode","source":"opencode session","default_model":"muse-spark"},{"provider":"mock","source":"builtin","default_model":"mock-model"}]}"#,
+            )
+            .unwrap(),
+        );
+        shot("menu-provider", 80, 24, |f| render_menu(&m, f));
+        if let MenuView::ProviderForm(form) = &mut m.view {
+            form.apply_test(&serde_json::from_str(r#"{"ok":true,"latency_ms":321,"cost_usd":0.001}"#).unwrap());
+        }
+        shot("menu-provider-tested", 80, 24, |f| render_menu(&m, f));
         let mut m = Menu::new();
         m.view = MenuView::ConsoleInfo;
         shot("menu-console", 80, 24, |f| render_menu(&m, f));

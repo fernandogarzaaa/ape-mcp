@@ -1,10 +1,10 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
-│  deep-researcher                                                             │
-│    Broad web research                                                        │
-│  fact-checker                                                                │
-│    Verifies a single claim                                                   │
-│  writer                                                                      │
-│    Drafts prose                                                              │
+│  opencode — opencode session                                                 │
+│  mock — builtin                                                              │
+│model:                                                                        │
+│> muse-spark█                                                                 │
+│test ok in 321ms · cost $0.0010                                               │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -18,6 +18,6 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-                            [↑/↓] scroll   [Esc] back
+       [↑/↓] provider · type model · [F5] test · [Enter] save · [Esc] back
 
       provider: unknown · model: unknown · profile: unknown · ape-mcp 1.1.1

@@ -4,7 +4,7 @@ use super::input::{Key, LineEditor};
 use crate::ape;
 use std::collections::HashMap;
 
-pub const MENU_ITEMS: [&str; 10] = [
+pub const MENU_ITEMS: [&str; 11] = [
     "Run an agent",
     "Check a run",
     "Profiles",
@@ -14,6 +14,7 @@ pub const MENU_ITEMS: [&str; 10] = [
     "Runs",
     "Ledger",
     "Tasks",
+    "Provider",
     "Quit",
 ];
 
@@ -33,6 +34,7 @@ pub enum MenuView {
     RunsList { runs: Vec<RunRow>, selected: usize, offset: usize, note: String },
     LedgerList { entries: Vec<LedgerEntry>, offset: usize, filter: LedgerFilter, note: String },
     TasksShow { text: String },
+    ProviderForm(super::provider::ProviderForm),
     ConsoleInfo,
 }
 
@@ -45,6 +47,7 @@ pub enum MenuEffect {
     LoadRuns,
     LoadLedger,
     LoadTasks,
+    Provider(super::provider::ProviderEffect),
     StartRun { profile: String, objective: String },
     FetchStatus(String),
     CancelRun { run_id: String },
@@ -174,13 +177,14 @@ impl LedgerFilter {
 
 /// Slash commands: (name, menu index, blurb). Enter on a match calls the
 /// SAME `goto_item` the menu uses — one implementation, two doors.
-pub const SLASH_ITEMS: [(&str, usize, &str); 6] = [
+pub const SLASH_ITEMS: [(&str, usize, &str); 7] = [
     ("profile", 0, "pick a profile and run"),
     ("runs", 6, "recent runs, open one live"),
     ("ledger", 7, "governance audit stream"),
     ("tasks", 8, "skein task graph"),
     ("status", 5, "versions, provider, engines"),
     ("doctor", 3, "environment checks"),
+    ("provider", 9, "choose provider and model"),
 ];
 
 /// Menu index for the current slash text, if it matches anything.
@@ -535,6 +539,7 @@ pub struct Menu {
     limits_cache: HashMap<String, ProfileLimits>,
     provider_cache: Option<String>,
     default_profile: Option<String>,
+    model_cache: Option<String>,
     history: Vec<String>,
     hist_pos: Option<usize>,
     hist_draft: String,
@@ -550,6 +555,7 @@ impl Menu {
             provider_cache: None,
             // Local state, read once: the onboarded default, if any.
             default_profile: ape::load_default_profile(),
+            model_cache: ape::load_provider_model().map(|(_, m)| m),
             history: Vec::new(),
             hist_pos: None,
             hist_draft: String::new(),
@@ -581,8 +587,9 @@ impl Menu {
             );
         }
         format!(
-            "provider: {} · profile: {} · ape-mcp {}",
+            "provider: {} · model: {} · profile: {} · ape-mcp {}",
             self.provider_cache.as_deref().unwrap_or("unknown"),
+            self.model_cache.as_deref().unwrap_or("unknown"),
             self.default_profile.as_deref().unwrap_or("unknown"),
             version,
         )
@@ -639,8 +646,12 @@ impl Menu {
                 self.view = MenuView::LedgerList { entries: vec![], offset: 0, filter: LedgerFilter::All, note: "loading ledger…".to_string() };
                 (vec![MenuEffect::LoadLedger], false)
             }
-            8 => (vec![MenuEffect::LoadTasks], false),
-            _ => (vec![], true),
+                    8 => (vec![MenuEffect::LoadTasks], false),
+                    9 => {
+                        self.view = MenuView::ProviderForm(super::provider::ProviderForm::new());
+                        (vec![MenuEffect::Provider(super::provider::ProviderEffect::LoadProviders)], false)
+                    }
+                    _ => (vec![], true),
         }
     }
 
@@ -831,6 +842,20 @@ impl Menu {
             | MenuView::ConsoleInfo => {
                 self.view = MenuView::Main { selected: 0 };
                 (vec![], false)
+            }
+            MenuView::ProviderForm(form) => {
+                if key == Key::Esc {
+                    self.view = MenuView::Main { selected: 0 };
+                    return (vec![], false);
+                }
+                let saved = ape::load_provider_model();
+                let (fx, done) = form.on_key(key, saved);
+                let fx = fx.into_iter().map(MenuEffect::Provider).collect::<Vec<_>>();
+                if done {
+                    self.model_cache = ape::load_provider_model().map(|(_, m)| m);
+                    self.view = MenuView::Main { selected: 0 };
+                }
+                (fx, false)
             }
             MenuView::RunsList { runs, selected, offset, .. } => match key {
                 Key::Down | Key::Char('j') => {
@@ -1068,6 +1093,23 @@ impl Menu {
         self.view = MenuView::TasksShow { text };
     }
 
+    pub fn apply_providers_list(&mut self, status: &serde_json::Value) {
+        if let MenuView::ProviderForm(form) = &mut self.view {
+            form.apply_providers(status, ape::load_provider_model());
+        }
+    }
+
+    pub fn apply_provider_test(&mut self, result: &serde_json::Value) {
+        if let MenuView::ProviderForm(form) = &mut self.view {
+            form.apply_test(result);
+        }
+    }
+
+    /// Refresh the status-line model from the saved pin (after Save).
+    pub fn note_saved_model(&mut self) {
+        self.model_cache = ape::load_provider_model().map(|(_, m)| m);
+    }
+
     pub fn apply_status(&mut self, status: &serde_json::Value) {
         self.cache_provider(status);
         self.view = MenuView::StatusShow { text: status_body(status) };
@@ -1140,11 +1182,26 @@ mod tests {
     #[test]
     fn quit_entry_quits() {
         let mut m = Menu::new();
-        for _ in 0..9 {
+        for _ in 0..10 {
             m.on_key(Key::Char('j'));
         }
         let (_, quit) = m.on_key(Key::Enter);
         assert!(quit);
+    }
+
+    #[test]
+    fn provider_entry_loads_form() {
+        let mut m = Menu::new();
+        for _ in 0..9 {
+            m.on_key(Key::Down);
+        }
+        let (fx, quit) = m.on_key(Key::Enter);
+        assert!(!quit);
+        assert_eq!(fx, vec![MenuEffect::Provider(crate::provider::ProviderEffect::LoadProviders)]);
+        assert!(matches!(m.view, MenuView::ProviderForm(_)));
+        // Esc leaves back to Main.
+        m.on_key(Key::Esc);
+        assert!(matches!(m.view, MenuView::Main { .. }));
     }
 
     #[test]
@@ -1348,6 +1405,7 @@ mod tests {
             ("tasks", "skein task graph"),
             ("status", "versions, provider, engines"),
             ("doctor", "environment checks"),
+            ("provider", "choose provider and model"),
         ]);
         assert_eq!(slash_menu("/run"), vec![("runs", "recent runs, open one live")]);
         assert_eq!(slash_target("/doc", 0), Some(3));

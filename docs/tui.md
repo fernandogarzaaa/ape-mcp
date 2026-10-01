@@ -49,6 +49,29 @@ footers name the keys per screen.
   transition the menu item uses, Esc goes back. Unmatched `/text`
   sends literally as the objective.
 
+## Provider setup (no keys leave the terminal)
+
+Onboarding step 2 and the **Provider** menu item share one picker: detected
+providers with their source (environment, opencode session, claude code,
+codex, ollama/llama.cpp), a model field prefilled from the provider
+default, and **F5** for a one-call connection test (success with latency
+and cost, or the upstream error verbatim). Enter saves the
+provider+model pin to the local config; runs and the CLI resolve through
+the same `resolveModel` (explicit overrides > env > pinned file >
+profile > auto-detect).
+
+Secrets are never written anywhere by the TUI. If no provider is
+detected, set a key in the calling shell before launching:
+
+```powershell
+$env:APE_ANTHROPIC_API_KEY = "sk-..."
+$env:APE_OPENAI_API_KEY = "sk-..."
+```
+
+(Process-scoped; dies with the shell. For persistence, use your OS
+credential store or shell profile — the TUI will detect whatever the
+host makes available.)
+
 ## Status line
 
 `provider: X · profile: Y · ape-mcp V`: the version is embedded at build

@@ -5,6 +5,34 @@
 // ollama/llama.cpp), mock (deterministic, offline — tests/demos).
 // Provider calls are a sanctioned network egress; `ape-mcp doctor` lists them.
 import { detectActiveProvider, credentialFor, detectProviders, localProbe } from "./hostdetect.js";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { dataDir } from "../trace.js";
+
+// User-pinned provider/model, written by the TUI provider screen into the
+// same config.json the TUI uses for the default profile ({provider, model}
+// beside default_profile — no secrets ever land here). Read-only on this
+// side, cached by mtime. Resolution order in resolveModel: explicit
+// overrides > env > this file > profile > auto-detect.
+let userDefaultsCache = { path: "", mtime: 0, value: {} };
+export function userDefaults() {
+  try {
+    const p = join(dataDir(), "config.json");
+    const st = statSync(p, { throwIfNoEntry: false });
+    if (!st) return {};
+    if (p === userDefaultsCache.path && st.mtimeMs <= userDefaultsCache.mtime) {
+      return userDefaultsCache.value;
+    }
+    const raw = JSON.parse(readFileSync(p, "utf8"));
+    const value = {};
+    if (typeof raw?.provider === "string" && raw.provider) value.provider = raw.provider;
+    if (typeof raw?.model === "string" && raw.model) value.model = raw.model;
+    userDefaultsCache = { path: p, mtime: st.mtimeMs, value };
+    return value;
+  } catch {
+    return {};
+  }
+}
 
 const COST_PER_MTok = {
   "claude-sonnet-4-6": { in: 3, out: 15 },
@@ -65,8 +93,9 @@ export function egressHosts() {
 
 // --- provider:auto resolution ---
 export async function resolveModel(modelCfg, overrides = {}) {
-  const requestedProvider = overrides.provider || process.env.APE_PROVIDER || modelCfg?.provider || "auto";
-  const requestedModel = overrides.model || process.env.APE_MODEL || (modelCfg?.id && modelCfg.id !== "auto" ? modelCfg.id : null);
+  const pinned = userDefaults();
+  const requestedProvider = overrides.provider || process.env.APE_PROVIDER || pinned.provider || modelCfg?.provider || "auto";
+  const requestedModel = overrides.model || process.env.APE_MODEL || pinned.model || (modelCfg?.id && modelCfg.id !== "auto" ? modelCfg.id : null);
 
   // 1. mock / local never need a key.
   if (requestedProvider === "mock") {

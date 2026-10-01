@@ -4,8 +4,9 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { resolveModel } from "../src/agent/providers.js";
-import { opencodeActive, claudeActive, codexActive, storedCredentials, detectProviders } from "../src/agent/hostdetect.js";
+import { resolveModel, userDefaults, defaultModelFor } from "../src/agent/providers.js";
+import { opencodeActive, claudeActive, codexActive, storedCredentials, detectProviders, detectProviderSources } from "../src/agent/hostdetect.js";
+import { dispatchCall } from "../src/server.js";
 
 const dirs = [];
 function tempDir() {
@@ -193,6 +194,70 @@ test("hostdetect: opencode provider resolves from host store with zen base URL",
     assert.equal(r.provider, "opencode");
     assert.equal(r.resolution, "explicit");
   } finally { if (prevHome) process.env.OPENCODE_HOME = prevHome; else delete process.env.OPENCODE_HOME; }
+});
+
+test("userDefaults: TUI-pinned provider/model feed resolveModel below env", async () => {
+  const prevData = process.env.APE_DATA_DIR;
+  const prevProvider = process.env.APE_PROVIDER;
+  const d = tempDir();
+  process.env.APE_DATA_DIR = d;
+  delete process.env.APE_PROVIDER;
+  try {
+    writeFileSync(join(d, "config.json"), JSON.stringify({ provider: "mock", model: "mock-model" }));
+    const u = userDefaults();
+    assert.equal(u.provider, "mock");
+    assert.equal(u.model, "mock-model");
+    const r = await resolveModel({ provider: "auto", id: "auto" });
+    assert.equal(r.provider, "mock", "pinned file beats auto");
+    // Env still beats the file.
+    process.env.APE_PROVIDER = "mock";
+    const r2 = await resolveModel({ provider: "auto", id: "auto" });
+    assert.equal(r2.provider, "mock");
+  } finally {
+    if (prevData) process.env.APE_DATA_DIR = prevData; else delete process.env.APE_DATA_DIR;
+    if (prevProvider) process.env.APE_PROVIDER = prevProvider; else delete process.env.APE_PROVIDER;
+  }
+});
+
+test("userDefaults: garbage config is ignored, never throws", () => {
+  const prevData = process.env.APE_DATA_DIR;
+  const d = tempDir();
+  process.env.APE_DATA_DIR = d;
+  try {
+    writeFileSync(join(d, "config.json"), "{not json");
+    assert.deepEqual(userDefaults(), {});
+  } finally {
+    if (prevData) process.env.APE_DATA_DIR = prevData; else delete process.env.APE_DATA_DIR;
+  }
+});
+
+test("detectProviderSources: names and sources, never keys", async () => {
+  const prevHome = process.env.OPENCODE_HOME;
+  process.env.OPENCODE_HOME = makeOpencodeHome();
+  try {
+    const all = await detectProviderSources();
+    assert.ok(all.length >= 1);
+    for (const s of all) {
+      assert.ok(typeof s.provider === "string");
+      assert.ok(typeof s.source === "string");
+      assert.ok(!("key" in s) && !("token" in s), "no key material");
+    }
+    assert.ok(all.some((s) => s.provider === "nebius" && s.source === "opencode session"));
+    assert.equal(defaultModelFor("openai"), "gpt-4.1");
+  } finally { if (prevHome) process.env.OPENCODE_HOME = prevHome; else delete process.env.OPENCODE_HOME; }
+});
+
+test("ape_test_provider: mock succeeds with latency + cost; bogus fails honestly", async () => {
+  const ok = await dispatchCall("ape_test_provider", { provider: "mock" }, { headlessBypass: true });
+  const r = ok.structuredContent.result;
+  assert.equal(r.ok, true);
+  assert.equal(r.provider, "mock");
+  assert.ok(typeof r.latency_ms === "number");
+  assert.ok(typeof r.cost_usd === "number");
+  const bad = await dispatchCall("ape_test_provider", { provider: "nope-xyz" }, { headlessBypass: true });
+  const b = bad.structuredContent.result;
+  assert.equal(b.ok, false);
+  assert.equal(b.error, "provider_unavailable");
 });
 
 test.after(cleanup);

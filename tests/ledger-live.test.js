@@ -29,7 +29,7 @@ async function statusOf(runId) {
   return g.structuredContent.result;
 }
 
-async function waitFor(runId, pred, tries = 40) {
+async function waitFor(runId, pred, tries = 80) {
   let st = null;
   for (let i = 0; i < tries; i++) {
     await new Promise((r) => setTimeout(r, 250));

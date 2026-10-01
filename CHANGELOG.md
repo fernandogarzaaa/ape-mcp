@@ -2,6 +2,17 @@
 
 ## Unreleased (toward 1.1.2 — 1.1.1 is tagged and live)
 
+M6 model setup (TUI-first, real paths):
+- New `ape_test_provider` tool: one minimal real call through the same
+  resolveModel + chat as the loop (success with latency/usage/cost, or
+  the honest upstream error). `ape_status` gains `provider_sources`
+  (provider + source + default model, no key material).
+- Pinned provider/model in the local config feeds `resolveModel`
+  between env and profile — no second resolution path.
+- TUI provider picker shared by onboarding step 2 and a Provider menu
+  item: choose, edit model, F5 tests, Enter saves. Status line shows
+  the model.
+
 TUI live-testing fixes from Windows PowerShell:
 - Double key events fixed: Windows emits Press+Release per key and the
   loop acted on both ("review" -> "rerevvieewew"). Release is now ignored

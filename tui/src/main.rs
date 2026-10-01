@@ -7,6 +7,7 @@ mod input;
 mod md;
 mod menu;
 mod onboard;
+mod provider;
 mod screens;
 #[cfg(test)]
 mod snap;
@@ -168,6 +169,7 @@ fn normalize_key(key: event::KeyEvent) -> Option<Key> {
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => Some(Key::AltEnter),
         KeyCode::Enter => Some(Key::Enter),
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Key::CtrlJ),
+        KeyCode::F(5) => Some(Key::F5),
         KeyCode::Esc => Some(Key::Esc),
         KeyCode::Backspace => Some(Key::Backspace),
         KeyCode::Delete => Some(Key::Backspace),
@@ -298,12 +300,12 @@ fn exec_onboard_effect(ob: &mut Onboard, ctx: &Ctx, fx: OnboardEffect) {
             };
             ob.apply_doctor(&text);
         }
-        LoadStatus => match ctx.tool("ape_status", "{}") {
+        LoadProviders => match ctx.tool("ape_status", "{}") {
             Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
-                Some(r) => ob.apply_status(r),
-                None => ob.apply_status(&serde_json::Value::Null),
+                Some(r) => ob.apply_providers(r),
+                None => ob.apply_providers(&serde_json::Value::Null),
             },
-            _ => ob.apply_status(&serde_json::Value::Null),
+            _ => ob.apply_providers(&serde_json::Value::Null),
         },
         LoadProfiles => match ctx.tool("ape_agent_profiles", "{}") {
             Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
@@ -314,6 +316,20 @@ fn exec_onboard_effect(ob: &mut Onboard, ctx: &Ctx, fx: OnboardEffect) {
         },
         SaveDefault(name) => {
             ape::save_default_profile(&name).ok();
+        }
+        SaveProvider { provider, model } => {
+            ape::save_provider_model(&provider, &model).ok();
+        }
+        TestProvider { provider, model } => {
+            let args = serde_json::json!({ "provider": provider, "model": model }).to_string();
+            match ctx.tool("ape_test_provider", &args) {
+                Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                    Some(r) => ob.apply_test(r),
+                    None => ob.apply_test(&serde_json::json!({"ok": false, "error": "no result envelope"})),
+                },
+                Err(e) => ob.apply_test(&serde_json::json!({"ok": false, "error": e})),
+                _ => {}
+            }
         }
         DemoStart => match ape::write_demo_profile() {
             Err(e) => ob.apply_demo_start_failed(format!("temp profile: {e}")),
@@ -373,6 +389,35 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
             },
             _ => menu.apply_status(&serde_json::Value::Null),
         },
+        MenuEffect::Provider(pfx) => {
+            use provider::ProviderEffect::*;
+            match pfx {
+                LoadProviders => match ctx.tool("ape_status", "{}") {
+                    Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                        Some(r) => menu.apply_providers_list(r),
+                        None => menu.apply_providers_list(&serde_json::Value::Null),
+                    },
+                    Err(e) => menu.apply_providers_list(&serde_json::json!({"provider_sources": [], "note": e})),
+                    _ => {}
+                },
+                Save { provider, model } => {
+                    if ape::save_provider_model(&provider, &model).is_ok() {
+                        menu.note_saved_model();
+                    }
+                }
+                Test { provider, model } => {
+                    let args = serde_json::json!({ "provider": provider, "model": model }).to_string();
+                    match ctx.tool("ape_test_provider", &args) {
+                        Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                            Some(r) => menu.apply_provider_test(r),
+                            None => menu.apply_provider_test(&serde_json::json!({"ok": false, "error": "no result envelope"})),
+                        },
+                        Err(e) => menu.apply_provider_test(&serde_json::json!({"ok": false, "error": e})),
+                        _ => {}
+                    }
+                }
+            }
+        }
         PrimeStatus => match ctx.tool("ape_status", "{}") {
             Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
                 Some(r) => menu.apply_status_quiet(r),
@@ -536,7 +581,8 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
         Step::Done => "Onboarding complete",
     };
     let footer = match ob.step {
-        Step::Doctor | Step::Provider => "[Enter] continue   [Esc] back   [Ctrl-C] quit",
+        Step::Doctor => "[Enter] continue   [Esc] back   [Ctrl-C] quit",
+        Step::Provider => "[↑/↓] provider · type model · [F5] test · [Enter] save+continue · [Esc] back",
         Step::Profile => "[↑/↓] move   [Enter] choose   [Esc] back",
         Step::Demo => match &ob.demo {
             onboard::DemoState::Polling { .. } => "[Esc] stop watching (run keeps going)",
@@ -575,7 +621,8 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
             }
         }
         Step::Provider => {
-            lines.push(Line::from(ob.provider.as_deref().unwrap_or("detecting…")));
+            let (body, _) = provider_lines(&ob.form);
+            lines.extend(body);
         }
         Step::Profile => {
             for (i, (name, desc)) in ob.profiles.iter().enumerate() {
@@ -903,6 +950,11 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
             }
             footer = "[any key] back to menu";
         }
+        ProviderForm(form) => {
+            let (body, hint) = provider_lines(form);
+            lines.extend(body);
+            footer = hint;
+        }
         ConsoleInfo => {
             lines.push(Line::from("browser console: run `ape-mcp serve` in another terminal,"));
             lines.push(Line::from("then open the printed URL (Live Trace, Runs, Ledger)."));
@@ -934,6 +986,52 @@ fn render_menu(menu: &Menu, f: &mut Frame) {
         Paragraph::new(menu.status_line(&tui_version())).alignment(Alignment::Center),
         chunks[2],
     );
+}
+
+/// Provider picker body shared by onboarding and the menu Provider view:
+/// detected rows, model editor with cursor, test state. Returns (lines,
+/// footer-hint); the caller picks the surrounding chrome.
+fn provider_lines(form: &provider::ProviderForm) -> (Vec<Line<'static>>, &'static str) {
+    use provider::TestState::*;
+    let mut lines: Vec<Line> = vec![];
+    if !form.loaded {
+        lines.push(Line::from("detecting providers…"));
+        return (lines, "[Esc] back");
+    }
+    if form.providers.is_empty() {
+        lines.push(Line::from("no provider detected — set a key (e.g. APE_ANTHROPIC_API_KEY) or run a local model."));
+        lines.push(Line::from("type a provider name below anyway, or Esc back."));
+    }
+    for (i, row) in form.providers.iter().enumerate() {
+        let style = if i == form.selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let saved = if row.saved { " · saved" } else { "" };
+        lines.push(Line::from(Span::styled(
+            format!("  {} — {}{}", row.name, row.source, saved),
+            style,
+        )));
+    }
+    lines.push(Line::from("model:"));
+    lines.extend(editor_lines(&form.editor));
+    match &form.test {
+        Idle => {}
+        Running => lines.push(Line::from("testing…")),
+        Ok { latency_ms, cost } => lines.push(Line::from(Span::styled(
+            format!("test ok in {latency_ms}ms · cost ${cost:.4}"),
+            Style::default().fg(Color::Green),
+        ))),
+        Failed { error } => lines.push(Line::from(Span::styled(
+            format!("test failed: {error}"),
+            Style::default().fg(Color::Red),
+        ))),
+    }
+    (
+        lines,
+        "[↑/↓] provider · type model · [F5] test · [Enter] save · [Esc] back",
+    )
 }
 
 /// Text-entry lines with the cursor block drawn at the real (line, column).
