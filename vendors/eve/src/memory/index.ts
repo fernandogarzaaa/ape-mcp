@@ -10,6 +10,7 @@ export type {
   PersistentMemory,
   RememberedScreen,
   SessionMemoryRecord,
+  SharedApplicationKnowledge,
 } from "./longTerm.js";
 export {
   appIdForUrl,
@@ -17,6 +18,7 @@ export {
   emptyApplicationMemory,
   FileMemoryStore,
   InMemoryStore,
+  memoryKeyFor,
   retainedKnowledge,
 } from "./longTerm.js";
 export type {
@@ -26,4 +28,27 @@ export type {
   ScreenNode,
   WorkingMemoryItem,
 } from "./memory.js";
-export { OperatorMemory, screenSignature } from "./memory.js";
+export { isAffordanceAvailable, OperatorMemory, screenSignature } from "./memory.js";
+export type {
+  CanonicalStateKind,
+  CanonicalStateProvenance,
+  CanonicalSurfaceIdentity,
+  QueryNormalization,
+  QueryParameterClassification,
+  QueryStateClassification,
+  QueryStatePolicy,
+  SensitiveStateOptions,
+} from "./surfaceIdentity.js";
+export {
+  canonicalFromPercept,
+  canonicalMatchBasis,
+  canonicalSurfaceId,
+  classifiedQuery,
+  classifyQueryDetailed,
+  DEFAULT_QUERY_STATE_POLICY,
+  sameState,
+  sameSurface,
+  sensitiveStateKey,
+  stableIdentityKey,
+  surfaceIdentity,
+} from "./surfaceIdentity.js";
