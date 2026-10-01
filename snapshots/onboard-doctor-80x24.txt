@@ -1,4 +1,4 @@
-┌Onboarding 1/4 · Doctor───────────────────────────────────────────────────────┐
+┌Onboarding 1/6 · Doctor───────────────────────────────────────────────────────┐
 │ok   ok    node>=22.5                                                         │
 │ok   ok    node:sqlite                                                        │
 │FAIL FAIL  vendors/adam                                                       │
@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                   [Enter] continue   [Esc] back   [Ctrl-C] quit
 
-                           provider: … · ape-mcp 1.1.1
+                        provider: unknown · ape-mcp 1.1.1

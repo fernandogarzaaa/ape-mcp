@@ -38,6 +38,10 @@ pub struct ProviderForm {
     edited: bool,
     last_default: String,
     pub test: TestState,
+    /// Set when Enter requested advance but a fresh test is still needed.
+    /// Cleared by any navigation/edit or when the test result lands.
+    pub pending_continue: bool,
+    last_tested: Option<(String, String)>,
 }
 
 impl ProviderForm {
@@ -50,6 +54,8 @@ impl ProviderForm {
             edited: false,
             last_default: String::new(),
             test: TestState::Idle,
+            pending_continue: false,
+            last_tested: None,
         }
     }
 
@@ -121,8 +127,34 @@ impl ProviderForm {
         })
     }
 
+    /// True when the last passing test covers exactly the current
+    /// provider+model (changing either invalidates it).
+    pub fn tested_current(&self) -> bool {
+        match (&self.last_tested, self.current()) {
+            (Some(tested), Some(cur)) => tested == &cur,
+            _ => false,
+        }
+    }
+
+    /// Consume a pending test-and-continue: Some(pin) exactly when a test
+    /// was requested via Enter and the passing result covers the current
+    /// selection. The caller saves the pin and advances.
+    pub fn take_pending_advance(&mut self) -> Option<(String, String)> {
+        // Consume only on success: a failed take must not eat the pending
+        // flag, or the later passing result finds nothing to advance.
+        if self.pending_continue && self.tested_current() {
+            self.pending_continue = false;
+            self.current()
+        } else {
+            None
+        }
+    }
+
     pub fn apply_test(&mut self, result: &serde_json::Value) {
         if result.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if let Some(cur) = self.current() {
+                self.last_tested = Some(cur);
+            }
             self.test = TestState::Ok {
                 latency_ms: result.get("latency_ms").and_then(|v| v.as_i64()).unwrap_or(0),
                 cost: result.get("cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -148,19 +180,35 @@ impl ProviderForm {
                     self.selected = (self.selected + 1).min(self.providers.len() - 1);
                     self.refill_model(saved);
                 }
+                self.pending_continue = false;
                 (vec![], false)
             }
             Key::Up | Key::Char('k') => {
                 self.selected = self.selected.saturating_sub(1);
                 self.refill_model(saved);
+                self.pending_continue = false;
                 (vec![], false)
             }
             Key::F5 => match self.current() {
-                Some((provider, model)) => (vec![ProviderEffect::Test { provider, model }], false),
+                Some((provider, model)) => {
+                    self.pending_continue = false;
+                    (vec![ProviderEffect::Test { provider, model }], false)
+                }
                 None => (vec![], false),
             },
             Key::Enter => match self.current() {
-                Some((provider, model)) => (vec![ProviderEffect::Save { provider, model }], true),
+                Some((provider, model)) => {
+                    if provider == "mock" {
+                        // Mock needs no test: save and continue directly.
+                        (vec![ProviderEffect::Save { provider, model }], true)
+                    } else if self.tested_current() {
+                        (vec![ProviderEffect::Save { provider, model }], true)
+                    } else {
+                        // Gate: test first, advance when it passes.
+                        self.pending_continue = true;
+                        (vec![ProviderEffect::Test { provider, model }], false)
+                    }
+                }
                 None => (vec![], false),
             },
             Key::Backspace => {
@@ -228,12 +276,42 @@ mod tests {
     }
 
     #[test]
-    fn enter_saves_current_test_runs() {
+    fn enter_gates_on_a_passing_test() {
+        let mut f = ProviderForm::new();
+        f.apply_providers(&status(), None); // opencode selected, untested
+        let (fx, done) = f.on_key(Key::Enter, None);
+        assert!(!done, "no advance before a passing test");
+        assert!(matches!(fx[0], ProviderEffect::Test { .. }));
+        f.apply_test(&serde_json::from_str(r#"{"ok":false,"error":"nope"}"#).unwrap());
+        assert_eq!(f.take_pending_advance(), None, "failed test advances nothing");
+        f.apply_test(&serde_json::from_str(r#"{"ok":true}"#).unwrap());
+        assert_eq!(
+            f.take_pending_advance(),
+            Some(("opencode".to_string(), "muse-spark".to_string()))
+        );
+        assert_eq!(f.take_pending_advance(), None, "single-shot");
+        // Mock skips the gate entirely.
+        let mut g = ProviderForm::new();
+        g.apply_providers(&status(), None);
+        g.on_key(Key::Down, None);
+        let (fx, done) = g.on_key(Key::Enter, None);
+        assert!(done);
+        assert!(matches!(fx[0], ProviderEffect::Save { .. }));
+    }
+
+    #[test]
+    fn enter_saves_after_test_or_immediately_for_mock() {
+        // Real provider: Enter tests; a second Enter after Ok saves.
         let mut f = ProviderForm::new();
         f.apply_providers(&status(), None);
         let (fx, done) = f.on_key(Key::Enter, None);
-        assert!(done);
+        assert!(!done);
+        assert!(matches!(fx[0], ProviderEffect::Test { .. }));
+        f.apply_test(&serde_json::from_str(r#"{"ok":true}"#).unwrap());
+        let (fx, done) = f.on_key(Key::Enter, None);
+        assert!(done, "tested pair saves on Enter");
         assert!(matches!(fx[0], ProviderEffect::Save { .. }));
+        // F5 tests explicitly without advancing.
         let (fx, done) = f.on_key(Key::F5, None);
         assert!(!done);
         assert!(matches!(fx[0], ProviderEffect::Test { .. }));

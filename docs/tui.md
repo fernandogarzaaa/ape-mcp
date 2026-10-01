@@ -55,7 +55,9 @@ Onboarding step 2 and the **Provider** menu item share one picker: detected
 providers with their source (environment, opencode session, claude code,
 codex, ollama/llama.cpp), a model field prefilled from the provider
 default, and **F5** for a one-call connection test (success with latency
-and cost, or the upstream error verbatim). Enter saves the
+and cost, or the upstream error verbatim). In onboarding, Enter on a real
+provider runs the test first and only advances on a pass; **mock** skips
+the gate explicitly. The menu picker saves freely. Enter saves the
 provider+model pin to the local config; runs and the CLI resolve through
 the same `resolveModel` (explicit overrides > env > pinned file >
 profile > auto-detect).
@@ -74,7 +76,7 @@ host makes available.)
 
 ## Status line
 
-`provider: X · profile: Y · ape-mcp V`: the version is embedded at build
+`provider: X · model: Y · profile: Z · ape-mcp V`: the version is embedded at build
 time from package.json (launcher env wins when present), so every launch
 path reports the release. The provider primes once per menu entry with a
 single `ape_status` call; unknown stays `unknown` until known. During a
@@ -87,11 +89,29 @@ A `model_error` outcome carrying a JSON payload renders its human fields
 expand away in the timeline. Step summaries are capped at 300 chars at
 write time (said on screen at full length).
 
+## Onboarding flow (re-runnable via Setup again or --onboard)
+
+Doctor → Provider → Profile → Connectors → First run → Done. Esc walks
+back at every step, never traps.
+
+- **Provider**: the shared picker. Real providers need a passing F5 test
+  to continue (Enter runs the test first); **mock** is an explicit labeled
+  choice that skips the gate and says mock everywhere. A failed test shows
+  the exact `$env:` / `setx` commands for providers that take env keys.
+- **Connectors**: lists configured connectors (web ships with APE).
+  Informational — any key continues, M8 starters land here.
+- **First run**: objective prefilled per profile with the profile's budget
+  shown, live polls while running, mock path labeled. A failed start
+  shows the error with Enter-to-retry (no provider claims — the mock demo
+  never needed a real model, and neither does this step when mock).
+- **Done**: provider/model/profile, data dir, where runs and ledger live.
+  Enter opens the menu, `r` jumps to Runs, `p` to Provider.
+
 ## Esc means different things on different screens
 
-- **Onboarding demo (step 4/4): Esc detaches.** The demo run keeps going
+- **Onboarding first run: Esc detaches.** The run keeps going
   server-side; the TUI just stops watching and returns to the menu. The
-  throwaway demo profile is deleted. Nothing is cancelled.
+  throwaway mock profile (mock path only) is deleted. Nothing is cancelled.
 - **Menu run view: Esc cancels.** The TUI calls `ape_agent_cancel`: the
   worker process is killed immediately (no graceful drain — a tool call
   already in flight is interrupted, not finished), the run row goes

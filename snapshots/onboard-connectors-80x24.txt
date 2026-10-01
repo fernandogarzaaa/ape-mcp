@@ -1,8 +1,8 @@
-┌Onboarding 2/6 · Provider─────────────────────────────────────────────────────┐
-│  opencode — opencode session                                                 │
-│  mock — builtin                                                              │
-│model:                                                                        │
-│> muse-spark█                                                                 │
+┌Onboarding 4/6 · Connectors───────────────────────────────────────────────────┐
+│1 connector(s) configured:                                                    │
+│  web (ships with APE)                                                        │
+│                                                                              │
+│skip for now is fine — starter connectors land here in M8.                    │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -18,6 +18,6 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-  [↑/↓] provider · type model · [F5] test · [Enter] save+continue · [Esc] back
+                          [Enter] continue   [Esc] back
 
-           provider: using opencode (opencode session) · ape-mcp 1.1.1
+                        provider: unknown · ape-mcp 1.1.1

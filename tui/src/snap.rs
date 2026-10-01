@@ -15,7 +15,7 @@
 mod snap_impl {
     use crate::input::Key;
     use crate::menu::{self, Menu, MenuView};
-    use crate::onboard::{DemoState, Onboard, Step};
+    use crate::onboard::{Onboard, Step};
     use crate::screens::render_welcome;
     use crate::{render_menu, render_onboard};
     use ratatui::{backend::TestBackend, Terminal};
@@ -138,26 +138,63 @@ mod snap_impl {
         assert_eq!(fx.len(), 1, "doctor->provider requests LoadProviders");
         ob.apply_providers(&canned_status());
         shot("onboard-provider", 80, 24, |f| render_onboard(&ob, f));
-        let _ = ob.on_key(Key::Enter);
-        ob.apply_profiles(canned_profiles());
+        // The gate holds Enter here (test first); snapshots drive states
+        // directly from here on — effects belong to the main loop.
+        ob.step = Step::Profile;
+        ob.apply_profiles(canned_profiles(), canned_limits());
         ob.on_key(Key::Down);
         for (w, h) in [(120u16, 40u16), (80u16, 24u16)] {
             shot("onboard-profile", w, h, |f| render_onboard(&ob, f));
         }
 
-        // --- Demo states.
-        for (name, demo) in [
-            ("onboard-demo-polling", DemoState::Polling { run_id: "run-abc123".to_string() }),
-            ("onboard-demo-failed", DemoState::Failed("no model provider detected".to_string())),
-            (
-                "onboard-demo-finished",
-                DemoState::Finished { summary: "status=done stop=explicit_final_answer steps=2 cost_usd=0".to_string() },
-            ),
-        ] {
+        // --- Connectors step.
+        {
             let mut ob = Onboard::new();
-            ob.step = Step::Demo;
-            ob.demo = demo;
-            shot(name, 80, 24, |f| render_onboard(&ob, f));
+            ob.step = Step::Connectors;
+            ob.apply_connectors(vec!["web".to_string()]);
+            shot("onboard-connectors", 80, 24, |f| render_onboard(&ob, f));
+        }
+        {
+            let mut ob = Onboard::new();
+            ob.step = Step::Connectors;
+            ob.apply_connectors(vec![]);
+            shot("onboard-connectors-empty", 80, 24, |f| render_onboard(&ob, f));
+        }
+
+        // --- First run: pre-start editor, polling, finished.
+        // Real key flow: Connectors Enter starts the run (mock here).
+        {
+            let mut ob = Onboard::new();
+            ob.step = Step::Connectors;
+            ob.chosen_profile = Some("repo-triage".to_string());
+            ob.profile_limits.insert(
+                "repo-triage".to_string(),
+                menu::ProfileLimits { max_steps: Some(12), max_usd: Some(0.5), max_tokens: Some(120000) },
+            );
+            let (fx, _) = ob.on_key(Key::Enter);
+            assert!(fx.iter().any(|e| matches!(e, crate::onboard::Effect::StartFirstRun { .. })));
+            assert_eq!(ob.step, Step::FirstRun);
+            for (w, h) in [(120u16, 40u16), (80u16, 24u16)] {
+                shot("onboard-firstrun", w, h, |f| render_onboard(&ob, f));
+            }
+        }
+        {
+            let mut ob = Onboard::new();
+            ob.step = Step::FirstRun;
+            ob.chosen_profile = Some("repo-triage".to_string());
+            ob.firstrun = crate::onboard::FirstRun::new("triage the inbox".to_string());
+            ob.firstrun.run_id = Some("run-abc123".to_string());
+            ob.apply_first_poll(
+                &serde_json::from_str(
+                    r#"{"run_id":"run-abc123","status":"running","step_count":1,"total_cost":0.01,"total_tokens":40,"steps":[{"step":1,"kind":"tool","tool":"skein.orchestrate","duration_ms":120,"tokens":40,"cost":0.01,"result_summary":"ok"}]}"#,
+                )
+                .unwrap(),
+            );
+            shot("onboard-firstrun-polling", 80, 24, |f| render_onboard(&ob, f));
+            ob.firstrun.finished = true;
+            let _ = ob.on_key(Key::Enter);
+            assert_eq!(ob.step, Step::Done);
+            shot("onboard-done", 80, 24, |f| render_onboard(&ob, f));
         }
 
         // --- Menu: real key flow down/down + enter into CheckId, typing.

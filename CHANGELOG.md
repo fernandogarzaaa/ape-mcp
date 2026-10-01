@@ -2,6 +2,17 @@
 
 ## Unreleased (toward 1.1.2 — 1.1.1 is tagged and live)
 
+M6.1 onboarding as a real setup flow (verified review first):
+- The old mock demo is gone (with its false "needs a working provider"
+  failure text — the mock run never needed one).
+- Provider step gates real providers on a passing F5 test (test-and-
+  continue); mock-only is explicit, labeled, and says mock in the status
+  line. Failed tests show exact $env/setx commands for env-key providers.
+- New Connectors step (informational inventory, room for M8), first real
+  run with per-profile sample objective + budget line + live polls (mock
+  path labeled), Done screen with provider/model/profile/data-dir and
+  r/p/Enter jumps. Re-runnable from the Setup again menu item.
+
 M6 model setup (TUI-first, real paths):
 - New `ape_test_provider` tool: one minimal real call through the same
   resolveModel + chat as the loop (success with latency/usage/cost, or

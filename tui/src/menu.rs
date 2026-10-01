@@ -4,7 +4,7 @@ use super::input::{Key, LineEditor};
 use crate::ape;
 use std::collections::HashMap;
 
-pub const MENU_ITEMS: [&str; 11] = [
+pub const MENU_ITEMS: [&str; 12] = [
     "Run an agent",
     "Check a run",
     "Profiles",
@@ -15,6 +15,7 @@ pub const MENU_ITEMS: [&str; 11] = [
     "Ledger",
     "Tasks",
     "Provider",
+    "Setup again",
     "Quit",
 ];
 
@@ -47,6 +48,7 @@ pub enum MenuEffect {
     LoadRuns,
     LoadLedger,
     LoadTasks,
+    Reonboard,
     Provider(super::provider::ProviderEffect),
     StartRun { profile: String, objective: String },
     FetchStatus(String),
@@ -177,7 +179,7 @@ impl LedgerFilter {
 
 /// Slash commands: (name, menu index, blurb). Enter on a match calls the
 /// SAME `goto_item` the menu uses — one implementation, two doors.
-pub const SLASH_ITEMS: [(&str, usize, &str); 7] = [
+pub const SLASH_ITEMS: [(&str, usize, &str); 8] = [
     ("profile", 0, "pick a profile and run"),
     ("runs", 6, "recent runs, open one live"),
     ("ledger", 7, "governance audit stream"),
@@ -185,7 +187,23 @@ pub const SLASH_ITEMS: [(&str, usize, &str); 7] = [
     ("status", 5, "versions, provider, engines"),
     ("doctor", 3, "environment checks"),
     ("provider", 9, "choose provider and model"),
+    ("setup", 10, "run setup again"),
 ];
+
+/// API-key env var for a provider, if it takes one from the environment.
+/// Session-based (opencode), keyless (mock, local), and unknown providers
+/// return None — the UI then says what to do instead of showing commands.
+pub fn key_env_for(provider: &str) -> Option<&'static str> {
+    match provider {
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "openai" => Some("OPENAI_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        "groq" => Some("GROQ_API_KEY"),
+        "nebius" => Some("APE_NEBIUS_API_KEY"),
+        "google" => Some("GOOGLE_API_KEY"),
+        _ => None,
+    }
+}
 
 /// Menu index for the current slash text, if it matches anything.
 pub fn slash_target(text: &str, sel: usize) -> Option<usize> {
@@ -651,6 +669,7 @@ impl Menu {
                         self.view = MenuView::ProviderForm(super::provider::ProviderForm::new());
                         (vec![MenuEffect::Provider(super::provider::ProviderEffect::LoadProviders)], false)
                     }
+                    10 => (vec![MenuEffect::Reonboard], false),
                     _ => (vec![], true),
         }
     }
@@ -1182,7 +1201,7 @@ mod tests {
     #[test]
     fn quit_entry_quits() {
         let mut m = Menu::new();
-        for _ in 0..10 {
+        for _ in 0..11 {
             m.on_key(Key::Char('j'));
         }
         let (_, quit) = m.on_key(Key::Enter);
@@ -1406,6 +1425,7 @@ mod tests {
             ("status", "versions, provider, engines"),
             ("doctor", "environment checks"),
             ("provider", "choose provider and model"),
+            ("setup", "run setup again"),
         ]);
         assert_eq!(slash_menu("/run"), vec![("runs", "recent runs, open one live")]);
         assert_eq!(slash_target("/doc", 0), Some(3));

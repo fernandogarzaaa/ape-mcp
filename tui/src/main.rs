@@ -208,7 +208,27 @@ fn handle_key(top: &mut Top, ctx: &Ctx, key: Key, force_onboard: bool) -> bool {
             match flow {
                 Flow::Stay => false,
                 Flow::Done => {
+                    ob.cleanup_demo_profile();
+                    let _ = ape::mark_onboarded();
                     *top = Top::Menu(Menu::new());
+                    false
+                }
+                Flow::DoneGoto(target) => {
+                    ob.cleanup_demo_profile();
+                    let _ = ape::mark_onboarded();
+                    let mut menu = Menu::new();
+                    match target {
+                        onboard::DoneGoto::Main => {}
+                        onboard::DoneGoto::Runs => {
+                            menu.view = MenuView::RunsList { runs: vec![], selected: 0, offset: 0, note: "loading runs…".to_string() };
+                            exec_menu_effect(&mut menu, ctx, MenuEffect::LoadRuns);
+                        }
+                        onboard::DoneGoto::Provider => {
+                            menu.view = MenuView::ProviderForm(provider::ProviderForm::new());
+                            exec_menu_effect(&mut menu, ctx, MenuEffect::Provider(provider::ProviderEffect::LoadProviders));
+                        }
+                    }
+                    *top = Top::Menu(menu);
                     false
                 }
                 Flow::ToWelcome => {
@@ -216,10 +236,7 @@ fn handle_key(top: &mut Top, ctx: &Ctx, key: Key, force_onboard: bool) -> bool {
                     false
                 }
                 Flow::ToMenu => {
-                    // Stop watching a running demo: the throwaway profile was
-                    // already loaded server-side, so deleting it is safe and
-                    // avoids leaking one file per abandoned watch.
-                    ob.apply_demo_finished();
+                    ob.cleanup_demo_profile();
                     *top = Top::Menu(Menu::new());
                     false
                 }
@@ -227,6 +244,12 @@ fn handle_key(top: &mut Top, ctx: &Ctx, key: Key, force_onboard: bool) -> bool {
         }
         Top::Menu(menu) => {
             let (fx, quit) = menu.on_key(key);
+            // Setup-again re-enters onboarding; check before executing so
+            // the menu borrow is dead when top is replaced.
+            if fx.iter().any(|f| matches!(f, MenuEffect::Reonboard)) {
+                *top = Top::Onboard(Onboard::new());
+                return false;
+            }
             for f in fx {
                 exec_menu_effect(menu, ctx, f);
             }
@@ -235,12 +258,12 @@ fn handle_key(top: &mut Top, ctx: &Ctx, key: Key, force_onboard: bool) -> bool {
     }
 }
 
-/// Effects that run without waiting for input (demo + run-progress polling).
+/// Effects that run without waiting for input (first-run + run-progress polling).
 fn drive_effects(top: &mut Top, ctx: &Ctx, last_poll: &mut Instant) {
-    // Demo polling (onboarding).
+    // First-run polling (onboarding): same 2s cadence as the demo had.
     if let Top::Onboard(ob) = top {
-        let run_id = match &ob.demo {
-            onboard::DemoState::Polling { run_id } => Some(run_id.clone()),
+        let run_id = match ob.step {
+            onboard::Step::FirstRun => ob.firstrun.run_id.clone(),
             _ => None,
         };
         if let Some(id) = run_id {
@@ -250,18 +273,7 @@ fn drive_effects(top: &mut Top, ctx: &Ctx, last_poll: &mut Instant) {
                     ctx.tool("ape_agent_status", &format!(r#"{{"run_id":{id:?}}}"#))
                 {
                     if let Some(r) = envelope_result(&v) {
-                        let status = r.get("status").and_then(|s| s.as_str()).unwrap_or("running");
-                        let summary = r
-                            .get("outcome")
-                            .and_then(|o| o.as_str())
-                            .unwrap_or("")
-                            .chars()
-                            .take(500)
-                            .collect::<String>();
-                        if ob.apply_demo_poll(status, &summary) {
-                            ob.apply_demo_finished();
-                            let _ = ape::mark_onboarded();
-                        }
+                        ob.apply_first_poll(r);
                     }
                 }
             }
@@ -309,10 +321,10 @@ fn exec_onboard_effect(ob: &mut Onboard, ctx: &Ctx, fx: OnboardEffect) {
         },
         LoadProfiles => match ctx.tool("ape_agent_profiles", "{}") {
             Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
-                Some(r) => ob.apply_profiles(onboard::profile_list(r)),
-                None => ob.apply_profiles(vec![]),
+                Some(r) => ob.apply_profiles(onboard::profile_list(r), onboard::profile_limits(r)),
+                None => ob.apply_profiles(vec![], Default::default()),
             },
-            _ => ob.apply_profiles(vec![]),
+            _ => ob.apply_profiles(vec![], Default::default()),
         },
         SaveDefault(name) => {
             ape::save_default_profile(&name).ok();
@@ -321,6 +333,9 @@ fn exec_onboard_effect(ob: &mut Onboard, ctx: &Ctx, fx: OnboardEffect) {
             ape::save_provider_model(&provider, &model).ok();
         }
         TestProvider { provider, model } => {
+            // Test-then-continue gate: run the tool, feed the result, then
+            // advance only if the passing result covers the current pick.
+            // Save happens here (not via SaveProvider) so one Enter completes.
             let args = serde_json::json!({ "provider": provider, "model": model }).to_string();
             match ctx.tool("ape_test_provider", &args) {
                 Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
@@ -330,35 +345,63 @@ fn exec_onboard_effect(ob: &mut Onboard, ctx: &Ctx, fx: OnboardEffect) {
                 Err(e) => ob.apply_test(&serde_json::json!({"ok": false, "error": e})),
                 _ => {}
             }
-        }
-        DemoStart => match ape::write_demo_profile() {
-            Err(e) => ob.apply_demo_start_failed(format!("temp profile: {e}")),
-            Ok(path) => {
-                let args = r#"{"profile":"ape-demo","objective":"onboarding demo"}"#.to_string();
-                match ctx.tool("ape_agent_run", &args) {
-                    Ok(BridgeResult::Json(v)) => {
-                        match envelope_result(&v)
-                            .and_then(|r| r.get("run_id"))
-                            .and_then(|s| s.as_str())
-                        {
-                            Some(id) => ob.apply_demo_started(id.to_string(), path),
-                            None => {
-                                std::fs::remove_file(&path).ok();
-                                ob.apply_demo_start_failed("no run_id in response".to_string());
-                            }
-                        }
-                    }
-                    Ok(_) => {
-                        std::fs::remove_file(&path).ok();
-                        ob.apply_demo_start_failed("unexpected response".to_string());
-                    }
-                    Err(e) => {
-                        std::fs::remove_file(&path).ok();
-                        ob.apply_demo_start_failed(e);
-                    }
+            if let Some((p, m)) = ob.take_pending_advance() {
+                ape::save_provider_model(&p, &m).ok();
+                ob.step = onboard::Step::Profile;
+                let next = ob.effects();
+                for fx in next {
+                    exec_onboard_effect(ob, ctx, fx);
                 }
             }
+        }
+        LoadConnectors => match ctx.tool("ape_connector_list", "{}") {
+            Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
+                Some(r) => {
+                    let names = r
+                        .get("connectors")
+                        .and_then(|c| c.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|c| c.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    ob.apply_connectors(names);
+                }
+                None => ob.apply_connectors(vec![]),
+            },
+            _ => ob.apply_connectors(vec![]),
         },
+        StartFirstRun { profile, objective, mock } => {
+            // Mock-only runs reuse the throwaway ape-demo profile and say so;
+            // real pins run the chosen profile with its own budget.
+            let use_profile = if mock {
+                match ape::write_demo_profile() {
+                    Ok(_) => "ape-demo".to_string(),
+                    Err(e) => {
+                        ob.firstrun.error = Some(format!("demo profile: {e}"));
+                        return;
+                    }
+                }
+            } else {
+                profile
+            };
+            let args = serde_json::json!({ "profile": use_profile, "objective": objective }).to_string();
+            match ctx.tool("ape_agent_run", &args) {
+                Ok(BridgeResult::Json(v)) => match envelope_result(&v)
+                    .and_then(|r| r.get("run_id"))
+                    .and_then(|s| s.as_str())
+                {
+                    Some(id) => {
+                        ob.firstrun.run_id = Some(id.to_string());
+                        ob.firstrun.error = None;
+                    }
+                    None => ob.firstrun.error = Some("start failed: no run_id in response".to_string()),
+                },
+                Ok(_) => ob.firstrun.error = Some("start failed: unexpected response".to_string()),
+                Err(e) => ob.firstrun.error = Some(format!("start failed: {e}")),
+            }
+        }
         // Polling and completion are driven by drive_effects / on_key.
         Complete => {}
     }
@@ -367,6 +410,9 @@ fn exec_onboard_effect(ob: &mut Onboard, ctx: &Ctx, fx: OnboardEffect) {
 fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
     use MenuEffect::*;
     match fx {
+        // Reonboard never reaches here: handle_key intercepts it to replace
+        // the whole stack. The arm exists so the match stays exhaustive.
+        Reonboard => {}
         LoadProfiles => match ctx.tool("ape_agent_profiles", "{}") {
             Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
                 Some(r) => menu.apply_profiles(onboard::profile_list(r), onboard::profile_limits(r)),
@@ -389,8 +435,7 @@ fn exec_menu_effect(menu: &mut Menu, ctx: &Ctx, fx: MenuEffect) {
             },
             _ => menu.apply_status(&serde_json::Value::Null),
         },
-        MenuEffect::Provider(pfx) => {
-            use provider::ProviderEffect::*;
+        MenuEffect::Provider(pfx) => {            use provider::ProviderEffect::*;
             match pfx {
                 LoadProviders => match ctx.tool("ape_status", "{}") {
                     Ok(BridgeResult::Json(v)) => match envelope_result(&v) {
@@ -574,23 +619,28 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
         .constraints([Constraint::Min(0), Constraint::Length(2), Constraint::Length(2)])
         .split(area);
     let title = match ob.step {
-        Step::Doctor => "Onboarding 1/4 · Doctor",
-        Step::Provider => "Onboarding 2/4 · Provider",
-        Step::Profile => "Onboarding 3/4 · Default profile (↑/↓ + Enter)",
-        Step::Demo => "Onboarding 4/4 · Demo run",
+        Step::Doctor => "Onboarding 1/6 · Doctor",
+        Step::Provider => "Onboarding 2/6 · Provider",
+        Step::Profile => "Onboarding 3/6 · Default profile (↑/↓ + Enter)",
+        Step::Connectors => "Onboarding 4/6 · Connectors",
+        Step::FirstRun => "Onboarding 5/6 · First run",
         Step::Done => "Onboarding complete",
     };
     let footer = match ob.step {
         Step::Doctor => "[Enter] continue   [Esc] back   [Ctrl-C] quit",
         Step::Provider => "[↑/↓] provider · type model · [F5] test · [Enter] save+continue · [Esc] back",
         Step::Profile => "[↑/↓] move   [Enter] choose   [Esc] back",
-        Step::Demo => match &ob.demo {
-            onboard::DemoState::Polling { .. } => "[Esc] stop watching (run keeps going)",
-            onboard::DemoState::Failed(_) => "[Enter] back to profiles, pick again",
-            onboard::DemoState::Finished { .. } => "[Enter] finish",
-            onboard::DemoState::Idle => "starting…",
-        },
-        Step::Done => "",
+        Step::Connectors => "[Enter] continue   [Esc] back",
+        Step::FirstRun => {
+            if ob.firstrun.run_id.is_none() {
+                "[←/→] move · [Enter] start run · [Esc] back"
+            } else if ob.firstrun.finished {
+                "[Enter] summary"
+            } else {
+                "[Esc] stop watching (run keeps going)"
+            }
+        }
+        Step::Done => "[Enter] menu   [r] runs   [p] provider",
     };
     let mut lines: Vec<Line> = vec![];
     match ob.step {
@@ -641,36 +691,92 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
                 }));
             }
         }
-        Step::Demo => {
-            use onboard::DemoState::*;
-            match &ob.demo {
-                Idle => lines.push(Line::from("starting demo run…")),
-                Polling { run_id } => {
-                    lines.push(Line::from(format!("demo running: {run_id}")));
-                    lines.push(Line::from("watching status — Esc cancels watching (the run keeps going)"));
+        Step::Connectors => {
+            if !ob.connectors_loaded {
+                lines.push(Line::from("checking connectors…"));
+            } else if ob.connectors.is_empty() {
+                lines.push(Line::from("no connectors configured."));
+                lines.push(Line::from(""));
+                lines.push(Line::from("one ships with APE: web (read-only Wikipedia)."));
+                lines.push(Line::from("skip for now is fine — starter connectors land here in M8."));
+            } else {
+                lines.push(Line::from(format!(
+                    "{} connector(s) configured:",
+                    ob.connectors.len()
+                )));
+                for name in &ob.connectors {
+                    let shipped = if name == "web" { " (ships with APE)" } else { "" };
+                    lines.push(Line::from(format!("  {name}{shipped}")));
                 }
-                Failed(e) => {
-                    lines.push(Line::from(Span::styled(
-                        format!("demo failed: {e}"),
-                        Style::default().fg(Color::Red),
-                    )));
-                    lines.push(Line::from(
-                        "the demo needs a working provider — press Enter to go back and pick again.",
-                    ));
+                lines.push(Line::from(""));
+                lines.push(Line::from("skip for now is fine — starter connectors land here in M8."));
+            }
+        }
+        Step::FirstRun => {
+            let fr = &ob.firstrun;
+            if fr.mock {
+                lines.push(Line::from(Span::styled(
+                    "mock-only path: throwaway mock run, no real model used.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+            if let Some(run_id) = &fr.run_id {
+                lines.push(Line::from(format!("run {run_id}:")));
+                for l in fr.polls.iter() {
+                    lines.push(Line::from(l.as_str()));
                 }
-                Finished { summary } => {
+                if fr.finished {
                     lines.push(Line::from(Span::styled(
-                        "demo finished — you have seen the whole loop:",
+                        "finished — Enter for the summary.",
                         Style::default().fg(Color::Green),
                     )));
-                    for l in summary.lines() {
-                        lines.push(Line::from(l.to_string()));
-                    }
+                }
+            } else {
+                if let Some(profile) = ob.chosen_profile.as_deref() {
+                    let budget = ob
+                        .profile_limits
+                        .get(profile)
+                        .map(|l| {
+                            format!(
+                                "{} · profile {profile}",
+                                menu::Budget {
+                                    limit_usd: l.max_usd,
+                                    limit_tokens: l.max_tokens,
+                                    limit_steps: l.max_steps,
+                                    ..Default::default()
+                                }
+                                .meter()
+                            )
+                        })
+                        .unwrap_or_else(|| format!("profile {profile} · limits unknown"));
+                    lines.push(Line::from(format!("objective ({budget}), Enter starts:")));
+                }
+                lines.extend(editor_lines(&fr.editor));
+                if let Some(e) = &fr.error {
+                    lines.push(Line::from(Span::styled(
+                        format!("start failed: {e} — Enter retries, Esc goes back."),
+                        Style::default().fg(Color::Red),
+                    )));
                 }
             }
         }
         Step::Done => {
-            lines.push(Line::from("onboarding complete. Opening menu…"));
+            let (prov, model) = ape::load_provider_model()
+                .map(|(p, m)| (p, m))
+                .unwrap_or_else(|| ("?".to_string(), "?".to_string()));
+            let dir = ape::data_dir();
+            lines.push(Line::from(Span::styled(
+                "setup complete — everything below is live.",
+                Style::default().fg(Color::Green),
+            )));
+            lines.push(Line::from(format!(
+                "provider: {prov} · model: {model} · profile: {}",
+                ob.chosen_profile.as_deref().unwrap_or("?")
+            )));
+            lines.push(Line::from(format!("data dir: {}", dir.display())));
+            lines.push(Line::from("runs + ledger live in that dir; poll any run by id."));
+            lines.push(Line::from(""));
+            lines.push(Line::from("[Enter] menu · [r] runs · [p] provider"));
         }
     }
     f.render_widget(
@@ -685,7 +791,7 @@ fn render_onboard(ob: &Onboard, f: &mut Frame) {
     f.render_widget(
         Paragraph::new(format!(
             "provider: {} · ape-mcp {}",
-            ob.provider.as_deref().unwrap_or("…"),
+            ob.provider.as_deref().unwrap_or("unknown"),
             tui_version(),
         ))
         .alignment(Alignment::Center),
@@ -1023,10 +1129,25 @@ fn provider_lines(form: &provider::ProviderForm) -> (Vec<Line<'static>>, &'stati
             format!("test ok in {latency_ms}ms · cost ${cost:.4}"),
             Style::default().fg(Color::Green),
         ))),
-        Failed { error } => lines.push(Line::from(Span::styled(
-            format!("test failed: {error}"),
-            Style::default().fg(Color::Red),
-        ))),
+        Failed { error } => {
+            lines.push(Line::from(Span::styled(
+                format!("test failed: {error}"),
+                Style::default().fg(Color::Red),
+            )));
+            // No key found: show the exact commands. Session/keyless
+            // providers get a what-to-do line instead of commands.
+            if let Some((provider, _)) = form.current() {
+                match menu::key_env_for(&provider) {
+                    Some(env) => {
+                        lines.push(Line::from(format!("this shell:  $env:{env}=\"sk-…\"")));
+                        lines.push(Line::from(format!("persistent: setx {env} \"sk-…\"  (new shells)")));
+                    }
+                    None => lines.push(Line::from(
+                        "this provider uses the host session or needs no key — check the provider itself.",
+                    )),
+                }
+            }
+        }
     }
     (
         lines,

@@ -9,8 +9,8 @@
 │  Ledger        │
 │  Tasks         │
 │  Provider      │
+│  Setup again   │
 │  Quit          │
-│                │
 │                │
 │                │
 │                │
