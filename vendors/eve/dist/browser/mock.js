@@ -1,3 +1,4 @@
+import { ADAPTER_VERSION } from "../core/versions.js";
 import { VISUAL_SURFACE } from "../surface/capabilities.js";
 /** A small but realistic demo app: landing → login → dashboard → settings. */
 export const DEMO_APP = {
@@ -126,6 +127,7 @@ export const DEMO_APP = {
 };
 export class MockAdapter {
     name = "mock";
+    version = ADAPTER_VERSION;
     /** Visual/spatial like a real browser, but never produces a screenshot. */
     capabilities = { ...VISUAL_SURFACE, canScreenshot: false };
     app;
