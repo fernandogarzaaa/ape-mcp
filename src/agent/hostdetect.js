@@ -151,6 +151,25 @@ export async function detectActiveProvider() {
   return envActive() ?? (await opencodeActive()) ?? claudeActive() ?? codexActive() ?? (await localProbe());
 }
 
+/// Every detectable provider with its source, for picker UIs. Keys are
+/// NEVER included (names + sources only). Order matches detection priority.
+export async function detectProviderSources() {
+  const out = [];
+  const seen = new Set();
+  const push = (entry) => {
+    if (entry && !seen.has(entry.provider)) {
+      seen.add(entry.provider);
+      out.push({ provider: entry.provider, source: entry.source, model: entry.model ?? null });
+    }
+  };
+  push(envActive());
+  push(await opencodeActive());
+  push(claudeActive());
+  push(codexActive());
+  push(await localProbe());
+  return out;
+}
+
 // --- stored credentials across hosts (used for explicit provider + best-effort fallback) ---
 export function storedCredentials() {
   const out = {};

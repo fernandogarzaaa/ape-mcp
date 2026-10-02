@@ -1,14 +1,15 @@
-//! Onboarding flow: Doctor → Provider → Profile → Demo → Done.
+//! Onboarding flow: Doctor → Provider → Profile → Connectors → FirstRun → Done.
 //! Pure state machine plus an [`Effect`] list the main loop executes
 //! (subprocess calls stay out of here so every transition is unit-testable).
 //!
 //! ```text
-//! Doctor --enter--> Provider --enter--> Profile --enter--> Demo --done--> Done
-//!   ^ (Esc)            ^ (Esc)            ^ (Esc)    ^ (Esc cancels watch)
-//!   └─ welcome      └─ Doctor          └─ Provider   └─ menu (run continues)
+//! Doctor --enter--> Provider --enter--> Profile --enter--> Connectors --any--> FirstRun --done--> Done
+//!   ^ (Esc)            ^ (Esc)            ^ (Esc)              ^ (Esc)             ^ (Esc detaches)
+//!   └─ welcome      └─ Doctor          └─ Provider         └─ Profile          └─ menu (run continues)
 //! ```
-//! Esc always goes back somewhere safe; no step is a trap. A failed demo
-//! returns to Profile so the user can retry instead of being stuck.
+//! Esc always goes back somewhere safe; no step is a trap. The Provider
+//! step gates real providers on a passing connection test; mock-only is an
+//! explicit, labeled choice.
 use super::input::Key;
 
 /// One parsed `ape-mcp doctor` line.
@@ -105,7 +106,8 @@ pub enum Step {
     Doctor,
     Provider,
     Profile,
-    Demo,
+    Connectors,
+    FirstRun,
     Done,
 }
 
@@ -113,19 +115,33 @@ pub enum Step {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     LoadDoctor,
-    LoadStatus,
+    LoadProviders,
     LoadProfiles,
+    LoadConnectors,
     SaveDefault(String),
-    DemoStart,
+    SaveProvider { provider: String, model: String },
+    TestProvider { provider: String, model: String },
+    StartFirstRun { profile: String, objective: String, mock: bool },
     Complete,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum DemoState {
-    Idle,
-    Polling { run_id: String },
-    Failed(String),
-    Finished { summary: String },
+/// First-run state: an objective editor plus the live poll view once the
+/// run starts. Mock-only runs use the throwaway ape-demo profile and say so.
+pub struct FirstRun {
+    pub editor: super::input::LineEditor,
+    pub run_id: Option<String>,
+    pub polls: Vec<String>,
+    pub mock: bool,
+    pub error: Option<String>,
+    pub finished: bool,
+}
+
+impl FirstRun {
+    pub fn new(objective: String) -> Self {
+        let mut editor = super::input::LineEditor::new();
+        editor.replace(&objective);
+        Self { editor, run_id: None, polls: vec![], mock: false, error: None, finished: false }
+    }
 }
 
 pub struct Onboard {
@@ -133,11 +149,16 @@ pub struct Onboard {
     pub doctor: Vec<DoctorLine>,
     pub doctor_loaded: bool,
     pub provider: Option<String>,
+    pub form: super::provider::ProviderForm,
     pub profiles: Vec<(String, String)>,
+    pub profile_limits: std::collections::HashMap<String, super::menu::ProfileLimits>,
     pub profiles_loaded: bool,
     pub selected: usize,
-    pub demo: DemoState,
-    pub demo_profile_path: Option<std::path::PathBuf>,
+    pub chosen_profile: Option<String>,
+    pub connectors: Vec<String>,
+    pub connectors_loaded: bool,
+    pub firstrun: FirstRun,
+    pub firstrun_started: bool,
 }
 
 impl Onboard {
@@ -147,11 +168,16 @@ impl Onboard {
             doctor: Vec::new(),
             doctor_loaded: false,
             provider: None,
+            form: super::provider::ProviderForm::new(),
             profiles: Vec::new(),
+            profile_limits: Default::default(),
             profiles_loaded: false,
             selected: 0,
-            demo: DemoState::Idle,
-            demo_profile_path: None,
+            chosen_profile: None,
+            connectors: vec![],
+            connectors_loaded: false,
+            firstrun: FirstRun::new(String::new()),
+            firstrun_started: false,
         }
     }
 
@@ -159,12 +185,9 @@ impl Onboard {
     pub fn effects(&mut self) -> Vec<Effect> {
         match self.step {
             Step::Doctor if !self.doctor_loaded => vec![Effect::LoadDoctor],
-            Step::Provider if self.provider.is_none() => vec![Effect::LoadStatus],
+            Step::Provider if !self.form.loaded => vec![Effect::LoadProviders],
             Step::Profile if !self.profiles_loaded => vec![Effect::LoadProfiles],
-            Step::Demo => match &self.demo {
-                DemoState::Idle => vec![Effect::DemoStart],
-                _ => vec![],
-            },
+            Step::Connectors if !self.connectors_loaded => vec![Effect::LoadConnectors],
             _ => vec![],
         }
     }
@@ -174,37 +197,62 @@ impl Onboard {
         self.doctor_loaded = true;
     }
 
-    pub fn apply_status(&mut self, result: &serde_json::Value) {
-        self.provider = Some(provider_summary(result));
+    pub fn apply_providers(&mut self, status: &serde_json::Value) {
+        self.form.apply_providers(status, crate::ape::load_provider_model());
+        self.provider = Some(provider_summary(status));
     }
 
-    pub fn apply_profiles(&mut self, profiles: Vec<(String, String)>) {
+    pub fn apply_test(&mut self, result: &serde_json::Value) {
+        self.form.apply_test(result);
+    }
+
+    pub fn apply_profiles(
+        &mut self,
+        profiles: Vec<(String, String)>,
+        limits: std::collections::HashMap<String, super::menu::ProfileLimits>,
+    ) {
         self.profiles = profiles;
+        self.profile_limits = limits;
         self.profiles_loaded = true;
         self.selected = 0;
     }
 
-    pub fn apply_demo_started(&mut self, run_id: String, profile_path: std::path::PathBuf) {
-        self.demo = DemoState::Polling { run_id };
-        self.demo_profile_path = Some(profile_path);
+    pub fn apply_connectors(&mut self, names: Vec<String>) {
+        self.connectors = names;
+        self.connectors_loaded = true;
     }
 
-    pub fn apply_demo_start_failed(&mut self, err: String) {
-        self.demo = DemoState::Failed(err);
-    }
-
-    /// Returns true when the demo reached a terminal state this call.
-    pub fn apply_demo_poll(&mut self, status: &str, summary: &str) -> bool {
-        if status != "running" {
-            self.demo = DemoState::Finished { summary: summary.to_string() };
+    /// Feed one `ape_agent_status` poll for the first run. Returns true on
+    /// reaching a terminal state (the step then waits for Enter to Done).
+    pub fn apply_first_poll(&mut self, status: &serde_json::Value) -> bool {
+        let state = status.get("status").and_then(|s| s.as_str()).unwrap_or("running");
+        let line = super::menu::status_text(status);
+        self.firstrun.polls.push(line.clone());
+        if self.firstrun.polls.len() > 12 {
+            self.firstrun.polls.drain(..self.firstrun.polls.len() - 12);
+        }
+        if state != "running" {
+            self.firstrun.finished = true;
             return true;
         }
         false
     }
 
-    pub fn apply_demo_finished(&mut self) {
-        if let Some(p) = self.demo_profile_path.take() {
-            std::fs::remove_file(p).ok();
+    /// Remove the throwaway ape-demo profile. Safe once the run started
+    /// (the worker already loaded it); keeps one file per abandoned watch
+    /// from leaking into the user profiles dir.
+    pub fn cleanup_demo_profile(&self) {
+        let p = crate::ape::data_dir().join("profiles").join("ape-demo.yaml");
+        std::fs::remove_file(p).ok();
+    }
+
+    /// Consume a pending test-and-continue after a passing test: the pin to
+    /// save, if the gate is satisfied. Single-shot.
+    pub fn take_pending_advance(&mut self) -> Option<(String, String)> {
+        if self.step == Step::Provider {
+            self.form.take_pending_advance()
+        } else {
+            None
         }
     }
 
@@ -220,17 +268,31 @@ impl Onboard {
                 Key::Esc => (vec![], Flow::ToWelcome),
                 _ => (vec![], Flow::Stay),
             },
-            Step::Provider => match key {
-                Key::Enter => {
-                    self.step = Step::Profile;
-                    (self.effects(), Flow::Stay)
-                }
-                Key::Esc => {
+            Step::Provider => {
+                if key == Key::Esc {
                     self.step = Step::Doctor;
-                    (vec![], Flow::Stay)
+                    return (vec![], Flow::Stay);
                 }
-                _ => (vec![], Flow::Stay),
-            },
+                let saved = crate::ape::load_provider_model();
+                let (fx, done) = self.form.on_key(key, saved);
+                let mut out = fx
+                    .into_iter()
+                    .map(|e| match e {
+                        super::provider::ProviderEffect::LoadProviders => Effect::LoadProviders,
+                        super::provider::ProviderEffect::Save { provider, model } => {
+                            Effect::SaveProvider { provider, model }
+                        }
+                        super::provider::ProviderEffect::Test { provider, model } => {
+                            Effect::TestProvider { provider, model }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if done {
+                    self.step = Step::Profile;
+                    out.extend(self.effects());
+                }
+                (out, Flow::Stay)
+            }
             Step::Profile => match key {
                 Key::Up | Key::Char('k') if self.selected > 0 => {
                     self.selected -= 1;
@@ -242,7 +304,8 @@ impl Onboard {
                 }
                 Key::Enter => {
                     if let Some((name, _)) = self.profiles.get(self.selected).cloned() {
-                        self.step = Step::Demo;
+                        self.chosen_profile = Some(name.clone());
+                        self.step = Step::Connectors;
                         let mut fx = vec![Effect::SaveDefault(name)];
                         fx.extend(self.effects());
                         (fx, Flow::Stay)
@@ -256,24 +319,140 @@ impl Onboard {
                 }
                 _ => (vec![], Flow::Stay),
             },
-            Step::Demo => match (&self.demo, key) {
-                (DemoState::Finished { .. }, Key::Enter | Key::Esc) => {
-                    self.step = Step::Done;
-                    (vec![Effect::Complete], Flow::Done)
-                }
-                // Esc stops watching; the run keeps going server-side and the
-                // main loop deletes the throwaway demo profile (already loaded).
-                (DemoState::Polling { .. }, Key::Esc) => (vec![], Flow::ToMenu),
-                // A failed demo is recoverable: back to Profile to retry.
-                (DemoState::Failed(_), Key::Enter | Key::Esc) => {
+            Step::Connectors => match key {
+                // Informational by design ("skip for now" is fine): any key
+                // continues, Esc goes back. M8 starters land on this step.
+                Key::Esc => {
                     self.step = Step::Profile;
                     (vec![], Flow::Stay)
                 }
-                _ => (vec![], Flow::Stay),
+                _ => {
+                    self.step = Step::FirstRun;
+                    self.start_firstrun();
+                    // Mock-only choices reuse the throwaway mock profile and
+                    // say so on screen; real pins run the chosen profile.
+                    let mock = self.saved_is_mock();
+                    self.firstrun.mock = mock;
+                    let fx = if mock {
+                        vec![Effect::StartFirstRun {
+                            profile: "ape-demo".to_string(),
+                            objective: self.firstrun.editor.text(),
+                            mock: true,
+                        }]
+                    } else if let Some(name) = self.chosen_profile.clone() {
+                        vec![Effect::StartFirstRun {
+                            profile: name,
+                            objective: self.firstrun.editor.text(),
+                            mock: false,
+                        }]
+                    } else {
+                        vec![]
+                    };
+                    (fx, Flow::Stay)
+                }
             },
-            Step::Done => (vec![], Flow::Done),
+            Step::FirstRun => {
+                if self.firstrun.run_id.is_none() {
+                    // Pre-start: editing keys + Enter starts, Esc goes back.
+                    match key {
+                        Key::Enter => {
+                            if self.firstrun.editor.is_empty() {
+                                return (vec![], Flow::Stay);
+                            }
+                            let mock = self.saved_is_mock();
+                            self.firstrun.mock = mock;
+                            let profile = if mock {
+                                "ape-demo".to_string()
+                            } else {
+                                match self.chosen_profile.clone() {
+                                    Some(n) => n,
+                                    None => return (vec![], Flow::Stay),
+                                }
+                            };
+                            let fx = vec![Effect::StartFirstRun {
+                                profile,
+                                objective: self.firstrun.editor.text(),
+                                mock,
+                            }];
+                            (fx, Flow::Stay)
+                        }
+                        Key::Esc => {
+                            self.step = Step::Connectors;
+                            (vec![], Flow::Stay)
+                        }
+                        Key::Backspace => {
+                            self.firstrun.editor.backspace();
+                            (vec![], Flow::Stay)
+                        }
+                        Key::AltEnter => {
+                            self.firstrun.editor.insert('\n');
+                            (vec![], Flow::Stay)
+                        }
+                        Key::Left => {
+                            self.firstrun.editor.move_left();
+                            (vec![], Flow::Stay)
+                        }
+                        Key::Right => {
+                            self.firstrun.editor.move_right();
+                            (vec![], Flow::Stay)
+                        }
+                        Key::Char(c) if !c.is_control() => {
+                            self.firstrun.editor.insert(c);
+                            (vec![], Flow::Stay)
+                        }
+                        _ => (vec![], Flow::Stay),
+                    }
+                } else if self.firstrun.finished {
+                    // Terminal: Enter shows the Done summary.
+                    self.step = Step::Done;
+                    (vec![Effect::Complete], Flow::Stay)
+                } else {
+                    // Watching: Esc detaches to the menu (run continues).
+                    if key == Key::Esc {
+                        (vec![], Flow::ToMenu)
+                    } else {
+                        (vec![], Flow::Stay)
+                    }
+                }
+            }
+            Step::Done => match key {
+                // Next steps: Enter opens the menu, r jumps to Runs, p to
+                // the Provider screen. Anything else also lands on the menu.
+                Key::Char('r') | Key::Char('R') => (vec![], Flow::DoneGoto(DoneGoto::Runs)),
+                Key::Char('p') | Key::Char('P') => (vec![], Flow::DoneGoto(DoneGoto::Provider)),
+                _ => (vec![], Flow::Done),
+            },
         }
     }
+
+    /// Whether the saved pin is mock-only (mock runs skip real setup).
+    fn saved_is_mock(&self) -> bool {
+        crate::ape::load_provider_model()
+            .map(|(p, _)| p == "mock")
+            .unwrap_or(false)
+    }
+
+    /// Prefill the first-run objective from the chosen profile.
+    fn start_firstrun(&mut self) {
+        let sample = match self.chosen_profile.as_deref() {
+            Some("fact-checker") => "Verify one claim with a live source, verdict first.",
+            Some("writer") => "Draft a three-paragraph brief from this objective.",
+            Some("deep-researcher") => "Research one question, cite sources, end with a verdict.",
+            _ => "Triage one small task end to end, then finish with a summary.",
+        };
+        self.firstrun = FirstRun::new(sample.to_string());
+        self.firstrun_started = false;
+    }
+}
+
+/// Where the flow goes after a keypress. `ToWelcome`/`ToMenu` unwind the
+/// whole onboarding stack; the main loop owns that transition.
+/// `DoneGoto` carries the Done screen's jump target into the menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoneGoto {
+    Main,
+    Runs,
+    Provider,
 }
 
 /// Where the flow goes after a keypress. `ToWelcome`/`ToMenu` unwind the
@@ -282,6 +461,7 @@ impl Onboard {
 pub enum Flow {
     Stay,
     Done,
+    DoneGoto(DoneGoto),
     ToWelcome,
     ToMenu,
 }
@@ -349,7 +529,21 @@ mod tests {
         let (fx, flow) = o.on_key(Key::Enter);
         assert_eq!(flow, Flow::Stay);
         assert_eq!(o.step, Step::Provider);
-        assert_eq!(fx, vec![Effect::LoadStatus]);
+        assert_eq!(fx, vec![Effect::LoadProviders]);
+    }
+
+    #[test]
+    fn provider_enter_saves_and_advances() {
+        let mut o = Onboard::new();
+        o.step = Step::Provider;
+        o.apply_providers(
+            &serde_json::from_str(r#"{"provider_sources":[{"provider":"mock","source":"builtin","default_model":"mock-model"}]}"#).unwrap(),
+        );
+        let (fx, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Stay);
+        assert_eq!(o.step, Step::Profile);
+        assert!(fx.iter().any(|e| matches!(e, Effect::SaveProvider { .. })), "saves pin, got {fx:?}");
+        assert!(fx.iter().any(|e| matches!(e, Effect::LoadProfiles)), "then loads profiles");
     }
 
     #[test]
@@ -382,71 +576,104 @@ mod tests {
         assert_eq!(o.selected, 1, "vim alias still works");
     }
 
-    #[test]
+    #[test]    #[test]
     fn esc_during_polling_exits_to_menu() {
         let mut o = Onboard::new();
-        o.step = Step::Demo;
-        o.demo = DemoState::Polling { run_id: "r".to_string() };
+        o.step = Step::FirstRun;
+        o.firstrun.run_id = Some("r".to_string());
         let (_, flow) = o.on_key(Key::Esc);
         assert_eq!(flow, Flow::ToMenu);
         // ...but Enter while polling does nothing (no accidental finish).
         let mut o2 = Onboard::new();
-        o2.step = Step::Demo;
-        o2.demo = DemoState::Polling { run_id: "r".to_string() };
+        o2.step = Step::FirstRun;
+        o2.firstrun.run_id = Some("r".to_string());
         let (_, flow2) = o2.on_key(Key::Enter);
         assert_eq!(flow2, Flow::Stay);
     }
 
     #[test]
-    fn failed_demo_returns_to_profile() {
+    fn start_failed_returns_to_editing() {
         let mut o = Onboard::new();
-        o.step = Step::Demo;
-        o.demo = DemoState::Failed("boom".to_string());
+        o.step = Step::FirstRun;
+        o.firstrun.error = Some("boom".to_string());
         let (_, flow) = o.on_key(Key::Enter);
-        assert_eq!(flow, Flow::Stay);
-        assert_eq!(o.step, Step::Profile);
-        o.step = Step::Demo;
-        o.demo = DemoState::Failed("boom".to_string());
+        assert_eq!(flow, Flow::Stay, "retries the start");
         let (_, flow) = o.on_key(Key::Esc);
-        assert_eq!(o.step, Step::Profile);
         assert_eq!(flow, Flow::Stay);
+        assert_eq!(o.step, Step::Connectors);
     }
 
     #[test]
-    fn profile_enter_saves_default_and_starts_demo() {
+    fn profile_enter_saves_default_and_goes_connectors() {
         let mut o = Onboard::new();
         o.step = Step::Profile;
         o.profiles = vec![("repo-triage".to_string(), "triage".to_string())];
         o.profiles_loaded = true;
         let (fx, flow) = o.on_key(Key::Enter);
         assert_eq!(flow, Flow::Stay);
-        assert_eq!(o.step, Step::Demo);
+        assert_eq!(o.step, Step::Connectors);
         assert!(fx.contains(&Effect::SaveDefault("repo-triage".to_string())));
-        assert!(fx.contains(&Effect::DemoStart));
+        assert_eq!(o.chosen_profile.as_deref(), Some("repo-triage"));
     }
 
     #[test]
-    fn demo_poll_marks_terminal() {
+    fn first_poll_marks_terminal() {
         let mut o = Onboard::new();
-        o.demo = DemoState::Polling { run_id: "r".to_string() };
-        assert!(!o.apply_demo_poll("running", ""));
-        assert!(o.apply_demo_poll("done", "ok"));
-        assert!(matches!(o.demo, DemoState::Finished { .. }));
+        let v: serde_json::Value = serde_json::from_str(r#"{"status":"running","outcome":""}"#).unwrap();
+        assert!(!o.apply_first_poll(&v));
+        let v: serde_json::Value = serde_json::from_str(r#"{"status":"done","outcome":"ok"}"#).unwrap();
+        assert!(o.apply_first_poll(&v));
+        assert!(o.firstrun.finished);
+        assert_eq!(o.firstrun.polls.len(), 2);
     }
 
     #[test]
-    fn demo_finish_requires_finished_state() {
+    fn finished_first_run_goes_done_on_enter() {
         let mut o = Onboard::new();
-        o.step = Step::Demo;
-        o.demo = DemoState::Finished { summary: "s".to_string() };
+        o.step = Step::FirstRun;
+        o.firstrun.run_id = Some("r".to_string());
+        o.firstrun.finished = true;
         let (fx, flow) = o.on_key(Key::Enter);
-        assert_eq!(flow, Flow::Done);
+        assert_eq!(flow, Flow::Stay);
+        assert_eq!(o.step, Step::Done);
         assert_eq!(fx, vec![Effect::Complete]);
-        // Polling demo does not finish on Enter.
+        // Polling run does not finish on Enter.
         let mut o2 = Onboard::new();
-        o2.step = Step::Demo;
-        o2.demo = DemoState::Polling { run_id: "r".to_string() };
+        o2.step = Step::FirstRun;
+        o2.firstrun.run_id = Some("r".to_string());
         let (_, flow2) = o2.on_key(Key::Enter);
         assert_eq!(flow2, Flow::Stay);
+    }
+
+    #[test]
+    fn done_keys_route() {
+        let mut o = Onboard::new();
+        o.step = Step::Done;
+        let (_, flow) = o.on_key(Key::Char('r'));
+        assert_eq!(flow, Flow::DoneGoto(DoneGoto::Runs));
+        let (_, flow) = o.on_key(Key::Char('p'));
+        assert_eq!(flow, Flow::DoneGoto(DoneGoto::Provider));
+        let (_, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Done);
+    }
+
+    #[test]
+    fn provider_gate_blocks_until_tested() {
+        let mut o = Onboard::new();
+        o.step = Step::Provider;
+        o.apply_providers(
+            &serde_json::from_str(r#"{"provider_sources":[{"provider":"opencode","source":"s","default_model":"m"}]}"#).unwrap(),
+        );
+        // Enter without a test runs one instead of advancing.
+        let (fx, flow) = o.on_key(Key::Enter);
+        assert_eq!(flow, Flow::Stay);
+        assert_eq!(o.step, Step::Provider);
+        assert!(fx.iter().any(|e| matches!(e, Effect::TestProvider { .. })));
+        // Failed test stays; passing test advances on take.
+        o.apply_test(&serde_json::from_str(r#"{"ok":false,"error":"nope"}"#).unwrap());
+        assert_eq!(o.take_pending_advance(), None);
+        o.apply_test(&serde_json::from_str(r#"{"ok":true}"#).unwrap());
+        let pin = o.take_pending_advance();
+        assert_eq!(pin, Some(("opencode".to_string(), "m".to_string())));
     }
 }

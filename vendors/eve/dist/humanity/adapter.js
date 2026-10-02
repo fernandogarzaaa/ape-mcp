@@ -28,6 +28,7 @@
  * source, no file metadata, no build information — a person handed a PDF
  * cannot see who generated it either.
  */
+import { ADAPTER_VERSION } from "../core/versions.js";
 import { getPersona } from "../personas/library.js";
 import { DOCUMENT_SURFACE, DOCUMENT_VERBS } from "../surface/capabilities.js";
 import { webPerceptFromKernel } from "../surface/kernelView.js";
@@ -37,6 +38,7 @@ import { wordCount } from "./types.js";
 export class HumanityAdapter {
     options;
     name = "humanity";
+    version = ADAPTER_VERSION;
     capabilities = { ...DOCUMENT_SURFACE, actionVerbs: DOCUMENT_VERBS };
     artifact = null;
     persona;

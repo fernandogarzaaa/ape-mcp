@@ -148,7 +148,15 @@ async function ensureSession() {
 }
 
 export async function adamCall(tool, args = {}, organismId = "default") {
-  const s = await ensureSession();
-  if (!s) return { _adam: "unavailable", tool, hint: "run `node scripts/fetch-adam.mjs` or `cargo build --release -p adam-mcp` in vendors/adam" };
-  return await s.invoke(tool, { ...args, organism_id: organismId });
+  // Never rejects: every failure mode resolves to an explicit _adam marker.
+  // A bare throw here used to surface as handler_failed with NO _adam field
+  // (seen once on CI: 26s then `undefined`), breaking the explicit-or-ok
+  // contract the tests and the TUI rely on.
+  try {
+    const s = await ensureSession();
+    if (!s) return { _adam: "unavailable", tool, hint: "run `node scripts/fetch-adam.mjs` or `cargo build --release -p adam-mcp` in vendors/adam" };
+    return await s.invoke(tool, { ...args, organism_id: organismId });
+  } catch (e) {
+    return { _adam: "rpc-error", tool, error: String(e?.message ?? e).slice(0, 200) };
+  }
 }

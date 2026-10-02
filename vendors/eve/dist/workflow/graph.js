@@ -1,11 +1,20 @@
-import { screenSignature } from "../memory/memory.js";
+import { sensitiveStateKey } from "../memory/surfaceIdentity.js";
 import { detectWorkflow } from "./detector.js";
 export class WorkflowGraph {
     nodes = new Map();
     transitions = new Map();
     lastSignature = null;
-    observe(percept, step, arrivedVia, errorPerceived) {
-        const signature = screenSignature(percept);
+    observe(percept, step, arrivedVia, errorPerceived, queryPolicy, formFill) {
+        // Workflow attribution uses the SENSITIVE state key (reviewer decision
+        // 1): query tabs, dialog text, validation-error states and form-fill
+        // states are distinct workflow nodes even when the stable layout is
+        // shared. Tried-marks and familiarity stay on the stable key inside
+        // OperatorMemory.
+        const signature = sensitiveStateKey(percept, {
+            errorSignal: errorPerceived,
+            queryPolicy,
+            formFill,
+        });
         let node = this.nodes.get(signature);
         const match = detectWorkflow(percept);
         if (!node) {

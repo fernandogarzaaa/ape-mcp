@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { buildApplicationMap, renderApplicationMapMarkdown } from "../appmap/index.js";
 import { validateBenchmarks } from "../benchmarks/index.js";
 import { createAdapter } from "../browser/index.js";
-import { calibrate, importHumanStudy, renderCalibrationMarkdown } from "../calibration/index.js";
+import { calibrate, importHumanStudy, renderCalibrationMarkdown, sanitizeHumanStudy, } from "../calibration/index.js";
 import { HeuristicCognition } from "../cognition/heuristicCognition.js";
 import { UtilityCognition } from "../cognition/utilityCognition.js";
 import { converse, DEMO_SUPPORT_BOT, HttpBackend, renderConversationMarkdown, ScriptedBackend, } from "../conversation/index.js";
@@ -373,9 +373,10 @@ export async function compareBuilds(input) {
     return { markdown, structured: { ...report } };
 }
 /**
- * Run a population, then predict the UX the wider user base will experience —
- * confusion, abandonment, onboarding failure, support contacts, and
- * accessibility barriers, each with a confidence interval.
+ * Run a population, then produce heuristic simulation estimates (NOT
+ * population inference) — confusion/abandonment simulation ranges,
+ * onboarding/accessibility estimates, and a heuristic support-contact
+ * scenario score, each with explicit provenance and calibration status.
  */
 export async function runPredictUX(input) {
     const study = await simulatePopulation(toPopulationOptions(input));
@@ -394,12 +395,16 @@ export async function runPredictUX(input) {
 /**
  * Calibrate EVE against a human study: load anonymized human traces from a
  * file, run a matching EVE population, and score the simulation's realism.
+ *
+ * The imported study is passed through `sanitizeHumanStudy` before use:
+ * ingestion trusts nothing about caller anonymization. Sanitization is
+ * deterministic and idempotent, so pre-sanitized files are unaffected.
  */
 export async function runCalibrate(input) {
     let human;
     try {
         const raw = await readFile(input.human_file, "utf8");
-        human = importHumanStudy(JSON.parse(raw));
+        human = sanitizeHumanStudy(importHumanStudy(JSON.parse(raw)));
     }
     catch (err) {
         throw new ToolInputError(`Could not read the human study at "${input.human_file}": ${err instanceof Error ? err.message : String(err)}`);
@@ -718,7 +723,7 @@ export async function runEveBenchTool(input) {
     const report = await runEveBench({ seed: input.seed, maxSteps: input.max_steps });
     return { markdown: truncate(renderEveBenchMarkdown(report)), structured: { ...report } };
 }
-/** Validate EVE against the known-quality benchmark apps (construct validity). */
+/** Validate EVE against the known-quality benchmark apps (internal discrimination regression — NOT human validation). */
 export async function runBenchmark(input) {
     const validation = await validateBenchmarks({ cognitive: input.cognitive });
     const structured = {
@@ -727,7 +732,7 @@ export async function runBenchmark(input) {
         results: validation.results.map((r) => ({ tier: r.tier, meanScore: r.meanScore })),
     };
     const markdown = [
-        "# EVE benchmark (construct validity)",
+        "# EVE benchmark (construct-discrimination regression — internal, not human validation)",
         "",
         ...validation.results.map((r) => `- **${r.tier}** — mean score ${r.meanScore}/100`),
         "",

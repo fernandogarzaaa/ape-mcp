@@ -1,8 +1,9 @@
 import { clamp01 } from "../core/random.js";
+import { utilityChoiceSet } from "./choiceSet.js";
 import { HeuristicCognition } from "./heuristicCognition.js";
 import { predictInteraction } from "./mentalModel.js";
 import { scoreAffordances } from "./salience.js";
-import { decisionWeights, evaluateUtilities, softmaxChoice, wantsVerification } from "./utility.js";
+import { decisionWeights, evaluateUtilities, softmaxChoice, softmaxDistribution, wantsVerification, } from "./utility.js";
 /**
  * Utility-based decision policy.
  *
@@ -24,11 +25,15 @@ export class UtilityCognition extends HeuristicCognition {
     }
     chooseAffordance(ctx, goalKeywords, _weights, effortBase, sig) {
         const { persona, emotion, memory } = ctx;
-        const scored = scoreAffordances(ctx, goalKeywords).filter((s) => {
-            if (s.risk >= 1 && persona.traits.riskTolerance < 0.2)
-                return false;
-            return true;
-        });
+        const allScored = scoreAffordances(ctx, goalKeywords);
+        const refused = allScored
+            .filter((s) => s.risk >= 1 && persona.traits.riskTolerance < 0.2)
+            .map((s) => ({
+            score: s,
+            reason: "risk-refused: destructive control below risk tolerance",
+        }));
+        const refusedSet = new Set(refused.map((r) => r.score));
+        const scored = allScored.filter((s) => !refusedSet.has(s));
         if (scored.length === 0)
             return null;
         const weights = decisionWeights(persona, emotion);
@@ -39,14 +44,31 @@ export class UtilityCognition extends HeuristicCognition {
                 : (el) => (memory.remembersFailure(sig, `click "${el.text.trim()}"`) ? -0.5 : 0),
         });
         // Only consider positive-utility candidates; if none, let the cascade
-        // fall through to scroll/backtrack.
+        // fall through to scroll/backtrack. Below-threshold alternatives are
+        // recorded as ineligible (never silently dropped from the evidence).
         const positive = utilities.filter((u) => u.utility > -0.5);
+        const belowThreshold = utilities
+            .filter((u) => u.utility <= -0.5)
+            .map((score) => ({
+            score,
+            reason: "below-threshold: utility at or under the candidacy cutoff",
+        }));
         if (positive.length === 0)
             return null;
         const chosen = softmaxChoice(positive, weights, () => ctx.rng.next());
         const el = chosen.element;
         memory.markTried(sig, el.text);
         this.lastPointer = { x: el.box.x + el.box.width / 2, y: el.box.y + el.box.height / 2 };
+        // Phase 3: record the true softmax distribution the sample came from.
+        // `softmaxDistribution` only reads; sampling still flows exclusively
+        // through `softmaxChoice` above, so decisions cannot shift.
+        const distribution = softmaxDistribution(positive, weights);
+        const choiceSet = utilityChoiceSet(positive, distribution.probabilities, distribution.temperature, positive.indexOf(chosen), refused, belowThreshold);
+        // Keyboard actuations (Tab/Enter) realize a click-candidate choice
+        // through a different action: the candidates were considered, but the
+        // SELECTED action lives outside the click set — selectedIndex null
+        // keeps that distinction explicit instead of mislabeling a press.
+        const pressChoiceSet = { ...choiceSet, selectedIndex: null };
         // Keyboard-only handling mirrors the base policy.
         if (persona.accessibility.keyboardOnly && !el.focused) {
             return {
@@ -59,6 +81,7 @@ export class UtilityCognition extends HeuristicCognition {
                     confidence: 0.75,
                 },
                 effort: effortBase + 0.1,
+                choiceSet: pressChoiceSet,
             };
         }
         if ((persona.accessibility.keyboardOnly || persona.traits.keyboardPreference > 0.7) &&
@@ -68,6 +91,7 @@ export class UtilityCognition extends HeuristicCognition {
                 rationale: `"${el.text.trim()}" is focused; Enter should activate it.`,
                 prediction: predictInteraction(el, "click", this.baseConfidence(ctx)),
                 effort: effortBase,
+                choiceSet: pressChoiceSet,
             };
         }
         const verify = wantsVerification(chosen.features.risk, emotion, persona);
@@ -84,6 +108,7 @@ export class UtilityCognition extends HeuristicCognition {
             rationale,
             prediction: predictInteraction(el, "click", this.baseConfidence(ctx)),
             effort: clamp01(effortBase + chosen.features.effort * 0.3 + (verify ? 0.15 : 0)),
+            choiceSet,
         };
     }
     lastPointer = null;
