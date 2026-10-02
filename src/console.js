@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { readFileSync, existsSync, readFileSync as r, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomBytes } from "node:crypto";
 import YAML from "yaml";
 import { dispatchCall, toolsList, discover } from "./server.js";
 import { dispatch } from "./dispatch.js";
@@ -12,7 +12,8 @@ import { dataDir } from "./trace.js";
 import { listRuns, getRun, runningCount, spendSince, stepsSince, maxStepId, resolveShareToken, consolePortFile } from "./runs.js";
 import { connectorList } from "./connectors.js";
 import { listProfiles, describeProfile, listProfileDetails, loadProfile } from "./agent/profiles.js";
-import { protectedResourceDoc, checkBearer } from "./auth.js";
+import { protectedResourceDoc } from "./auth.js";
+import { allowedHost } from "./http.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -80,19 +81,27 @@ operations:
   #   annotations: { readOnly: false, destructive: true }  # needs confirm
 `;
 
-// Console bearer: APE_CONSOLE_TOKEN wins when set (every /api/* route needs
-// Authorization: Bearer <token>); otherwise the shared APE_REQUIRE_AUTH /
-// APE_TOKENS gate applies (open by default on loopback).
+// Console bearer: APE_CONSOLE_TOKEN wins when set; otherwise a per-session
+// token minted at startup gates every /api/* route (read and write). There
+// is no open loopback default: possession of the token (embedded in the URL
+// the CLI opens, sent as Authorization: Bearer) is the credential.
+// Share routes keep their own token-scoped capability and stay open by design.
+const SESSION_TOKEN = process.env.APE_CONSOLE_TOKEN || randomBytes(32).toString("hex");
+export function consoleSessionToken() {
+  return SESSION_TOKEN;
+}
 function checkConsoleBearer(req) {
-  const tok = process.env.APE_CONSOLE_TOKEN;
-  if (tok) {
-    const hdr = String(req.headers["authorization"] || "");
-    const given = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
-    const a = Buffer.from(given, "utf8");
-    const b = Buffer.from(tok, "utf8");
-    return { ok: a.length === b.length && timingSafeEqual(a, b) };
+  const statics = String(process.env.APE_CONSOLE_TOKEN || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const hdr = String(req.headers["authorization"] || "");
+  const given = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
+  if (!given) return { ok: false };
+  const candidates = statics.length ? statics : [SESSION_TOKEN];
+  const a = Buffer.from(given, "utf8");
+  for (const cand of candidates) {
+    const b = Buffer.from(cand, "utf8");
+    if (a.length === b.length && timingSafeEqual(a, b)) return { ok: true };
   }
-  return checkBearer(req);
+  return { ok: false };
 }
 
 function consoleUnauthorized(res) {
@@ -100,8 +109,32 @@ function consoleUnauthorized(res) {
     "Content-Type": "application/json",
     "WWW-Authenticate": 'Bearer realm="ape-console"',
   });
-  const src = process.env.APE_CONSOLE_TOKEN ? "APE_CONSOLE_TOKEN" : "APE_TOKENS (with APE_REQUIRE_AUTH=1)";
+  const src = process.env.APE_CONSOLE_TOKEN ? "APE_CONSOLE_TOKEN" : "the per-session token in the console URL (after ?t=)";
   res.end(JSON.stringify({ error: "unauthorized", hint: `Set Authorization: Bearer <token from ${src}>` }));
+}
+
+// Security headers on every console response (shell, assets, API, share,
+// streams): strict CSP with no inline code and no remote hosts, plus
+// framing/MIME/referrer guards. The shell and share page load only
+// same-origin /app.js, /app.css, /share.js, /share.css.
+const SEC_HEADERS = {
+  "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "X-Frame-Options": "DENY",
+};
+
+// Host allowlist for the console server (DNS-rebinding guard): accept the
+// bound loopback address / localhost, or a host explicitly listed in
+// APE_ALLOWED_HOSTS. Anything else gets 403 before auth or dispatch, so a
+// browser reaching this server under an attacker domain gets nothing —
+// even though Origin-vs-Host comparison alone would pass there.
+function consoleHostAllowed(req, bindHost) {
+  const h = String(req.headers.host || "").split(":")[0].toLowerCase();
+  const loopback = new Set([String(bindHost || "").toLowerCase(), "127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
+  if (h && loopback.has(h)) return true;
+  if (process.env.APE_ALLOWED_HOSTS) return allowedHost(req);
+  return false;
 }
 
 function isLoopbackHost(h) {
@@ -129,17 +162,8 @@ function renderSharePage(run, share) {
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escHtml(title)}</title>
-<style>
-body{font-family:system-ui,sans-serif;max-width:960px;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fafafa}
-.badge{display:inline-block;padding:.2rem .6rem;border-radius:999px;background:#e8e8e8;font-weight:600}
-.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.5rem 1.5rem;margin:1rem 0}
-.meta div span{color:#666;font-size:.8rem;display:block}
-table{width:100%;border-collapse:collapse;font-size:.85rem;background:#fff}
-th,td{border:1px solid #ddd;padding:.4rem .5rem;text-align:left;vertical-align:top}
-th{background:#f0f0f0}
-pre{background:#111;color:#d6f5d6;padding:1rem;overflow:auto;font-size:.8rem}
-footer{margin-top:2rem;color:#888;font-size:.75rem}
-</style></head>
+<link rel="stylesheet" href="/share.css">
+</head>
 <body>
 <h1>${escHtml(title)}</h1>
 <p><span class="badge" id="run-status">${escHtml(run.status)}</span>
@@ -161,27 +185,7 @@ outcome: <strong>${escHtml(run.outcome_status ?? "")}</strong></p>
 <tbody>${rows || '<tr><td colspan="6">no steps recorded yet</td></tr>'}</tbody></table>
 ${receipt ? `<h2>Receipt</h2><pre>${escHtml(receipt)}</pre>` : ""}
 <footer>Read-only share link. It shows this run only and expires when the operator revokes it.</footer>
-<script>
-(function () {
-  var es;
-  try { es = new EventSource("stream"); } catch (e) { return; }
-  var rt = null;
-  function reloadSoon() {
-    if (rt) return;
-    rt = setTimeout(function () { location.reload(); }, 1500);
-  }
-  es.addEventListener("step", reloadSoon);
-  es.addEventListener("run", function (e) {
-    try {
-      var r = JSON.parse(e.data);
-      var el = document.getElementById("run-status");
-      if (el && r.status) el.textContent = r.status;
-      if (r.status && r.status !== "running") { es.close(); setTimeout(function () { location.reload(); }, 800); }
-      else reloadSoon();
-    } catch (err) { reloadSoon(); }
-  });
-})();
-</script>
+<script src="share.js" defer></script>
 </body></html>`;
 }
 
@@ -259,9 +263,20 @@ function serveRunStream(req, res, url, onlyRunId) {
 }
 
 export function startConsole({ port = 0, open = false, host } = {}) {
+  // Bind address known before the first request so the Host allowlist can
+  // close over it (same value listen() uses below).
+  const bindHost = host || process.env.APE_CONSOLE_HOST || "127.0.0.1";
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     const host = req.headers.host || "127.0.0.1";
+    // Security headers on every response (see SEC_HEADERS).
+    const rawWriteHead = res.writeHead.bind(res);
+    res.writeHead = (code, headers) => rawWriteHead(code, { ...SEC_HEADERS, ...(headers || {}) });
+    // Host allowlist first: rebinding guard, before auth or dispatch.
+    if (!consoleHostAllowed(req, bindHost)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "host-not-allowed" }));
+    }
     // CORS: same-origin only. The console shell calls its own origin; browsers
     // must never read this loopback service cross-origin (wildcard ACAO would
     // let any site that discovers the port drain runs/traces/ledger). Non-
@@ -290,6 +305,17 @@ export function startConsole({ port = 0, open = false, host } = {}) {
       const html = readFileSync(join(root, "console", "console.html"), "utf8");
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(html);
+    }
+    // Static client assets (no inline code, so the strict CSP holds).
+    if (req.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/share.js")) {
+      const file = url.pathname === "/app.js" ? "app.js" : "share.js";
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" });
+      return res.end(readFileSync(join(root, "console", file), "utf8"));
+    }
+    if (req.method === "GET" && (url.pathname === "/app.css" || url.pathname === "/share.css")) {
+      const file = url.pathname === "/app.css" ? "app.css" : "share.css";
+      res.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store" });
+      return res.end(readFileSync(join(root, "console", file), "utf8"));
     }
     // Share routes sit before the bearer gate on purpose: a share token is its
     // own bearer capability, scoped to exactly one run. Stream first (more
@@ -475,16 +501,19 @@ export function startConsole({ port = 0, open = false, host } = {}) {
     // the explicit remote-viewing switch. APE_CONSOLE_PORT pins the port
     // (default: ephemeral). The bound port is recorded in <dataDir>/console.port
     // so ape_agent_share can mint absolute share URLs from any process.
-    const bindHost = host || process.env.APE_CONSOLE_HOST || "127.0.0.1";
+    // Non-loopback binds without APE_CONSOLE_TOKEN keep working but every
+    // /api/* route now needs the per-session bearer (printed in the console
+    // URL); combine with APE_ALLOWED_HOSTS to restrict which Host values the
+    // server answers at all.
     const bindPort = port || Number(process.env.APE_CONSOLE_PORT || 0) || 0;
     server.listen(bindPort, bindHost, () => {
       const a = server.address();
       const actualPort = typeof a === "object" && a ? a.port : bindPort;
       try { writeFileSync(consolePortFile(), String(actualPort)); } catch { /* best effort */ }
-      if (!isLoopbackHost(bindHost) && !process.env.APE_CONSOLE_TOKEN && process.env.APE_REQUIRE_AUTH !== "1") {
-        console.error(`WARNING: APE console on ${bindHost}:${actualPort} has no bearer configured — /api/* is readable by anyone who reaches this port. Set APE_CONSOLE_TOKEN to protect it.`);
+      if (!isLoopbackHost(bindHost) && !process.env.APE_CONSOLE_TOKEN && !process.env.APE_ALLOWED_HOSTS) {
+        console.error(`WARNING: APE console on ${bindHost}:${actualPort} answers only loopback Host values unless APE_ALLOWED_HOSTS is set — /api/* needs the session bearer from the console URL.`);
       }
-      resolve({ server, port: actualPort, host: bindHost });
+      resolve({ server, port: actualPort, host: bindHost, token: consoleSessionToken() });
     });
   });
 }

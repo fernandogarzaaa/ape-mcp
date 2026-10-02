@@ -31,7 +31,6 @@ assets ships a TUI that can only build via cargo.
   `tui-pack-install` CI job proves both the script and the fallback.
 
 ## 1. Dry run on a pre-release tag (proves the workflow without publishing)
-
 ```powershell
 git tag v<VERSION>-rc.1
 git push origin v<VERSION>-rc.1
@@ -58,6 +57,29 @@ What to check (all in the repo's Actions tab):
 - Delete the rc release and tag only on explicit confirmation:
   `gh release delete v<VERSION>-rc.1 --yes` then
   `git push origin :v<VERSION>-rc.1` (and locally `git tag -d`).
+
+## 1b. Gate proof without any tag (manual dispatch, always dry-run)
+
+```powershell
+gh workflow run publish-npm --ref main -f tag=v<EXISTING> -f dry_run=true
+```
+
+This runs the `test` job, then parks `publish` at the `npm-publish`
+environment until a reviewer approves it in the Actions UI — approving
+proves the gate end to end. Notes:
+
+- Manual runs can never publish: dispatch forces `npm publish --dry-run`
+  (`dry_run=false` is rejected up front).
+- The version guard still applies: unless `<EXISTING>` matches
+  `package.json`, the run fails safe at the guard *after* approval. A
+  fully green dry run needs a tag whose version equals the tree — i.e.
+  run this again after tagging the real version (dispatch is dry-run,
+  so it stays safe).
+- Reading a red dry-run: if the tag is already live on npm, expect exit
+  1 with `You cannot publish over the previously published versions`
+  — even `--dry-run` checks availability against the registry. That
+  message IS the pass: the pipeline reached the publish step with valid
+  OIDC auth and the registry refused the overwrite, so nothing changed.
 
 ## 2. Tag the release
 

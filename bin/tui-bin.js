@@ -51,6 +51,13 @@ function buildLocal(fromRoot = root) {
 /// network, buildFn stubs cargo, log captures progress. Throws a human
 /// Error only when every path fails.
 export async function ensureTui({ fromRoot = root, fetchImpl = fetch, fetchBase = process.env.APE_TUI_FETCH_BASE || null, buildFn = null, log = () => {} } = {}) {
+  // Dev override wins over everything (prebuilt, download, cargo): a stale
+  // prebuilt can never shadow a fresh build. Documented escape hatch.
+  const override = process.env.APE_TUI_BIN;
+  if (override) {
+    if (!existsSync(override)) throw new Error(`APE_TUI_BIN points nowhere: ${override}`);
+    return override;
+  }
   const dest = tuiExePath(fromRoot);
   if (existsSync(dest)) return dest;
   log("ape: no prebuilt TUI found, fetching verified release binary…");
@@ -66,7 +73,16 @@ export async function ensureTui({ fromRoot = root, fetchImpl = fetch, fetchBase 
     log(`ape: TUI prebuilt ready (${r.bytes} bytes, checksum verified).`);
     return dest;
   }
-  log(`ape: ${r.reason}; building once via cargo…`);
+  log(`ape: ${r.reason}; trying a local cargo build…`);
+  if (!existsSync(join(fromRoot, "tui", "Cargo.toml"))) {
+    throw new Error(
+      "no TUI prebuilt and no TUI sources in this install. " +
+      "Fix one of: `npm install-scripts approve ape-mcp` then reinstall " +
+      "(fetches the verified prebuilt), download ape-tui-<platform> from the " +
+      "GitHub release into vendors/ape-tui/<platform>/, or run from a source " +
+      "checkout with a Rust toolchain."
+    );
+  }
   return (buildFn ?? (() => buildLocal(fromRoot)))();
 }
 

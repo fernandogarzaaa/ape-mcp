@@ -1,0 +1,9 @@
+body{font-family:system-ui,sans-serif;max-width:960px;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fafafa}
+.badge{display:inline-block;padding:.2rem .6rem;border-radius:999px;background:#e8e8e8;font-weight:600}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.5rem 1.5rem;margin:1rem 0}
+.meta div span{color:#666;font-size:.8rem;display:block}
+table{width:100%;border-collapse:collapse;font-size:.85rem;background:#fff}
+th,td{border:1px solid #ddd;padding:.4rem .5rem;text-align:left;vertical-align:top}
+th{background:#f0f0f0}
+pre{background:#111;color:#d6f5d6;padding:1rem;overflow:auto;font-size:.8rem}
+footer{margin-top:2rem;color:#888;font-size:.75rem}
