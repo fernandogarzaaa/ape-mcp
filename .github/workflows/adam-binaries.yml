@@ -49,7 +49,7 @@ jobs:
       group: release-assets
       cancel-in-progress: false
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist-adam
           merge-multiple: true
