@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                              [any key] back to menu
 
-                 provider: opencode · profile: … · ape-mcp 0.1.0
+provider: opencode · model: muse-spark-1.3-contributor-free · profile: code-revi

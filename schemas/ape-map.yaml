@@ -3,6 +3,7 @@
 
 tools:
   - { name: ape_status, from: [adam(genome/history), genesis(suites), eve(personas)], args: { organism_id: string }, out: { version, genome, engines, mods } }
+  - { name: ape_test_provider, from: [ape(provider resolution)], args: { provider, model }, out: { ok, provider, model, latency_ms, usage, cost_usd } }
   - { name: ape_remember, from: [adam(memory_store, real stdio)], args: { kind, content, origin, confidence, organism_id }, out: { _adam, result } }
   - { name: ape_recall, from: [adam(memory_query, real stdio)], args: { query, kind, top_k, organism_id }, out: { _adam, result } }
   - { name: ape_beliefs, from: [adam(beliefs, real stdio)], args: { statement, origin, organism_id }, out: { _adam, result } }

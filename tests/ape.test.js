@@ -92,6 +92,11 @@ test("ape_beliefs + genome route to vendored ADAM (real binary or explicit unava
   if (gr._adam === "ok") assert.equal(gr.tool, "adam_genome");
   else assert.ok(nonOk.includes(gr._adam), "explicit not silent: " + gr._adam);
 });
+test("adam-client: adamCall never rejects bare (always an _adam marker)", async () => {
+  const { adamCall } = await import("../src/adam-client.js");
+  const r = await adamCall("adam_beliefs", {});
+  assert.equal(typeof r._adam, "string", "explicit marker, got: " + JSON.stringify(r).slice(0, 200));
+});
 test("ape_remember persists through real adam-mcp when present", async () => {
   const r = await dispatchCall("ape_remember", { kind: "episodic", content: "test-marker", organism_id: "testorg" });
   const res = r.structuredContent.result;
@@ -129,7 +134,7 @@ test("zero silent stubs across the full tool list", async () => {
     assert.ok(["complete", "input_required"].includes(r.resultType), `${n} resultType=${r.resultType}`);
     const res = r.structuredContent?.result ?? {};
     if (res.error) {
-      assert.ok(["engine_not_configured", "unknown_tool", "handler_failed", "profile_not_found", "connector_not_found", "connector_unknown_operation", "missing_args", "run_not_found", "share_not_found", "claim_conflict", "claim_required", "not_claim_holder", "invalid_bundle", "unsupported_bundle_version", "no_checkpoint"].includes(res.error), `${n} honest error (${res.error})`);
+      assert.ok(["engine_not_configured", "unknown_tool", "handler_failed", "profile_not_found", "connector_not_found", "connector_unknown_operation", "missing_args", "run_not_found", "share_not_found", "claim_conflict", "claim_required", "not_claim_holder", "invalid_bundle", "unsupported_bundle_version", "no_checkpoint", "upstream_error", "provider_unavailable", "no_provider_detected"].includes(res.error), `${n} honest error (${res.error})`);
     }
   }
 });

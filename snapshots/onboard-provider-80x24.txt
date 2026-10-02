@@ -1,8 +1,8 @@
-┌Onboarding 2/4 · Provider─────────────────────────────────────────────────────┐
-│using opencode (opencode session)                                             │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+┌Onboarding 2/6 · Provider─────────────────────────────────────────────────────┐
+│  opencode — opencode session · saved                                         │
+│  mock — builtin                                                              │
+│model:                                                                        │
+│> muse-spark-1.3-contributor-free█                                            │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -18,6 +18,6 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-                  [Enter] continue   [Esc] back   [Ctrl-C] quit
+  [↑/↓] provider · type model · [F5] test · [Enter] save+continue · [Esc] back
 
-           provider: using opencode (opencode session) · ape-mcp 0.1.0
+           provider: using opencode (opencode session) · ape-mcp 1.1.2

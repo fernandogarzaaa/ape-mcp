@@ -2,6 +2,7 @@ import type { Point, Viewport } from "../core/types.js";
 import type { AdapterOptions, BrowserAdapter, RawSnapshot } from "./adapter.js";
 export declare class PuppeteerAdapter implements BrowserAdapter {
     readonly name = "puppeteer";
+    readonly version = "0.5.0";
     readonly capabilities: import("../surface/capabilities.js").SurfaceCapabilities;
     private browser;
     private page;

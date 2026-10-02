@@ -1,11 +1,11 @@
 ┌ APE ─────────────────────────────────────────────────────────────────────────┐
 │pick a profile (Esc back):                                                    │
-│  deep-researcher — Broad web research                                        │
-│  fact-checker — Verifies a single claim                                      │
-│  writer — Drafts prose                                                       │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+│  deep-researcher                                                             │
+│    Broad web research                                                        │
+│  fact-checker                                                                │
+│    Verifies a single claim                                                   │
+│  writer                                                                      │
+│    Drafts prose                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
                     [↑/↓] move   [Enter] choose   [Esc] back
 
-                    provider: … · profile: … · ape-mcp 0.1.0
+provider: unknown · model: muse-spark-1.3-contributor-free · profile: code-revie
