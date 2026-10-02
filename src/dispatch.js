@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,20 @@ export function skeinSrc() {
   return existsSync(V("skein/src/skein/cli.py")) ? V("skein/src") : null;
 }
 
+// Resolve a usable Python 3 interpreter for the vendored Skein CLI.
+// Honors APE_PYTHON first; otherwise probes "python" then "python3" so
+// systems without a bare `python` alias (most Linux distros, macOS) work.
+export function resolvePython() {
+  const cands = process.env.APE_PYTHON ? [process.env.APE_PYTHON] : ["python", "python3"];
+  for (const c of cands) {
+    try {
+      execFileSync(c, ["--version"], { stdio: "ignore", timeout: 10000 });
+      return c;
+    } catch { /* not usable, try next */ }
+  }
+  return null;
+}
+
 function ledgerSummary(entry) {
   try {
     const dir = process.env.APE_DATA_DIR || join(process.cwd(), ".ape");
@@ -122,7 +136,13 @@ export const dispatch = {
   async orchestrate({ op = "status", node = "", agent_id = "ape-mcp", title = "", goal = "", context = "", constraints = "", completion = "", depends_on = "" } = {}) {
     const s = skeinSrc();
     if (!s) return fail("skein", "vendors/skein/src missing");
-    const py = process.env.APE_PYTHON || "python";
+    const py = resolvePython();
+    if (!py) {
+      return {
+        op, node,
+        ...fail("skein", "No Python interpreter found. Set APE_PYTHON to a Python 3 executable, or install python3."),
+      };
+    }
     const map = {
       status: ["status"], graph: ["graph"],
       claim: ["claim", node, "--agent-id", agent_id],
@@ -146,6 +166,9 @@ export const dispatch = {
       cwd: process.cwd(),
       env: { ...process.env, PYTHONPATH: s },
     });
-    return { op, node, ...r };
+    // Surface the nested failure in the result so the tool envelope reports
+    // ok:false (server.js keys the envelope on result.error). Without this,
+    // a failed Skein spawn looks like a successful call with ok:false inside.
+    return { op, node, ...r, ...(r.ok ? {} : { error: "skein_failed" }) };
   },
 };

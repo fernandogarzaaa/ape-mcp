@@ -14,6 +14,11 @@ genesis audit --suite code --verifier "node harness.js {task_file} {completion_f
 # 3. Close the loop — evaluate the system AND assure the evaluator in one command:
 genesis trust examples/classification/evaluation.yaml --out ./trust
 genesis audit-evaluator examples/rag/evaluation.yaml --suite math
+
+# 4. Gate a release on a capability checkpoint, then open the evidence:
+genesis gate examples/agent-scope/evaluation.yaml --out ./release
+genesis report ./release/evaluation --html ./release/report.html
+# (every bundle already ships its own report.html — open it from file://)
 ```
 
 ## Zero-integration-cost adapters
@@ -147,6 +152,20 @@ genesis suites    list probe suites and the defect classes they cover
 evidence only when someone needs to prove it happened — recorded in a
 hash-chained, append-only, tamper-evident ledger (`src/ledger/`).
 
+### Install notes: the optional better-sqlite3 dependency
+
+The ledger backend is the optional `better-sqlite3` dependency. It is a native
+module: if its build is skipped or fails during `npm install`, npm drops it
+silently (it is optional) and ledger-backed features are unavailable. The CLI
+then reports a clear error instead of a crash, and ledger-backed tests skip
+themselves. To get the ledger in a restricted container where the native build
+fails (for example `node-gyp` permission errors), install without build
+scripts and then rebuild just that binding:
+
+```bash
+npm install --ignore-scripts && npm rebuild better-sqlite3
+```
+
 The `behavioral` suite judges against [EVE](https://github.com/fernandogarzaaa/experience-validation-engine)
 (the Experience Validation Engine) rather than a `{task_file}`/`{completion_file}`
 verifier command.
@@ -179,6 +198,18 @@ analysis: [./interp-note.md]  # external cross-checks copied into the bundle
 
 See `examples/agent-scope/` (rogue-baseline detection) and
 `benchmarks/safety-v1/`.
+
+## Multi-turn conversations + rater agreement
+
+Tasks may carry `turns`: the runner invokes the subject once per turn with
+accumulated history (`{message, done}` envelope, `max_turns` cap), judges
+the final message, and preserves the transcript as evidence (`mean_turns`
+measures loop length). See `examples/multiturn/` and `adapters/PROTOCOL.md`.
+
+Human evaluators accept a second judgments file (`judgments_secondary`)
+and report Cohen's κ (`fleissKappa` available for N-rater tables) in the
+evaluator description, arm results, bundles, and reports — so agreement
+between raters is visible before anyone trusts their verdicts.
 
 ## Documents
 
