@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
             [↑/↓] move   [Enter] open (live if running)   [Esc] back
 
-      provider: unknown · model: unknown · profile: unknown · ape-mcp 1.1.1
+provider: unknown · model: muse-spark-1.3-contributor-free · profile: code-revie

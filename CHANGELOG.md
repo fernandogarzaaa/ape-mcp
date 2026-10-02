@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (toward 1.1.2 — 1.1.1 is tagged and live)
+## 1.1.2
 
 O1 console security hardening (audit verification first):
 - The audit's XSS and auth claims checked out against v1.1.1: console.html

@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
        [↑/↓] pick   [Enter] jump   [Esc] back   [Alt+Enter/Ctrl+J] newline
 
-      provider: unknown · model: unknown · profile: unknown · ape-mcp 1.1.1
+provider: unknown · model: muse-spark-1.3-contributor-free · profile: code-revie

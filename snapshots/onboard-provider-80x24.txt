@@ -1,8 +1,8 @@
 ┌Onboarding 2/6 · Provider─────────────────────────────────────────────────────┐
-│  opencode — opencode session                                                 │
+│  opencode — opencode session · saved                                         │
 │  mock — builtin                                                              │
 │model:                                                                        │
-│> muse-spark█                                                                 │
+│> muse-spark-1.3-contributor-free█                                            │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -20,4 +20,4 @@
 └──────────────────────────────────────────────────────────────────────────────┘
   [↑/↓] provider · type model · [F5] test · [Enter] save+continue · [Esc] back
 
-           provider: using opencode (opencode session) · ape-mcp 1.1.1
+           provider: using opencode (opencode session) · ape-mcp 1.1.2
