@@ -1,9 +1,12 @@
+import { ADAPTER_VERSION } from "../core/versions.js";
 import { VISUAL_SURFACE } from "../surface/capabilities.js";
 import { importDriver } from "./driverLoader.js";
+import { mergeNativeDialogs, recordNativeDialog, } from "./nativeDialog.js";
 import { perceiveAcrossNavigation } from "./navigationRetry.js";
 import { PERCEPTION_SCRIPT } from "./perceptionScript.js";
 export class PuppeteerAdapter {
     name = "puppeteer";
+    version = ADAPTER_VERSION;
     capabilities = VISUAL_SURFACE;
     browser = null;
     page = null;
@@ -18,7 +21,11 @@ export class PuppeteerAdapter {
      * to start at all without `--no-sandbox`.
      */
     constructor(options = {}) {
-        this.options = { headless: options.headless ?? true, settleMs: options.settleMs ?? 400 };
+        this.options = {
+            headless: options.headless ?? true,
+            settleMs: options.settleMs ?? 400,
+            nativeDialogAction: options.nativeDialogAction ?? "dismiss",
+        };
         this.launchArgs = options.args ?? [];
     }
     async open(url, viewport) {
@@ -30,8 +37,13 @@ export class PuppeteerAdapter {
         this.page = await this.browser.newPage();
         await this.page.setViewport(viewport);
         this.page.on("dialog", (dialog) => {
-            this.pendingNativeDialogs.push(dialog.message());
-            void dialog.accept().catch(() => { });
+            // See PlaywrightAdapter: record-then-dismiss (safe default) so the
+            // dialog is cognition-visible without auto-accepting it (P0.2).
+            const autoHandled = recordNativeDialog(this.pendingNativeDialogs, dialog.message(), this.options.nativeDialogAction);
+            if (autoHandled === "accepted")
+                void dialog.accept().catch(() => { });
+            else
+                void dialog.dismiss().catch(() => { });
         });
         await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
         await sleep(this.options.settleMs);
@@ -40,11 +52,7 @@ export class PuppeteerAdapter {
         const page = this.requirePage();
         const snap = await perceiveAcrossNavigation(() => page.evaluate(PERCEPTION_SCRIPT), sleep);
         if (this.pendingNativeDialogs.length > 0) {
-            snap.dialogs = [
-                ...snap.dialogs,
-                ...this.pendingNativeDialogs.map((text) => ({ text, box: null })),
-            ];
-            this.pendingNativeDialogs = [];
+            snap.dialogs = mergeNativeDialogs(snap.dialogs, this.pendingNativeDialogs);
         }
         return snap;
     }

@@ -191,11 +191,24 @@ nothing here changes a default (phase-1) session.
 
 ### Long-term memory & learning
 
-- `interface PersistentMemory` — `load()`, `save(memory)`.
+- `interface PersistentMemory` — `load(appId, operatorId?)`,
+  `save(memory, operatorId?)`. Operator id namespaces profiles
+  (`SessionOptions.operatorId`, else legacy persona-name fallback); omit for
+  legacy shared behavior. Legacy bare-`appId` entries migrate on first load.
 - `InMemoryStore()`, `FileMemoryStore(path)` — implementations; pass as
-  `longTermMemory`.
-- `ApplicationMemory`, `emptyApplicationMemory()`,
+  `longTermMemory`. File saves are mutex-serialized and atomic (tmp + rename).
+- `ApplicationMemory`, `emptyApplicationMemory()`, `memoryKeyFor(appId, operatorId)`,
+  `SharedApplicationKnowledge` (explicitly shared product facts),
   `computeLearningMetrics(memory) → LearningMetrics`.
+- `stableIdentityKey(percept)` / `sensitiveStateKey(percept, opts?)` /
+  `sameSurface(a, b)` / `sameState(a, b, opts?)` — two-tier identity (stable
+  for memory, sensitive for workflow/outcomes); `classifiedQuery(url,
+  policy?)`, `QueryStatePolicy`, `DEFAULT_QUERY_STATE_POLICY` for semantic
+  query classification; `screenSignature(percept)` kept byte-identical,
+  `surfaceIdentity()` kept as a deprecated stable alias.
+- `assessGoal(...)` / `assessGoalOnPercepts(...)` — evidence-graded goal
+  completion (`GoalEvidence`: text-proxy → visual-confirmation →
+  state-transition / destination-state / workflow-terminal).
 
 ### Social & cultural overlays
 
@@ -219,6 +232,55 @@ nothing here changes a default (phase-1) session.
   `EXCELLENT_APP`, `AVERAGE_APP`, `BAD_APP`, `BenchmarkTier`.
 - `runCollaborative(scenario) → CollaborativeResult` — multi-operator
   handoff / approval chains.
+
+### Calibration substrate
+
+- `buildExperienceTrace(result, opts?) → ExperienceTrace` (+
+  `renderTraceJson` / `renderTraceJsonl`, `traceIdFor`, `stripPercept`) —
+  canonical ordered trajectory; records derive via `recordsFromTrace`.
+- `TaskSpec` (`planning/task.ts`): `taskId`, description, goal, success
+  signals, starting conditions, bounds, family; `normalizeTaskId`,
+  `matchTaskIds`, `resolveTaskId`. `SessionOptions.taskId/taskSpec` →
+  `SessionResult.taskId`.
+- `ChoiceSet` on `Decision` / `LoopIteration`: heuristic-ordered (no
+  probabilities) vs probabilistic (utility softmax) vs
+  deterministic-single; `heuristicChoiceSet`, `utilityChoiceSet`,
+  `softmaxDistribution`.
+- `CanonicalSurfaceIdentity`: human/EVE/agent references in one envelope;
+  `canonicalSurfaceId`, `canonicalMatchBasis`, `canonicalFromPercept`.
+- `BEHAVIOR_PARAMETERS`, `getParameter`, `parametersByClass`,
+  `snapshotParameters` — STRUCTURAL / EMPIRICAL / POLICY registry
+  (read-only in the frozen model).
+- `fingerprintEnvironment(opts?) → EnvironmentFingerprint` — available
+  values only, null elsewhere.
+- `alignTraces(human, eve) → TraceAlignment` (+ `importHumanSteps`,
+  `HumanStep`); `topKAgreement`, `brierScore`,
+  `spearmanRankCorrelation`, `transitionDivergenceL1`,
+  `meanLogDurationError` — pure metric vocabulary, not evidence.
+- `sampleDistribution(dist, size, seed)` + `PopulationDistribution`;
+  `simulatePopulation({ distribution })` for weighted rosters.
+- `RandomPolicy`, `GoalGreedyPolicy` — seeded deterministic baselines.
+- `RunSpec`, `pairedRunKey`, `isPairable` — variant pairing identity.
+- `ExperimentSpec`, `validateExperimentSpec`, `renderExperimentJson`.
+- `sanitizeHumanStudy` / `sanitizeHumanStep` / `sanitizeTraceUrl` /
+  `redactTextSecrets` — mandatory gate before accepting human data.
+
+### Calibration records & versions
+
+- `buildCalibrationRecords(result, opts?) → CalibrationRecord[]`,
+  `buildCalibrationDataset(result, opts?)`, `renderCalibrationRecordsJsonl(records)`.
+- `CalibrationRecord`: per-step seen/believed/predicted/done/happened +
+  per-section provenance + `behaviorModelVersion` / `parameterSetVersion` /
+  `surfaceAdapter` + `humanReference: HumanIterationReference | null`
+  (timestamps, intended/actual action, target, coordinates, durations,
+  corrections, recovery kinds — all optional, no future migration needed).
+- `BEHAVIOR_MODEL_VERSION`, `PARAMETER_SET_VERSION` (`core/versions.ts`) —
+  frozen v1; any bump restarts calibration from `uncalibrated`.
+- `ADAPTER_VERSION` (`core/versions.ts`, keep in sync with package.json);
+  every `BrowserAdapter` reports `version` (implementation only — never the
+  browser/driver/OS); `SessionResult.surfaceAdapter[/Version]` feeds the
+  record. `implementationRevision()` reads `EVE_IMPLEMENTATION_REVISION`
+  (build-stamped) or null.
 
 ## Core utilities
 
