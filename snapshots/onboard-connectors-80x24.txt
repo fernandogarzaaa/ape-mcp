@@ -1,0 +1,23 @@
+┌Onboarding 4/6 · Connectors───────────────────────────────────────────────────┐
+│1 connector(s) configured:                                                    │
+│  web (ships with APE)                                                        │
+│                                                                              │
+│skip for now is fine — starter connectors land here in M8.                    │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                          [Enter] continue   [Esc] back
+
+                        provider: unknown · ape-mcp 1.1.2

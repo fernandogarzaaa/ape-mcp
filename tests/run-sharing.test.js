@@ -162,9 +162,10 @@ test("console: share page serves the run's timeline without auth; 404s leak noth
       assert.equal(body.error, "share_not_found");
       assert.ok(!JSON.stringify(body).includes(idA), "404 leaks no run details");
     }
-    // Path traversal normalizes away from /share/* and hits the generic 404.
+    // Path traversal normalizes away from /share/* and hits the bearer gate
+    // (401 without a token) — either way it never reaches share logic.
     const trav = await fetch(`${base}share/../evil`);
-    assert.equal(trav.status, 404);
+    assert.ok([401, 404].includes(trav.status), `traversal -> 401/404, got ${trav.status}`);
 
     // Token-scoped SSE stream works without the console bearer.
     const ctrl = new AbortController();

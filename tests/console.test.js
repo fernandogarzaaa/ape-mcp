@@ -10,12 +10,16 @@ import { startConsole } from "../src/console.js";
 
 let base = null;
 let server = null;
+let auth = {};
+const withAuth = (extra = {}) => ({ ...extra, ...auth });
 
 test("console: boots and serves new observability endpoints", async () => {
   const started = await startConsole({ port: 0 });
   server = started.server;
   base = `http://127.0.0.1:${started.port}/`;
-  const get = async (p) => (await (await fetch(base + p)).json());
+  assert.ok(started.token, "server mints a per-session token");
+  auth = { Authorization: `Bearer ${started.token}` };
+  const get = async (p) => (await (await fetch(base + p, { headers: auth })).json());
 
   const tools = await get("api/tools");
   assert.ok(tools.tools.length >= 20, "tools listed");
@@ -40,28 +44,28 @@ test("console: boots and serves new observability endpoints", async () => {
   const one = await get("api/profile?name=repo-triage");
   assert.ok(one.yaml.includes("repo-triage"), "profile YAML served");
 
-  const bad = await (await fetch(base + "api/profile?name=../evil")).json();
+  const bad = await (await fetch(base + "api/profile?name=../evil", { headers: auth })).json();
   assert.ok(bad.error, "path traversal rejected");
 });
 
 test("console: profile save validates and round-trips", async () => {
   const yaml = "name: console-test-profile\ndescription: test\nmodel:\n  provider: mock\n  id: mock-model\nsystem: hi\ntools:\n  - builtin: finish\nlimits:\n  max_steps: 2\n";
   const r = await (await fetch(base + "api/profile/save", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({ name: "console-test-profile", yaml }),
   })).json();
   assert.equal(r.ok, true);
-  const back = await (await fetch(base + "api/profile?name=console-test-profile")).json();
+  const back = await (await fetch(base + "api/profile?name=console-test-profile", { headers: auth })).json();
   assert.ok(back.yaml.includes("console-test-profile"));
 
   const badYaml = await (await fetch(base + "api/profile/save", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({ name: "bad", yaml: "name: bad\nno-model-here: true\n" }),
   })).json();
   assert.ok(badYaml.error, "invalid profile rejected");
 
   const badName = await (await fetch(base + "api/profile/save", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({ name: "../../evil", yaml }),
   })).json();
   assert.ok(badName.error, "bad name rejected");
@@ -70,7 +74,7 @@ test("console: profile save validates and round-trips", async () => {
 test("console: connector save validates", async () => {
   const yaml = "name: console-test-conn\ndescription: test\nbase_url: https://example.com\negress_allow: [example.com]\noperations:\n  - name: ping\n    method: GET\n    path: /ping\n";
   const r = await (await fetch(base + "api/connector/save", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({ name: "console-test-conn", yaml }),
   })).json();
   assert.equal(r.ok, true);
@@ -93,7 +97,7 @@ test("console: runs/stream pushes run, step, and spend events", async () => {
   const seen = new Set();
   let reader = null;
   try {
-    const resp = await fetch(base + "api/runs/stream?since_step=0");
+    const resp = await fetch(base + "api/runs/stream?since_step=0", { headers: auth });
     reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -119,38 +123,43 @@ test("console: runs/stream pushes run, step, and spend events", async () => {
   assert.ok(seen.has("spend"), "spend event streamed");
 });
 
-test("console: bearer mode gates read APIs; CORS is same-origin only", async () => {
-  // checkBearer reads env per request, so no reboot is needed.
-  const prevAuth = process.env.APE_REQUIRE_AUTH;
-  const prevTokens = process.env.APE_TOKENS;
-  process.env.APE_REQUIRE_AUTH = "1";
-  process.env.APE_TOKENS = "test-token-xyz";
+test("console: session bearer gates every /api route; CORS stays same-origin only", async () => {
+  // Per-session token model: the token startConsole minted (no env needed).
+  const anon = await fetch(base + "api/runs");
+  assert.equal(anon.status, 401, "unauthenticated reads refused by default");
+  const authed = await fetch(base + "api/runs", { headers: auth });
+  assert.equal(authed.status, 200, "session bearer reads allowed");
+  const trace = await fetch(base + "api/trace");
+  assert.equal(trace.status, 401, "trace refused without bearer");
+  const call = await fetch(base + "api/call", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  assert.equal(call.status, 401, "writes still refused");
+  // Public allowlist stays public.
+  assert.equal((await fetch(base + ".well-known/oauth-protected-resource")).status, 200, "metadata public");
+  assert.equal((await fetch(base)).status, 200, "shell public");
+  // CORS: foreign origin gets no ACAO; same origin gets an echo.
   const host = new URL(base).host;
+  const evil = await fetch(base + "api/tools", { headers: { Origin: "https://evil.example" } });
+  assert.equal(evil.headers.get("access-control-allow-origin"), null, "no echo for foreign origins");
+  const same = await fetch(base + "api/tools", { headers: { Origin: `http://${host}`, ...auth } });
+  assert.equal(same.headers.get("access-control-allow-origin"), `http://${host}`, "same origin echoed");
+  assert.equal(same.status, 200);
+  const preflight = await fetch(base + "api/tools", { method: "OPTIONS", headers: { Origin: "https://evil.example" } });
+  assert.equal(preflight.status, 403, "foreign preflight refused");
+});
+
+test("console: APE_CONSOLE_TOKEN overrides the session token when set", async () => {
+  const prev = process.env.APE_CONSOLE_TOKEN;
+  process.env.APE_CONSOLE_TOKEN = "test-console-token-abc123";
   try {
     const anon = await fetch(base + "api/runs");
     assert.equal(anon.status, 401, "unauthenticated reads refused");
-    const authed = await fetch(base + "api/runs", { headers: { Authorization: "Bearer test-token-xyz" } });
-    assert.equal(authed.status, 200, "bearer reads allowed");
-    const trace = await fetch(base + "api/trace");
-    assert.equal(trace.status, 401, "trace refused without bearer");
-    const call = await fetch(base + "api/call", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    assert.equal(call.status, 401, "writes still refused");
-    // Public allowlist stays public.
-    assert.equal((await fetch(base + ".well-known/oauth-protected-resource")).status, 200, "metadata public");
-    assert.equal((await fetch(base)).status, 200, "shell public");
-    // CORS: foreign origin gets no ACAO; same origin gets an echo.
-    const evil = await fetch(base + "api/tools", { headers: { Origin: "https://evil.example" } });
-    assert.equal(evil.headers.get("access-control-allow-origin"), null, "no wildcard for foreign origins");
-    const same = await fetch(base + "api/tools", { headers: { Origin: `http://${host}`, Authorization: "Bearer test-token-xyz" } });
-    assert.equal(same.headers.get("access-control-allow-origin"), `http://${host}`, "same origin echoed");
-    assert.equal(same.status, 200);
-    const preflight = await fetch(base + "api/tools", { method: "OPTIONS", headers: { Origin: "https://evil.example" } });
-    assert.equal(preflight.status, 403, "foreign preflight refused");
+    const wrong = await fetch(base + "api/runs", { headers: { Authorization: "Bearer wrong" } });
+    assert.equal(wrong.status, 401, "wrong bearer refused");
+    const ok = await fetch(base + "api/runs", { headers: { Authorization: "Bearer test-console-token-abc123" } });
+    assert.equal(ok.status, 200, "static bearer allowed");
   } finally {
-    if (prevAuth === undefined) delete process.env.APE_REQUIRE_AUTH;
-    else process.env.APE_REQUIRE_AUTH = prevAuth;
-    if (prevTokens === undefined) delete process.env.APE_TOKENS;
-    else process.env.APE_TOKENS = prevTokens;
+    if (prev === undefined) delete process.env.APE_CONSOLE_TOKEN;
+    else process.env.APE_CONSOLE_TOKEN = prev;
   }
 });
 

@@ -72,8 +72,23 @@ export declare function evaluateUtilities(scored: readonly SalienceScore[], weig
  * Softmax choice over utilities. Temperature shrinks as urgency rises —
  * pressured humans behave more deterministically (Easterbrook 1959,
  * attentional narrowing under arousal).
+ *
+ * NOTE (frozen model v1.0.0): the arithmetic below is byte-pinned. Do not
+ * "simplify" it against `softmaxDistribution` — the two orderings can
+ * differ in last-ulp edge cases, which would silently reseed trajectories.
  */
 export declare function softmaxChoice(candidates: readonly UtilityScore[], weights: DecisionWeights, sample: () => number): UtilityScore;
+/**
+ * The softmax distribution itself (temperature + probabilities) using the
+ * same formula inputs as {@link softmaxChoice}. Exposed so the utility
+ * policy can RECORD the probabilities it acted on (Phase 3) — the
+ * distribution the sample came from, never synthesized. Recording-only:
+ * choice still flows exclusively through `softmaxChoice`.
+ */
+export declare function softmaxDistribution(candidates: readonly UtilityScore[], weights: DecisionWeights): {
+    temperature: number;
+    probabilities: readonly number[];
+};
 /**
  * Should the operator double-check before this action? Low-trust operators
  * verify consequential actions (Lee & See 2004: distrust induces monitoring).

@@ -85,11 +85,13 @@ if (args.includes("--http")) {
   const started = await startHttp({ port, host: bind.host });
   console.log(`ape-mcp http on http://${started.host}:${started.port}`);
 } else if (cmd === "console" || (!cmd && process.stdin.isTTY)) {
-  const { port, host } = await startConsole({ port: 0 });
+  const { port, host, token } = await startConsole({ port: 0 });
   // Bind may be 0.0.0.0 (explicit remote-viewing switch via APE_CONSOLE_HOST);
   // the browser still opens the loopback URL, which always works locally.
+  // The per-session token rides in the URL once; the page strips it from the
+  // address bar and sends it as Authorization: Bearer afterwards.
   const dialHost = host === "0.0.0.0" ? "127.0.0.1" : host;
-  const url = `http://${dialHost}:${port}/`;
+  const url = `http://${dialHost}:${port}/?t=${token}`;
   console.log(`APE console: ${url}`);
   console.log(`MCP: stdio via 'ape-mcp' | http via 'ape-mcp --http 8787'`);
   openBrowser(url);
@@ -107,9 +109,9 @@ if (args.includes("--http")) {
   }
 } else if (cmd === "serve") {
   const noOpen = rest.includes("--no-open");
-  const { port, host } = await startConsole({ port: 0 });
+  const { port, host, token } = await startConsole({ port: 0 });
   const dialHost = host === "0.0.0.0" ? "127.0.0.1" : host;
-  const url = `http://${dialHost}:${port}/`;
+  const url = `http://${dialHost}:${port}/?t=${token}`;
   console.log(url);
   if (!noOpen) openBrowser(url);
   setInterval(() => {}, 1 << 30);
@@ -158,6 +160,10 @@ if (args.includes("--http")) {
     ["vendors/adam", existsSync(join(root, "vendors/adam/crates"))],
     ["vendors/skein", existsSync(join(root, "vendors/skein/src/skein/cli.py"))],
     ["console.html", existsSync(join(root, "console/console.html"))],
+    ["console/app.js (no inline scripts)", existsSync(join(root, "console/app.js"))],
+    ["console/app.css", existsSync(join(root, "console/app.css"))],
+    ["console/share.js", existsSync(join(root, "console/share.js"))],
+    ["console/share.css", existsSync(join(root, "console/share.css"))],
   ];
   let fail = 0;
   for (const [n, ok] of checks) { console.log((ok ? "ok  " : "FAIL") + "  " + n); if (!ok) fail++; }

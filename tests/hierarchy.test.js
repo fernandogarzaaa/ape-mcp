@@ -55,6 +55,7 @@ test("hierarchy: node-add creates plan nodes visible in status", async () => {
   });
   const res = r.structuredContent.result;
   assert.ok(!res.error, "node added, got: " + JSON.stringify(res).slice(0, 200));
+  assert.ok(res.ok, "nested orchestrate result reports ok:true, got: " + JSON.stringify(res).slice(0, 200));
   const st = await dispatchCall("ape_orchestrate", { op: "status" });
   const text = JSON.stringify(st.structuredContent.result);
   assert.ok(text.includes("h-plan-1"), "plan node inspectable before execution");
@@ -64,6 +65,7 @@ test("hierarchy: claim and release round-trip through the tool", async () => {
   await dispatchCall("ape_orchestrate", { op: "node-add", node: "h-claim-1", title: "Claim me" });
   const c = await dispatchCall("ape_orchestrate", { op: "claim", node: "h-claim-1", agent_id: "ape-mcp" });
   assert.ok(!JSON.stringify(c.structuredContent.result).includes("error"), "claimed: " + JSON.stringify(c.structuredContent.result).slice(0, 160));
+  assert.ok(c.structuredContent.result.ok, "claim result reports ok:true, got: " + JSON.stringify(c.structuredContent.result).slice(0, 160));
   const held = JSON.stringify((await dispatchCall("ape_orchestrate", { op: "status" })).structuredContent.result);
   assert.ok(held.includes("ape-mcp"), "lease holder visible");
   const rel = await dispatchCall("ape_orchestrate", { op: "release", node: "h-claim-1" });

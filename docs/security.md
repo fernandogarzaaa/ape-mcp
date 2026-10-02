@@ -38,10 +38,68 @@ explicitly confirmed. Inside an agent loop (which cannot answer elicitations):
 
 ## Auth (local-first)
 
-- HTTP surface is open on loopback by default (v1).
-- Opt-in bearer enforcement: `APE_REQUIRE_AUTH=1 APE_TOKENS=<csv>`. RFC 9728
-  well-known document at `GET /.well-known/oauth-protected-resource`.
+- MCP surface: opt-in bearer enforcement (`APE_REQUIRE_AUTH=1
+  APE_TOKENS=<csv>`, open on loopback by default, v1). RFC 9728 well-known
+  document at `GET /.well-known/oauth-protected-resource`.
+- Console surface (`src/console.js`): **always authenticated**. At startup the
+  server mints a per-session token (or uses `APE_CONSOLE_TOKEN` when set);
+  every `/api/*` route — read and write — requires it as
+  `Authorization: Bearer`, else 401. The CLI opens `/?t=<token>`; the page
+  strips it from the address bar and keeps it in memory only. Share routes
+  keep their own token-scoped capability and stay bearer-free by design.
 - Future IdP: `APE_AUTH_SERVERS='["https://idp.example.com"]'`.
+
+## Console web security (O1)
+
+Threat: the console renders connector responses, profile/connector names,
+and run data that are attacker-influenced. Defenses, all tested in
+`tests/console-security.test.js` with hostile fixtures:
+
+- **No HTML-string rendering**: `console/app.js` builds every row with
+  `textContent`/`createElement`; actions ride `data-*` attributes with
+  delegated listeners. No `innerHTML`, no inline `onclick`. The server
+  preserves API payloads byte-for-byte (so exports stay faithful); escaping
+  happens at render. The share page was already escaped and is pinned by a
+  guard test; the run export (`ape_agent_export`) is JSON, not HTML.
+- **Strict CSP + headers on every console response** (shell, assets, API,
+  share, streams): `default-src 'none'; script-src 'self'; style-src
+  'self'; connect-src 'self'; …; frame-ancestors 'none'`, plus
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+  `X-Frame-Options: DENY`. Inline scripts/styles were externalized to
+  `/app.js`, `/app.css`, `/share.js`, `/share.css`.
+- **Host allowlist on the console** (same `APE_ALLOWED_HOSTS` mechanism as
+  `/mcp`): only the bound loopback address, `localhost`, or an explicitly
+  listed host is answered; anything else gets 403 before auth or dispatch.
+  This is the DNS-rebinding guard — Origin-vs-Host comparison alone passes
+  under rebinding, and Origin-less requests skip CORS entirely.
+- Remote viewing (`APE_CONSOLE_HOST=0.0.0.0`) now *requires*
+  `APE_ALLOWED_HOSTS` to answer non-loopback Host values; the session
+  bearer still gates `/api/*`.
+- Browser-only residual (cannot be proven by tests): that injected markup
+  truly never executes and CSP blocks as configured — confirm with devtools
+  (blocked-inline-script messages, no alert) on first run.
+
+## Open decisions (operator input required — not built)
+
+- **Destructive confirm gate**: today a `confirm: true` argument passes the
+  gate, which any same-origin script can also pass. Options and costs:
+  1. *Separate operator-approval endpoint with its own token* — medium
+     work (new route + token plumbing + CLI display); token must reach the
+     human out-of-band or it is theater.
+  2. *TTY/TUI confirmation* — small work, strongest phishing resistance
+     (the browser cannot click a terminal), but blocks headless/API use.
+  3. *Single-use approval ids* (elicitation → id → call) — medium work;
+     narrows replay but a same-origin script can still complete the flow.
+  None chosen yet — awaiting operator decision.
+- **`ape_test_provider` via `/api/call`**: each call is one real,
+  billable model call with only bearer auth. Per-caller rate-limit options
+  (all reuse the existing `checkRateLimit` core from `src/http.js`):
+  1. *Per-tool per-IP bucket* (e.g. 10/min for `ape_test_provider`,
+     `ape_agent_run`) — small work, shared-state Map like `/mcp`.
+  2. *Authenticated-caller buckets* (per token) — small work once tokens
+     are per-operator; today there is one shared token, so equals global.
+  3. *Spend-denominated cap* (max test-call USD/hour) — medium work,
+     strongest cost coupling. Reporting only — not built.
 
 ## Remote surface (`/mcp` + HTTP server)
 

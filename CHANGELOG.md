@@ -1,5 +1,80 @@
 # Changelog
 
+## 1.1.2
+
+O1 console security hardening (audit verification first):
+- The audit's XSS and auth claims checked out against v1.1.1: console.html
+  built trace/ledger/experience/profile rows with innerHTML from
+  unescaped server data (9 sites) plus inline onclick handlers (9 sites),
+  served with no CSP, no framing/MIME/referrer guards, no Host allowlist,
+  and every /api/* route open on loopback by default. Proven by running
+  the new hostile-fixture suite against the v1.1.1 tree (7 of 9 fail
+  there; only share-page escaping and stream documentation pass).
+- Fixes: the console is now always authenticated — a per-session token
+  minted at startup gates every /api/* route (read and write), the CLI
+  opens /?t=<token>, the page strips it from the address bar and sends it
+  as Authorization: Bearer (APE_CONSOLE_TOKEN, when set, replaces it).
+  All rows render via textContent/createElement (no innerHTML, no inline
+  handlers); inline scripts/styles externalized to /app.js, /app.css,
+  /share.js, /share.css under a strict CSP with no inline code.
+  Host allowlist (403 before auth/dispatch); non-loopback serving
+  requires APE_ALLOWED_HOSTS. Ledger tab relabeled: it is an append-only
+  audit stream, not a hash-chained ledger. (The share page was already
+  escaped via escHtml; a guard test pins that.)
+- New tests/console-security.test.js (9 tests): forged Host → 403,
+  rebinding simulation → 403, no-token → 401, strict CSP + framing/MIME/
+  referrer headers on shell/API/share, no HTML-string rendering in the
+  clients, hostile trace payload served raw and inert, hostile share page
+  escaped, ledger label honest, stream auth behavior locked.
+- Security note: v1.1.1's console renders attacker-influenced trace/run
+  data as live HTML (stored XSS in a real browser; loopback-bound by
+  default, reachable remotely via DNS rebinding while the console runs).
+  1.1.1 users should upgrade to 1.1.2 when released and meanwhile run the
+  console only on trusted networks. Whether a GitHub advisory is filed is
+  an open operator decision (SECURITY.md now exists per PR #45).
+  Confirm-gate redesign and per-caller rate limits recorded as open
+  decisions in docs/security.md (options + costs, no choice made).
+
+M6.1 onboarding as a real setup flow (verified review first):
+- The old mock demo is gone (with its false "needs a working provider"
+  failure text — the mock run never needed one).
+- Provider step gates real providers on a passing F5 test (test-and-
+  continue); mock-only is explicit, labeled, and says mock in the status
+  line. Failed tests show exact $env/setx commands for env-key providers.
+- New Connectors step (informational inventory, room for M8), first real
+  run with per-profile sample objective + budget line + live polls (mock
+  path labeled), Done screen with provider/model/profile/data-dir and
+  r/p/Enter jumps. Re-runnable from the Setup again menu item.
+
+M6 model setup (TUI-first, real paths):
+- New `ape_test_provider` tool: one minimal real call through the same
+  resolveModel + chat as the loop (success with latency/usage/cost, or
+  the honest upstream error). `ape_status` gains `provider_sources`
+  (provider + source + default model, no key material).
+- Pinned provider/model in the local config feeds `resolveModel`
+  between env and profile — no second resolution path.
+- TUI provider picker shared by onboarding step 2 and a Provider menu
+  item: choose, edit model, F5 tests, Enter saves. Status line shows
+  the model.
+
+TUI live-testing fixes from Windows PowerShell:
+- Double key events fixed: Windows emits Press+Release per key and the
+  loop acted on both ("review" -> "rerevvieewew"). Release is now ignored
+  in the single normalization point; regression test feeds Press/Release
+  pairs through the real mapping.
+- Profile descriptions wrap within the panel (both the Profiles view and
+  the picker), one selectable item per profile.
+- Status line: version embedded at build time from package.json (both
+  launchers still pass it too), provider primed once per menu entry via
+  `ape_status`; unknowns read "unknown".
+- Failed runs with JSON `model_error` payloads show human fields plus
+  the stop reason; raw blob stays on expand.
+- Main menu gains the welcome banner as a side panel (same constant, one
+  cyan accent, `NO_COLOR`-plain). Computed show/hide threshold (banner +
+  widest item + gutter; 81 cols), main menu only, never shrunk. The
+  earlier per-letter-color draft was wrong: the reference colors were
+  subpixel rendering, not real colors.
+
 ## 1.1.1
 
 - Pack ships the whole `scripts/` dir (1.1.0 excluded `tui-fetch.mjs`,

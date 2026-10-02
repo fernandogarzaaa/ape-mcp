@@ -12,6 +12,42 @@ use ratatui::{
 
 pub const BANNER: &str = include_str!("../assets/ape.txt");
 
+/// Side art for the main menu: the SAME welcome banner (one source of
+/// truth — welcome screen and menu panel can never drift apart). The
+/// reference red/cyan/yellow turned out to be Windows subpixel text
+/// rendering, not real colors, so this renders in the single welcome
+/// accent (cyan), plain under NO_COLOR.
+///
+/// Layout contract (see main.rs): shown only when the terminal fits menu +
+/// art + gutter; never shrunk or wrapped; main menu only.
+pub fn side_art_lines() -> Vec<Line<'static>> {
+    let plain = std::env::var("NO_COLOR").is_ok();
+    let style = Style::default().fg(Color::Cyan);
+    BANNER
+        .lines()
+        .map(|l| {
+            if plain {
+                Line::from(l.to_string())
+            } else {
+                Line::from(Span::styled(l.to_string(), style))
+            }
+        })
+        .collect()
+}
+
+/// Max banner line width in columns.
+pub fn side_art_width() -> usize {
+    BANNER.lines().map(|l| l.chars().count()).max().unwrap_or(0)
+}
+
+pub const SIDE_GUTTER: usize = 4;
+
+/// Show the art only when everything fits: art + widest menu row (with
+/// indent and block borders) + gutter. Computed, never hard-coded.
+pub fn art_visible(term_width: u16) -> bool {
+    term_width as usize >= side_art_width() + crate::menu::menu_min_width() + SIDE_GUTTER
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 #[allow(dead_code)] // Welcome/Menu are navigation vocabulary for future flows.
 pub enum Screen {
@@ -70,6 +106,43 @@ pub fn render_welcome(f: &mut Frame, version: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn side_art_is_the_banner() {
+        // One source of truth: the side panel draws BANNER itself.
+        let art: Vec<String> = side_art_lines()
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        let banner: Vec<&str> = BANNER.lines().collect();
+        assert_eq!(art, banner, "side art == welcome banner rows");
+        assert_eq!(side_art_width(), 61, "banner is 61 cols wide");
+    }
+
+    #[test]
+    fn side_art_threshold_computed() {
+        // 61 (art) + 16 (widest item + indent + borders) + 4 (gutter) = 81.
+        assert_eq!(side_art_width() + crate::menu::menu_min_width() + SIDE_GUTTER, 81);
+        assert!(art_visible(120), "120 cols shows art");
+        assert!(art_visible(81), "exact threshold shows art");
+        assert!(!art_visible(80), "one below hides art");
+    }
+
+    #[test]
+    fn side_art_plain_under_no_color() {
+        // NOTE: single-env-test pattern — env vars are process-global.
+        let prev = std::env::var("NO_COLOR").ok();
+        std::env::set_var("NO_COLOR", "1");
+        let lines = side_art_lines();
+        assert_eq!(lines.len(), BANNER.lines().count(), "one line per banner row");
+        assert!(lines.iter().all(|l| l.spans.iter().all(|s| s.style.fg.is_none())));
+        match prev {
+            Some(v) => std::env::set_var("NO_COLOR", v),
+            None => std::env::remove_var("NO_COLOR"),
+        }
+        let styled = side_art_lines();
+        assert!(styled.iter().any(|l| l.spans.iter().any(|s| s.style.fg.is_some())));
+    }
 
     #[test]
     fn banner_asset_loads() {
