@@ -45,8 +45,37 @@ export function rateLimitWindowMs() {
   return Number.isFinite(v) && v > 0 ? v : 60000;
 }
 export function clientIp(req) {
-  const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return xff || req.socket?.remoteAddress || "unknown";
+  // Explicit trusted-proxy model (M5): forwarding headers are attacker input
+  // unless the immediate peer is a configured trusted proxy. Direct clients
+  // must never be able to spoof the rate-limit identity.
+  // APE_TRUSTED_PROXIES: comma-separated peer IPs (compare normalized; the
+  // IPv4-mapped form ::ffff:a.b.c.d equals a.b.c.d). Empty (default) = trust
+  // nothing, always use the socket peer. Do NOT assume Caddy: set this only
+  // when a proxy you operate is actually in front.
+  const peer = normalizePeer(req.socket?.remoteAddress);
+  const trusted = trustedProxies();
+  if (peer && trusted.has(peer)) {
+    const xff = String(req.headers["x-forwarded-for"] || "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    // Leftmost is the original client; each entry must be non-empty.
+    if (xff.length) return xff[0].slice(0, 128);
+  }
+  return peer || "unknown";
+}
+export function trustedProxies() {
+  const out = new Set();
+  for (const s of String(process.env.APE_TRUSTED_PROXIES || "").split(",")) {
+    const n = normalizePeer(s.trim());
+    if (n) out.add(n);
+  }
+  return out;
+}
+function normalizePeer(addr) {
+  const s = String(addr || "").trim().toLowerCase();
+  if (!s) return "";
+  // Node reports IPv4 peers as ::ffff:127.0.0.1 on dual-stack sockets.
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  return m ? m[1] : s;
 }
 export function checkRateLimit(ip, nowMs = Date.now()) {
   const rpm = rateLimitRpm();
@@ -56,8 +85,17 @@ export function checkRateLimit(ip, nowMs = Date.now()) {
     b = { windowStart: nowMs, count: 0 };
     rateBuckets.set(ip, b);
   }
-  if (rateBuckets.size > 10000) {
-    for (const [k, v] of rateBuckets) if (nowMs - v.windowStart >= win) rateBuckets.delete(k);
+  // Bounded table, fail-closed: with XFF untrusted by default each socket IP
+  // owns exactly one bucket, so a full table means a real flood, not spoofing.
+  // Sweep expired first; if still full, refuse newcomers instead of growing.
+  if (rateBuckets.size > MAX_RATE_BUCKETS) {
+    for (const [k, v] of rateBuckets) {
+      if (nowMs - v.windowStart >= win) rateBuckets.delete(k);
+      if (rateBuckets.size <= MAX_RATE_BUCKETS) break;
+    }
+    if (rateBuckets.size > MAX_RATE_BUCKETS && !rateBuckets.has(ip)) {
+      return { limited: true, retryAfterMs: win };
+    }
   }
   b.count++;
   if (b.count > rpm) return { limited: true, retryAfterMs: Math.max(0, b.windowStart + win - nowMs) };
@@ -77,6 +115,8 @@ function rateLimitedOr429(req, res) {
 
 // --- Fail-closed bind policy (Phase 11) ---
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
+// Hard ceiling on distinct rate-limit identities (fail-closed when full).
+const MAX_RATE_BUCKETS = 20000;
 export function resolveBindConfig({ host = "127.0.0.1" } = {}) {
   const h = String(host || "127.0.0.1");
   if (LOOPBACK_HOSTS.has(h.toLowerCase())) return { ok: true, host: h };
@@ -106,7 +146,12 @@ function applyCors(req, res) {
 export const MCP_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MCP_SESSION_HEADER = "mcp-session-id";
 export const MCP_SESSION_NOT_FOUND = -32001;
+export const MCP_SESSION_LIMIT = -32002;
 const mcpSessions = new Map(); // id -> { createdAt, lastSeen, clientInfo }
+export function maxMcpSessions() {
+  const v = Number(process.env.APE_MAX_MCP_SESSIONS);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1000;
+}
 export function sweepSessions(nowMs = Date.now()) {
   let swept = 0;
   for (const [id, s] of mcpSessions) {
@@ -190,6 +235,10 @@ function takeSession(req) {
   return { id, ...s };
 }
 function newSession(clientInfo = null) {
+  // Bounded sessions (M5): sweep expired first; refuse (honest null) when
+  // still at capacity instead of growing memory without bound.
+  sweepSessions();
+  if (mcpSessions.size >= maxMcpSessions()) return null;
   const id = randomUUID();
   const now = Date.now();
   mcpSessions.set(id, { createdAt: now, lastSeen: now, clientInfo });
@@ -360,6 +409,12 @@ async function handleMcpPost(req, res) {
     const handled = await handleMcpMessage(msg, session);
     if (handled.newSession) {
       newSessionId = newSession(handled.clientInfo);
+      if (!newSessionId) {
+        // At capacity: honest error instead of a headerless success the
+        // client would mistake for a session.
+        responses.push(mcpError(msg?.id, MCP_SESSION_LIMIT, "session-limit: server at session capacity, retry later"));
+        continue;
+      }
     }
     if (handled.response) responses.push(handled.response);
   }
