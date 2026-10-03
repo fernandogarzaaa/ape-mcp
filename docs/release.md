@@ -9,7 +9,9 @@ assets ships a TUI that can only build via cargo.
 
 - `npm test` green (all files in the `test` script), `cargo test --manifest-path tui/Cargo.toml` green.
 - New test files are wired into the `package.json` `test` script (merges
-  have dropped entries before — the count in CI output is the check).
+  have dropped entries before — `scripts/test.mjs` fails the run if any
+  declared file is missing, so the suite count can only grow by accident
+  of deletion, never shrink silently).
 - `npm run tui:snap` green (capture + snapshots current).
 - `package.json` version bumped, `package-lock.json` in sync, CHANGELOG entry written.
 - No `console.log` debugging, no stray temp files (`git status --short` clean apart from intended).

@@ -1,6 +1,6 @@
 // Fetch prebuilt adam-mcp for this platform from the APE GitHub release.
 // Standalone guarantee holds: release binaries are built from vendors/adam (same repo),
-// never from the 5 source repos. Fallback: `cargo build --release -p adam-mcp` in vendors/adam.
+// never from the source repos. Fallback: `cargo build --release -p adam-mcp` in vendors/adam.
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -1,5 +1,5 @@
 name: auto-update
-# Keeps vendors/ in sync with the 5 source repos. Triggers:
+# Keeps vendors/ in sync with the 4 source repos. Triggers:
 #  - schedule (6h backstop): compares HEAD SHAs vs vendors/manifest.yaml pins
 #  - repository_dispatch (instant): source repos fire `source-updated` on push to main
 #  - workflow_dispatch (manual): optional `repos` csv filter, `force` to re-sync anyway

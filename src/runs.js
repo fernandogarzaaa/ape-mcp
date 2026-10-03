@@ -259,9 +259,27 @@ export function updateRun(runId, patch) {
   const d = open();
   const keys = Object.keys(patch);
   if (!keys.length) return;
+  // Column allowlist: identifiers cannot be bound as parameters, so only
+  // known run columns may appear here. A future caller spreading user input
+  // gets an honest error instead of a SQL-injection primitive.
+  const unknown = keys.filter((k) => !RUN_COLUMNS.has(k));
+  if (unknown.length) {
+    throw Object.assign(new Error(`refusing to update unknown run columns: ${unknown.join(", ")}`), { code: "invalid_run_patch" });
+  }
   const cols = keys.map((k) => `${k} = ?`).join(", ");
   d.prepare(`UPDATE runs SET ${cols} WHERE run_id = ?`).run(...keys.map((k) => patch[k]), runId);
 }
+
+// Every writable column of the runs table (base schema + migrations above).
+// updateRun is the only dynamic-identifier writer; keep this complete.
+const RUN_COLUMNS = new Set([
+  "profile", "model", "model_resolution", "objective", "organism_id",
+  "worker_pid", "status", "stop_reason", "step_count", "total_tokens",
+  "total_cost", "outcome", "outcome_family", "outcome_hash", "profile_hash",
+  "env_hash", "unverified", "receipt", "parent_run_id", "inherited_policy",
+  "resumes", "resumed_from_step", "claimant", "claimed_at",
+  "started_at", "finished_at",
+]);
 
 // Worker-log retention: delete per-run logs for finished runs older than
 // maxAgeDays. Scoped HARD to <dataDir>/workers/*.log — every candidate path

@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-APE MCP is pre-1.0 software under active development. Security fixes are
+APE MCP is under active development. Security fixes are
 provided on the latest published npm release and on the `main` branch.
 Older releases are not patched.
 

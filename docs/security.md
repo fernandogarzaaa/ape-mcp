@@ -20,6 +20,15 @@ Everything else is vendored and pinned in `vendors/manifest.yaml`. No runtime
 - **Key material never leaves the worker's memory.** It is not stored in the run ledger,
   not echoed in `ape_status` / `ape_agent_profiles` / tool responses (only provider +
   model + `resolution` are surfaced), and never logged. Verified by tests.
+- **Result-side scrubbing (heuristic, not universal).** Tool/provider output
+  is passed through `redactSecrets` before it can persist (ledger steps,
+  outcomes, evidence excerpts, trace entries) or fan out (status, share, SSE,
+  export, ADAM outcome memory). Patterns cover common vendor key shapes,
+  PEM blocks, bearer/query/assignment credential forms. Unknown shapes pass
+  through by design — redaction catches known credential SHAPES, not all
+  secrets. Caller-supplied inputs (objectives, tool args) are stored verbatim
+  for replay fidelity: do not paste secrets into them. Non-negotiable
+  invariants live in `docs/SECURITY_INVARIANTS.md`.
 - Host credential stores are read with **readOnly** access; APE never modifies them.
 - `ape-mcp doctor` prints hosts, never tokens.
 
@@ -115,15 +124,22 @@ Applies when APE listens beyond loopback (see `docs/remote.md`,
 - **CORS**: exact-origin allowlist (`APE_CORS_ORIGIN`) + explicit preflight;
   never wildcard, nothing by default.
 - **SSRF net** (connectors): loopback/link-local/RFC1918/multicast/unspecified
-  refused pre-fetch, including decimal/octal/hex IP spellings and redirect
-  targets (DNS answers checked); `APE_ALLOW_PRIVATE_EGRESS=1` opts out for
+  refused pre-fetch, including decimal/octal/hex/single-number/short-form IP
+  spellings, IPv4-mapped IPv6 (dotted and hex tails), and redirect
+  targets (DNS answers checked); cross-origin redirect hops carry no auth
+  headers and no body. `APE_ALLOW_PRIVATE_EGRESS=1` opts out for
   local dev. Residual DNS-rebinding TOCTOU documented.
-- **Rate limiting**: fixed-window per IP on `/mcp` (`APE_RATE_LIMIT_RPM`
-  default 240/min, `Retry-After` on 429); checked before auth.
+- **Rate limiting**: fixed-window per identity on `/mcp` (`APE_RATE_LIMIT_RPM`
+  default 240/min, `Retry-After` on 429); checked before auth. Identity is
+  the socket peer unless the peer is a configured trusted proxy
+  (`APE_TRUSTED_PROXIES`, CSV of proxy IPs): only then is leftmost
+  `X-Forwarded-For` honored. Direct clients cannot spoof identity. Bucket
+  table is bounded (fail-closed 429 when full).
+- **Sessions**: random UUIDs, 30-min idle expiry, DELETE invalidation, capped
+  count (`APE_MAX_MCP_SESSIONS` default 1000, sweep-then-refuse); restart
+  drops them (documented, single-node).
 - **Sizes/timeouts**: 4 MB `/mcp` bodies, connector timeouts, provider
   wall-time abort, budget halts.
-- **Sessions**: random UUIDs, 30-min idle expiry, DELETE invalidation;
-  restart drops them (documented, single-node).
 
 ## Cost
 

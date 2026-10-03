@@ -393,6 +393,10 @@ setInterval(pollSlow, 10000);
 
 let sseOk = false;
 try {
+  // Best-effort live stream: EventSource cannot send the session bearer, so
+  // under the always-authenticated console this 401s and the error handler
+  // below falls back to polling. Polling (poll/pollRuns above) is the
+  // supported transport; SSE is opportunistic, never required.
   const es = new EventSource("/api/runs/stream");
   es.addEventListener("run", () => { sseOk = true; pollRuns(); });
   es.addEventListener("step", () => {

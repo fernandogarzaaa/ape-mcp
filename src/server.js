@@ -88,6 +88,11 @@ function cancelRunCore(runId) {
     }
   }
   const run = getRun(runId);
+  // Unknown ids are not_found, not "already finished": conflating them masks
+  // typos and turns cancel into an existence oracle with a misleading label.
+  if (run.status === "not_found") {
+    return { run_id: runId, uri: runUri(runId), status: "not_found", error: "run_not_found", hint: "no such run in this ledger" };
+  }
   if (run.status !== "running") {
     return { run_id: runId, uri: runUri(runId), status: run.status, stop_reason: run.stop_reason, note: "run already finished" };
   }
