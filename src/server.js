@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
-import { readFileSync, existsSync, mkdirSync, openSync, closeSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync, mkdirSync, openSync, closeSync, realpathSync, statSync } from "node:fs";
+import { join, dirname, isAbsolute, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { dispatch, engineFail, eveEntry, runNode, failEve, genesisEntry } from "./dispatch.js";
@@ -17,6 +17,47 @@ import { defaultModelFor, resolveModel, chat, estimateCost } from "./agent/provi
 import { APE_VERSION } from "./version.js";
 
 const runningAgents = new Map();
+
+// H3 trust boundary: ape_report renders a results directory through the
+// Genesis engine (which reads <dir>/verdict.json into the tool result).
+// The ref must resolve inside the run-data root: no absolute escape, no
+// `..` escape, no symlink escape (canonicalized before compare), and the
+// target must be a directory (genesis reads verdict.json inside it, never
+// an arbitrary file). Anything else is rejected with an honest error —
+// the engine never sees the raw ref.
+export function resolveReportRef(ref) {
+  const base = dataDir();
+  if (typeof ref !== "string" || !ref.trim()) {
+    return { ok: false, error: "missing_ref", hint: "pass a results dir inside the run-data directory, or omit ref to list artifacts" };
+  }
+  const trimmed = ref.trim();
+  let baseReal;
+  try {
+    mkdirSync(base, { recursive: true });
+    baseReal = realpathSync(base);
+  } catch {
+    return { ok: false, error: "datadir_unavailable", hint: "run-data directory is not accessible" };
+  }
+  const candidate = isAbsolute(trimmed) ? trimmed : join(base, trimmed);
+  let canon;
+  try {
+    canon = realpathSync(candidate);
+  } catch {
+    return { ok: false, error: "ref_not_found", ref: trimmed, hint: "no such artifact under the run-data directory" };
+  }
+  const inside = process.platform === "win32"
+    ? canon.toLowerCase().startsWith(baseReal.toLowerCase() + sep)
+    : canon.startsWith(baseReal + sep);
+  if (!inside) {
+    return { ok: false, error: "ref_outside_datadir", ref: trimmed, hint: "report refs must live inside the run-data directory" };
+  }
+  let isDir = false;
+  try { isDir = statSync(canon).isDirectory(); } catch { /* handled below */ }
+  if (!isDir) {
+    return { ok: false, error: "ref_not_a_directory", ref: trimmed, hint: "genesis report renders a results directory (verdict.json inside)" };
+  }
+  return { ok: true, path: canon };
+}
 
 // Shared cancel core for ape_agent_cancel + agent/cancel: kill the worker
 // (no drain), mark stopped/cancelled, append the interruption marker.
@@ -100,7 +141,7 @@ export const TOOL_DEFS = [
   { name: "ape_compare", description: "Genesis compare/regression between two run result dirs", inputSchema: { type: "object", properties: { run_a: { type: "string", description: "baseline run result dir" }, run_b: { type: "string", description: "candidate run result dir" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_orchestrate", description: "Skein task-graph: graph/node-add/claim/release/status/log with evidence gate", inputSchema: { type: "object", properties: { op: { type: "string", description: "graph|node-add|claim|release|status|log" }, node: { type: "string", description: "task node id" }, agent_id: { type: "string", description: "agent identity" }, title: { type: "string", description: "node title" }, goal: { type: "string", description: "node goal" }, context: { type: "string", description: "node context" }, constraints: { type: "string", description: "node constraints" }, completion: { type: "string", description: "completion evidence (status gate)" }, depends_on: { type: "string", description: "dependency node ids" } } }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_evolve", description: "ADAM evolution lifecycle: propose (auto-signals) -> EVE measure -> governed accept/reject (destructive: confirm)", inputSchema: { type: "object", properties: { proposal_id: { type: "string", description: "proposal under governance" }, action: { type: "string", description: "propose|accept|reject (accept is destructive: needs confirm)" }, kind: { type: "string", description: "mutation kind" }, topic: { type: "string", description: "evolution topic" }, organism_id: { type: "string", description: "ADAM organism scope (default \"default\")" } } }, annotations: { readOnly: false, destructive: true, idempotent: false } },
-  { name: "ape_report", description: "Fetch report artifacts (EVE run reports, genesis ledger, genesis report render)", inputSchema: { type: "object", properties: { ref: { type: "string", description: "artifact ref, or latest" } } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_report", description: "Fetch report artifacts (EVE run reports, genesis ledger, genesis report render). ref must be a results directory inside the run-data directory (sandboxed: absolute escapes, .. escapes, and symlink escapes are rejected)", inputSchema: { type: "object", properties: { ref: { type: "string", description: "results dir inside the run-data directory, or omit to list artifacts" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_task_start", description: "Start any APE tool as a background task (Tasks extension); poll with ape_task_get", inputSchema: { type: "object", properties: { tool: { type: "string", description: "tool name to run in the background" }, arguments: { type: "object", description: "tool arguments object" } }, required: ["tool"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_task_get", description: "Poll a background task (running/done/failed + result)", inputSchema: { type: "object", properties: { task_id: { type: "string", description: "background task id" } }, required: ["task_id"] }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_agent_profiles", description: "List available agent profiles + their declared tools and limits", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
@@ -418,9 +459,15 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
         break;
       }
       case "ape_report": {
-        if (a.ref && existsSync(a.ref)) {
-          const e = genesisEntry();
-          result = e ? await runNode(e, ["report", a.ref]) : engineFail("genesis", "dist not built; run npm run build in vendors/genesis");
+        if (a.ref) {
+          const gate = resolveReportRef(a.ref);
+          if (!gate.ok) {
+            result = { error: gate.error, ref: a.ref, hint: gate.hint };
+            emitTrace({ traceId, tool: name, resultSummary: `rejected:${gate.error}` });
+          } else {
+            const e = genesisEntry();
+            result = e ? await runNode(e, ["report", gate.path]) : engineFail("genesis", "dist not built; run npm run build in vendors/genesis");
+          }
         } else {
           const dir = dataDir();
           const names = ["eve-report", "ledger.jsonl", "genesis-ledger.db", "tasks.json"];
