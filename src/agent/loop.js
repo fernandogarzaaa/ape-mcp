@@ -120,24 +120,38 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     // The child's authority is this loop's EFFECTIVE policy (already
     // intersected with every ancestor): deny cascades, allow does not.
     restrictions: { destructive: effectiveDestructive },
+    // Budget escrow endpoints: the child reserves its slice synchronously at
+    // spawn and releases the unused part at completion (see runDelegated).
+    // Bound closures, so parallel batches share one atomic ledger.
+    reserveBudget: (r) => budget.reserve(r),
+    refundBudget: (r) => budget.refund(r),
     budget: {
-      stepsLeft: (profile.limits?.max_steps ?? 0) - budget.steps,
-      tokensLeft: (profile.limits?.max_tokens ?? 0) - budget.tokens,
-      usdLeft: (profile.limits?.max_usd ?? 0) - budget.usd,
+      // Remaining MINUS outstanding escrow: parallel batches snapshot in
+      // order within one tick, and each snapshot already reflects every
+      // prior reservation, so concurrent children can never overlap.
+      stepsLeft: (profile.limits?.max_steps ?? 0) - budget.steps - budget.reservedSteps,
+      tokensLeft: (profile.limits?.max_tokens ?? 0) - budget.tokens - budget.reservedTokens,
+      usdLeft: (profile.limits?.max_usd ?? 0) - budget.usd - budget.reservedUsd,
       wallMsLeft: profile.limits?.max_wall_seconds != null
         ? profile.limits.max_wall_seconds * 1000 - (Date.now() - startedAt)
         : null,
     },
   });
-  // M2 debit: a completed delegation's consumed tokens+USD belong to THIS
-  // budget (incremental debit at completion; partials on failure/cancel are
-  // debited the same way). The numbers also ride on the recorded delegate
-  // step so parent row totals stay honest. No reservation at spawn:
-  // enforcement is slice caps (a child is never granted more than remains)
-  // plus this debit (the parent halts when the sum crosses its ceiling).
+  // M2 settlement: the child's consumption is charged here (spend), while the
+  // escrow reserved at spawn was already released in full by runDelegated —
+  // the two never overlap, so there is no double charge: reserve(+S) ...
+  // refund(+S back) ... spend(+C) nets exactly +C with zero reserved.
+  // The numbers ride on the recorded delegate step so parent row totals stay
+  // honest. Failed/cancelled children settle their recorded partials the
+  // same way.
   const debitDelegation = (tc, res) => {
-    if (tc?.name !== "delegate" || !res?.delegated) return { tokens: 0, cost: 0, note: "" };
-    const t = Number(res.tokens ?? 0), c = Number(res.cost_usd ?? 0);
+    if (tc?.name !== "delegate") return { tokens: 0, cost: 0, note: "" };
+    // Completed delegations carry consumed totals; timeouts carry recorded
+    // partials (the child row was settled before return). Anything else
+    // (refusals, depth caps) consumed nothing.
+    const settled = res?.delegated ? res : (res?.error === "delegation_timeout" && res?.consumed ? { tokens: res.consumed.tokens, cost_usd: res.consumed.cost } : null);
+    if (!settled) return { tokens: 0, cost: 0, note: "" };
+    const t = Number(settled.tokens ?? 0), c = Number(settled.cost_usd ?? 0);
     if (t > 0 || c > 0) budget.spend({ tokens: t, cost: c });
     return { tokens: t, cost: c, note: (t > 0 || c > 0) ? ` debited:tokens=${t} cost=$${c}` : "" };
   };
@@ -169,7 +183,10 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     const repairs = [];
     const delegations = [];
   const collectDelegation = (r) => {
-    if (r?.delegated) delegations.push({ run_id: r.run_id, profile: r.profile, cost_usd: r.cost_usd ?? 0, tokens: r.tokens ?? 0, outcome_status: r.outcome_status ?? null, stop_reason: r.stop_reason ?? null });
+    if (r?.delegated) delegations.push({ run_id: r.run_id, profile: r.profile, cost_usd: r.cost_usd ?? 0, tokens: r.tokens ?? 0, outcome_status: r.outcome_status ?? null, stop_reason: r.stop_reason ?? null, reserved: r.reserved ?? null, refunded: r.refunded ?? null });
+    // Failed delegations that still forked a child (timeout, fork failure)
+    // are audited too: the child row exists and its partials were settled.
+    else if (r?.run_id && typeof r?.error === "string" && r.error.startsWith("delegation_")) delegations.push({ run_id: r.run_id, profile: null, cost_usd: 0, tokens: 0, outcome_status: null, stop_reason: null, error: r.error, reserved: null, refunded: r.refunded ?? null });
   };
     let res;
     try { res = await invokeTool(tool, tc.args ?? {}, delegateCtx()); }

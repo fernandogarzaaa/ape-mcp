@@ -202,37 +202,74 @@ export async function runDelegated(args, ctx = {}) {
     return { error: "delegation_refused", detail: admitted.error, hint: admitted.hint ?? null };
   }
   const childId = admitted.run_id;
-  let pid = null;
+  // Budget escrow (atomic reservation): the granted slice is committed to
+  // the parent budget synchronously, BEFORE forking. Parallel batches run
+  // their pre-await prefixes in order within one tick, so the second child
+  // snapshots remaining budget AFTER the first child's reservation —
+  // overlapping grants are impossible. Unused escrow is released at every
+  // exit (completion, timeout, fork failure). ctx.reserveBudget/refundBudget
+  // come from the parent loop; absent (direct calls) reservation is skipped.
+  const reserveBudget = typeof ctx.reserveBudget === "function" ? ctx.reserveBudget : null;
+  const refundBudget = typeof ctx.refundBudget === "function" ? ctx.refundBudget : null;
+  const escrow = {
+    steps: sliced.limits.max_steps ?? 0,
+    tokens: sliced.limits.max_tokens ?? 0,
+    cost: sliced.limits.max_usd ?? 0,
+  };
+  if (reserveBudget) reserveBudget(escrow);
+  const release = () => {
+    // Settle escrow IN FULL: the loop separately spends the child's actual
+    // consumption (see debitDelegation), so the escrow account must return
+    // to zero here — never netted against consumption, which would leak the
+    // remainder into every future ceiling check.
+    if (!refundBudget) return { steps: 0, tokens: 0, cost: 0 };
+    const back = { ...escrow };
+    refundBudget(back);
+    return back;
+  };
+  let worker = null;
   try {
-    const worker = fork(join(root, "src", "agent", "worker.js"), [childId, JSON.stringify({
+    worker = fork(join(root, "src", "agent", "worker.js"), [childId, JSON.stringify({
       parentRunId: ctx.parentRunId ?? null,
       budgetCaps: sliced.limits,
       restrictions: Object.keys(restrictions).length ? restrictions : null,
     })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
-    pid = worker.pid;
     worker.unref();
-    try { updateRun(childId, { worker_pid: pid }); } catch { /* row write best-effort */ }
+    try { updateRun(childId, { worker_pid: worker.pid }); } catch { /* row write best-effort */ }
   } catch (e) {
+    // Fork failed: nothing consumed; release the full escrow.
+    const refunded = release();
     try { updateRun(childId, { status: "failed", stop_reason: "worker_crash", outcome: String(e).slice(0, 200), finished_at: new Date().toISOString() }); } catch { /* ignore */ }
-    return { error: "delegation_fork_failed", run_id: childId, detail: String(e?.message ?? e).slice(0, 200) };
+    return { error: "delegation_fork_failed", run_id: childId, detail: String(e?.message ?? e).slice(0, 200), refunded };
   }
   const deadlineMs = Math.min(timeoutS * 1000, (sliced.limits.max_wall_seconds ?? timeoutS) * 1000);
   const waited = await waitForRun(
     {
       getRunFn: (id) => getRun(id),
       // M7: kill the retained handle (exact child), never a bare PID that
-      // may have been recycled. The handle is closed over here, so this
-      // kill cannot name the wrong process even under PID reuse.
-      killFn: () => { try { worker.kill("SIGKILL"); } catch { /* gone */ } },
+      // may have been recycled. `worker` is assigned above before any await,
+      // so the closure always names this fork (it previously referenced a
+      // block-scoped const and silently never killed on timeout).
+      killFn: () => { try { worker?.kill("SIGKILL"); } catch { /* gone */ } },
     },
     childId,
     deadlineMs
   );
   if (waited.timeout) {
+    // Timeout: the child is killed above; settle escrow in full (the loop
+    // spends the recorded partials separately) and report both.
+    let consumed = { steps: 0, tokens: 0, cost: 0 };
+    try {
+      const partial = getRun(childId);
+      consumed = { steps: partial.step_count ?? 0, tokens: partial.total_tokens ?? 0, cost: partial.total_cost ?? 0 };
+    } catch { /* row read best-effort */ }
+    const refunded = release();
     try { updateRun(childId, { status: "stopped", stop_reason: "delegation_timeout", outcome: `delegated run killed after ${timeoutS}s without reaching terminal state`, finished_at: new Date().toISOString() }); } catch { /* ignore */ }
-    return { error: "delegation_timeout", run_id: childId, timeout_s: timeoutS, hint: "narrow the sub-objective or raise timeout_s" };
+    return { error: "delegation_timeout", run_id: childId, timeout_s: timeoutS, hint: "narrow the sub-objective or raise timeout_s", consumed, refunded };
   }
   const row = waited.terminal;
+  const consumed = { steps: row.step_count ?? 0, tokens: Number(row.total_tokens ?? 0), cost: Number(row.total_cost ?? 0) };
+  const refunded = release();
   return {
     delegated: true,
     run_id: childId,
@@ -240,10 +277,13 @@ export async function runDelegated(args, ctx = {}) {
     outcome_status: row.outcome_status ?? row.status,
     stop_reason: row.stop_reason ?? null,
     outcome: String(row.outcome ?? "").slice(0, 2000),
-    cost_usd: Number(row.total_cost ?? 0),
-    // Parent-side debit needs the child's token spend too (same units as the
-    // parent budget). The loop debits both on completion; see runAgent.
-    tokens: Number(row.total_tokens ?? 0),
-    steps: row.step_count ?? 0,
+    cost_usd: consumed.cost,
+    // Parent-side visibility needs the child's token spend too (same units as
+    // the parent budget). The loop settles these against the escrow (see
+    // debitDelegation in runAgent): no double charge.
+    tokens: consumed.tokens,
+    steps: consumed.steps,
+    reserved: escrow,
+    refunded,
   };
 }
