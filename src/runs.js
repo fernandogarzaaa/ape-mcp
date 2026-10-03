@@ -551,11 +551,23 @@ export function deprecateVariant({ family, outcome_hash, reason }) {
 
 // Janitor: workers are detached forks; if one dies before updateRun() (OOM, restart),
 // its row would stay "running" forever. Reconcile by checking worker PIDs.
+// PID probes alone cannot distinguish a live worker from a recycled PID, so a
+// second signal is required: only OUR worker streams steps into this ledger.
+// A row whose PID pings but whose latest step (or admission, if stepless) is
+// older than the staleness threshold is treated as gone. The threshold must
+// comfortably exceed the longest silent stretch of honest work (per-call
+// provider cap), hence the 10-minute default. Set APE_WORKER_STALE_MS to tune.
 export function reconcileRuns({ graceMs = 60000 } = {}) {
   const d = open();
+  const staleMs = Number(process.env.APE_WORKER_STALE_MS ?? 10 * 60 * 1000);
   const running = d.prepare("SELECT run_id, worker_pid, started_at FROM runs WHERE status = 'running'").all();
   let fixed = 0;
   const now = Date.now();
+  const gone = (id) => {
+    d.prepare("UPDATE runs SET status = 'stopped', stop_reason = 'worker_gone', finished_at = ? WHERE run_id = ?")
+      .run(new Date().toISOString(), id);
+    fixed++;
+  };
   for (const r of running) {
     let alive = false;
     if (r.worker_pid) {
@@ -563,9 +575,16 @@ export function reconcileRuns({ graceMs = 60000 } = {}) {
     }
     const age = now - new Date(r.started_at).getTime();
     if (!alive && age > graceMs) {
-      d.prepare("UPDATE runs SET status = 'stopped', stop_reason = 'worker_gone', finished_at = ? WHERE run_id = ?")
-        .run(new Date().toISOString(), r.run_id);
-      fixed++;
+      gone(r.run_id);
+      continue;
+    }
+    if (alive && age > graceMs && Number.isFinite(staleMs) && staleMs > 0) {
+      let lastActive = new Date(r.started_at).getTime();
+      try {
+        const m = d.prepare("SELECT MAX(ts) AS m FROM steps WHERE run_id = ?").get(r.run_id).m;
+        if (m) lastActive = Math.max(lastActive, new Date(m).getTime());
+      } catch { /* treat as stale-gone only on the age rule below */ }
+      if (now - lastActive > staleMs) gone(r.run_id);
     }
   }
   return { checked: running.length, fixed };

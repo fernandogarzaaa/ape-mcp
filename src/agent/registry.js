@@ -220,7 +220,10 @@ export async function runDelegated(args, ctx = {}) {
   const waited = await waitForRun(
     {
       getRunFn: (id) => getRun(id),
-      killFn: () => { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } },
+      // M7: kill the retained handle (exact child), never a bare PID that
+      // may have been recycled. The handle is closed over here, so this
+      // kill cannot name the wrong process even under PID reuse.
+      killFn: () => { try { worker.kill("SIGKILL"); } catch { /* gone */ } },
     },
     childId,
     deadlineMs

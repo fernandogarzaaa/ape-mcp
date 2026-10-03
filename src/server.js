@@ -62,12 +62,30 @@ export function resolveReportRef(ref) {
 // Shared cancel core for ape_agent_cancel + agent/cancel: kill the worker
 // (no drain), mark stopped/cancelled, append the interruption marker.
 // Returns the result object; claim checks stay with the callers.
+// Worker identity (M7): the in-process ChildProcess handle is exact —
+// kill() on it can only ever signal our own worker. A bare worker_pid from
+// the row is NEVER signaled: after a server restart the handle is gone and
+// the PID may have been recycled to an unrelated process. Dead PID (probe
+// fails) is safe to mark; live-but-handleless refuses with an honest error
+// instead of risking a stranger.
 function cancelRunCore(runId) {
   const w = runningAgents.get(runId);
   if (w) { try { w.kill(); } catch { /* already gone */ } runningAgents.delete(runId); }
   else {
     const row = getRun(runId);
-    if (row.status === "running" && row.worker_pid) { try { process.kill(row.worker_pid); } catch { /* already gone */ } }
+    if (row.status === "running" && row.worker_pid) {
+      let probedAlive = false;
+      try { process.kill(row.worker_pid, 0); probedAlive = true; } catch { probedAlive = false; }
+      if (probedAlive) {
+        return {
+          run_id: runId, uri: runUri(runId), status: row.status, stop_reason: row.stop_reason,
+          error: "cancel_refused_no_handle",
+          worker_pid: row.worker_pid,
+          hint: "worker handle was lost (server restart); the recorded PID may have been recycled to an unrelated process, so it will not be signaled. If the old worker is truly alive it still streams to this ledger; otherwise reconcile will mark it worker_gone. Start a new run instead.",
+        };
+      }
+      // Probe failed: nothing to kill; fall through to marking below.
+    }
   }
   const run = getRun(runId);
   if (run.status !== "running") {
