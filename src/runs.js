@@ -5,7 +5,7 @@ import { join, basename } from "node:path";
 import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "./sqlite.js";
-import { dataDir } from "./trace.js";
+import { dataDir, redactSecrets } from "./trace.js";
 
 let db = null;
 export function runsDbPath() {
@@ -231,7 +231,10 @@ export function recentRuns(profile, limit = 10) {
 export function appendStep(runId, step) {
   const d = open();
   d.prepare("INSERT INTO steps (run_id, step, kind, tool, args_hash, duration_ms, tokens, cost, result_summary, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(runId, step.step, step.kind ?? "model", step.tool ?? null, step.argsHash ?? null, step.durationMs ?? 0, step.tokens ?? 0, step.cost ?? 0, String(step.resultSummary ?? "").slice(0, 300), new Date().toISOString());
+    // Result-side text is untrusted provider/tool output: scrub credential
+    // shapes before persistence. Everything downstream (status, share, SSE,
+    // export) reads this row, so this is the single scrub point.
+    .run(runId, step.step, step.kind ?? "model", step.tool ?? null, step.argsHash ?? null, step.durationMs ?? 0, step.tokens ?? 0, step.cost ?? 0, redactSecrets(String(step.resultSummary ?? "")).slice(0, 300), new Date().toISOString());
 }
 
 // Live totals: every streamed step also bumps the run row (cost/tokens sum
@@ -708,7 +711,9 @@ export function importRun(bundle) {
     if (!s || typeof s !== "object") continue;
     insStep.run(newId, s.step ?? 0, s.kind ?? null, s.tool ?? null, s.args_hash ?? null,
       s.duration_ms ?? 0, s.tokens ?? 0, s.cost ?? 0,
-      typeof s.result_summary === "string" ? s.result_summary : String(s.result_summary ?? ""),
+      // Imported history is caller-supplied: same scrub as live steps so a
+      // crafted bundle cannot plant raw credentials in the ledger.
+      redactSecrets(typeof s.result_summary === "string" ? s.result_summary : String(s.result_summary ?? "")),
       s.ts ?? now);
   }
   saveCheckpoint(newId, bundle.checkpoint.step ?? 0, cpState);
