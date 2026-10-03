@@ -88,13 +88,31 @@ function v4Blocked(parts) {
   return false;
 }
 function v6Blocked(ip) {
-  const h = ip.toLowerCase();
+  const h = String(ip).toLowerCase().split("%")[0]; // strip scope zone (fe80%eth0)
   if (h === "::1" || h === "::") return true;
   if (h.startsWith("fe80:") || h.startsWith("fec0:") || h.startsWith("ff00:") || h.startsWith("ff02:")) return true;
   if (h.startsWith("fc") || h.startsWith("fd")) return true; // unique-local fc00::/7
   const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
   if (m) return v4Blocked(m[1].split(".").map(Number));
+  // IPv4-mapped with hex tail (::ffff:7f00:1, 0:0:0:0:0:ffff:7f00:1): the
+  // last 32 bits ARE an IPv4 address. Expand and classify as v4.
+  const mh = /:ffff:([0-9a-f:.]+)$/.exec(h);
+  if (mh && !mh[1].includes(".")) {
+    const dotted = hexTailToV4(mh[1]);
+    if (dotted) return v4Blocked(dotted.split(".").map(Number));
+  }
   return false;
+}
+// Last-32-bits hex tail (one or two hextets) -> dotted quad. Returns null
+// when the tail is not exactly 32 bits of hex.
+function hexTailToV4(tail) {
+  const groups = tail.split(":");
+  if (groups.length < 1 || groups.length > 2) return null;
+  if (!groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
+  const hex = groups.map((g) => g.padStart(4, "0")).join("");
+  if (hex.length !== 8) return null;
+  const n = parseInt(hex, 16);
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
 }
 function numPart(s) {
   if (/^0x[0-9a-f]+$/i.test(s)) return parseInt(s, 16);
@@ -102,10 +120,10 @@ function numPart(s) {
   if (/^\d+$/.test(s)) return parseInt(s, 10);
   return null;
 }
-function normalizeIP(host) {
+export function normalizeIP(host) {
   if (isIP(host)) return host;
-  const h = String(host).toLowerCase();
-  // Single-number form (e.g. 2130706433 = 127.0.0.1).
+  const h = String(host).split("%")[0].toLowerCase();
+  // Single-number form: decimal (2130706433) and hex (0x7f000001).
   if (/^\d+$/.test(h)) {
     const n = Number(h);
     if (Number.isSafeInteger(n) && n >= 0 && n <= 0xffffffff) {
@@ -113,11 +131,27 @@ function normalizeIP(host) {
     }
     return null;
   }
-  // Dotted quads in decimal/octal/hex spellings.
+  if (/^0x[0-9a-f]+$/.test(h)) {
+    const n = parseInt(h, 16);
+    if (Number.isSafeInteger(n) && n >= 0 && n <= 0xffffffff) {
+      return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
+    }
+    return null;
+  }
+  // Dotted forms in decimal/octal/hex spellings, including short forms with
+  // inet_aton semantics: a.b (b is 24 bits), a.b.c (c is 16 bits).
   const parts = h.split(".");
-  if (parts.length === 4) {
+  if (parts.length >= 1 && parts.length <= 4) {
     const nums = parts.map(numPart);
-    if (nums.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return nums.join(".");
+    if (nums.every((n) => Number.isInteger(n) && n >= 0)) {
+      if (parts.length === 4 && nums.every((n) => n <= 255)) return nums.join(".");
+      if (parts.length === 3 && nums[0] <= 255 && nums[1] <= 255 && nums[2] <= 65535) {
+        return [nums[0], nums[1], (nums[2] >>> 8) & 255, nums[2] & 255].join(".");
+      }
+      if (parts.length === 2 && nums[0] <= 255 && nums[1] <= 16777215) {
+        return [nums[0], (nums[1] >>> 16) & 255, (nums[1] >>> 8) & 255, nums[1] & 255].join(".");
+      }
+    }
   }
   return null;
 }
@@ -128,7 +162,9 @@ export function ipBlocked(ip) {
 }
 export async function ssrfCheck(hostname) {
   if (process.env.APE_ALLOW_PRIVATE_EGRESS === "1") return null;
-  const h = String(hostname || "").toLowerCase().replace(/\.$/, "");
+  // Zone IDs (fe80%eth0) are a dialing detail, not identity: strip before
+  // classifying so scoped link-local forms cannot slip past as "unknown".
+  const h = String(hostname || "").toLowerCase().split("%")[0].replace(/\.$/, "");
   if (!h) return "empty hostname";
   if (h === "localhost") return "localhost resolves to loopback";
   const lit = normalizeIP(h);
@@ -296,8 +332,15 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
         hopUrl = next;
         finalUrl = next;
         // Same origin (or safe upgrade): credentials ride along. Anything
-        // else: clean hop even when explicitly permitted.
-        hopInit = (same || upgrade) ? init : cleanInit;
+        // else: clean hop even when explicitly permitted — auth headers stay
+        // behind AND the body is dropped, because request bodies can carry
+        // secrets and credentials belong to exactly one origin (CR-2).
+        if (same || upgrade) {
+          hopInit = init;
+        } else {
+          hopInit = { ...cleanInit };
+          delete hopInit.body;
+        }
         if (!same && !upgrade) hopUrl = stripSecrets(next);
         continue;
       }
