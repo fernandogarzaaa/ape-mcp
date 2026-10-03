@@ -91,6 +91,10 @@ function open() {
       ensureColumn("profile_hash", "profile_hash TEXT");
       ensureColumn("env_hash", "env_hash TEXT");
       ensureColumn("parent_run_id", "parent_run_id TEXT");
+      // Delegation audit trail: the authority restrictions the parent imposed
+      // on this run at fork time (JSON, nullable). Enforcement travels via
+      // the worker payload; this column is the inspectable record.
+      ensureColumn("inherited_policy", "inherited_policy TEXT");
       // Phase 1 (stateful protocol): run claims. claimant is the operator
       // identity holding a live run (explicit --claim-as / APE_CLAIM_AS /
       // clientInfo fallback); claimed_at is when the claim was taken or
@@ -145,7 +149,7 @@ export function createRun({ profile, model, objective, organism_id = "default", 
 // partial row (rollback). Reconcile BEFORE calling — process signaling must
 // not hold the write lock. A busy ledger returns ledger_busy (retry), never
 // a crash.
-export function admitRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null, parent_run_id = null, maxConcurrent = 4, dailyCapUsd = 25 }) {
+export function admitRun({ profile, model, objective, organism_id = "default", outcome_family = null, profile_hash = null, env_hash = null, parent_run_id = null, inherited_policy = null, maxConcurrent = 4, dailyCapUsd = 25 }) {
   const d = open();
   try {
     d.exec("BEGIN IMMEDIATE");
@@ -167,8 +171,8 @@ export function admitRun({ profile, model, objective, organism_id = "default", o
       }
     }
     const runId = "run-" + randomUUID().slice(0, 12);
-    d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
-      .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, new Date().toISOString());
+    d.prepare("INSERT INTO runs (run_id, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, inherited_policy, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)")
+      .run(runId, profile, model, objective, organism_id, outcome_family, profile_hash, env_hash, parent_run_id, inherited_policy == null ? null : JSON.stringify(inherited_policy), new Date().toISOString());
     d.exec("COMMIT");
     return { run_id: runId };
   } catch (e) {
@@ -606,11 +610,35 @@ export function loadCheckpoint(runId) {
 // Portable run bundles (stateful protocol, phase 2): a run's full ledger slice
 // (run row, steps, checkpoint, receipt) as a versioned JSON bundle. Import
 // plants it as a NEW run with lineage linked (parent_run_id + resumes chain),
-// resumable via ape_agent_resume. Bundles are UNSIGNED in v1 —
+// resumable via ape_agent_resume. Bundles are UNSIGNED in v1 -
 // manifest.signed is always false and says so plainly; signing is a follow-up
 // once key material exists. Version mismatch is a hard error, never a silent
 // reinterpretation.
 export const EXPORT_BUNDLE_VERSION = 1;
+// Import is a trust boundary (bundles are portable execution state): hard caps
+// on what one bundle may plant, so a crafted bundle cannot DB-fill the ledger
+// or smuggle policy-defeating counters past the resume caps.
+export const MAX_IMPORT_STEPS = Number(process.env.APE_MAX_IMPORT_STEPS ?? 2000);
+function isSaneCount(n, max = 1e12) {
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= max;
+}
+function isSaneInt(n, max = 1e9) {
+  return Number.isInteger(n) && n >= 0 && n <= max;
+}
+// Signing extension point (H2 roadmap): v1 bundles are unsigned by design.
+// verifyBundleSignature inspects bundle.manifest and reports; import accepts
+// unsigned bundles as TRUSTED INPUT (documented below) but routes through
+// this verifier so a future {alg, signature} plugs in without remodeling.
+// A signed bundle whose signature does not verify must be REJECTED here.
+export function verifyBundleSignature(bundle) {
+  const manifest = bundle?.manifest;
+  if (!manifest || manifest.signed !== true) {
+    return { signed: false, reason: "unsigned bundle: trusted-input semantics (see importRun)" };
+  }
+  // No verification algorithms are registered in v1: a bundle CLAIMING to be
+  // signed cannot be verified, so it is rejected rather than trusted.
+  return { signed: false, reason: `unsupported signature alg: ${manifest.alg ?? "missing"}`, reject: true };
+}
 
 function exporterId() {
   try {
@@ -651,7 +679,7 @@ export function exportRun(runId) {
     steps,
     checkpoint,
     receipt: parseJsonLenient(run.receipt),
-    manifest: { signed: false, exporter: exporterId(), kind: "ape-run-export" },
+    manifest: { signed: false, alg: null, signature: null, exporter: exporterId(), kind: "ape-run-export" },
   };
 }
 
@@ -673,9 +701,39 @@ export function importRun(bundle) {
       hint: "this bundle was produced by a different ape-mcp; refusing to reinterpret it",
     };
   }
+  // Signature gate: unsigned v1 bundles are accepted as trusted input (the
+  // operator fetched the bundle); anything claiming a signature must verify.
+  const sig = verifyBundleSignature(bundle);
+  if (sig.reject) {
+    return { error: "unverifiable_signature", reason: sig.reason, hint: "re-export from a supporting ape-mcp" };
+  }
   const src = bundle.run;
   if (!src || typeof src !== "object" || typeof src.run_id !== "string" || !src.run_id) {
     return { error: "invalid_bundle", hint: "bundle.run is missing or has no run_id" };
+  }
+  // Numeric bounds: a crafted bundle must not plant negative/absurd counters
+  // (policy-defeating resumes, negative spend) or unbounded history (DB-fill).
+  const srcResumes = src.resumes ?? 0;
+  if (!isSaneInt(srcResumes, 1e6)) {
+    return { error: "invalid_bundle", field: "run.resumes", hint: "resume count must be an integer >= 0" };
+  }
+  const maxResumes = Number(process.env.APE_MAX_RESUMES ?? 3);
+  if (srcResumes + 1 > maxResumes) {
+    return { error: "resume_cap_reached", resumes: srcResumes + 1, max: maxResumes, hint: "import counts against the lineage resume cap, same as in-place resume" };
+  }
+  for (const [field, max] of [["step_count", 1e9], ["total_tokens", 1e12], ["total_cost", 1e9]]) {
+    const v = src[field] ?? 0;
+    if (!isSaneCount(v, max)) {
+      return { error: "invalid_bundle", field: `run.${field}`, hint: "counter must be finite and >= 0" };
+    }
+  }
+  const srcSteps = Array.isArray(bundle.steps) ? bundle.steps : [];
+  if (srcSteps.length > MAX_IMPORT_STEPS) {
+    return { error: "import_too_large", steps: srcSteps.length, max: MAX_IMPORT_STEPS, hint: "bundle history exceeds the import cap; re-export a shorter slice" };
+  }
+  const cpStep = bundle.checkpoint?.step ?? 0;
+  if (!isSaneInt(cpStep)) {
+    return { error: "invalid_bundle", field: "checkpoint.step", hint: "checkpoint step must be an integer >= 0" };
   }
   const cpState = bundle.checkpoint?.state;
   if (!cpState || typeof cpState !== "object") {
@@ -684,6 +742,38 @@ export function importRun(bundle) {
       source_run_id: src.run_id,
       hint: "bundle has no checkpoint (source run never reached a model turn); nothing resumable to import",
     };
+  }
+  // Checkpoint budget/counters shape: the resumed loop trusts these numbers,
+  // so they must be structurally valid (content itself is trusted input —
+  // bundles are unsigned; see manifest.signed).
+  const cpBudget = cpState.budget;
+  if (cpBudget !== undefined) {
+    if (!cpBudget || typeof cpBudget !== "object") {
+      return { error: "invalid_bundle", field: "checkpoint.state.budget", hint: "budget must be an object" };
+    }
+    for (const f of ["steps", "tokens", "usd"]) {
+      if (cpBudget[f] !== undefined && !isSaneCount(cpBudget[f])) {
+        return { error: "invalid_bundle", field: `checkpoint.state.budget.${f}`, hint: "budget counters must be finite and >= 0" };
+      }
+    }
+    if (cpBudget.started !== undefined && !(typeof cpBudget.started === "number" && Number.isFinite(cpBudget.started) && cpBudget.started >= 0)) {
+      return { error: "invalid_bundle", field: "checkpoint.state.budget.started", hint: "budget start timestamp must be a finite number >= 0" };
+    }
+  }
+  for (const [field, where] of [["destructiveUsed", "checkpoint.state.destructiveUsed"], ["compressions", "checkpoint.state.compressions"], ["parallelFanouts", "checkpoint.state.parallelFanouts"]]) {
+    if (cpState[field] !== undefined && !isSaneInt(cpState[field])) {
+      return { error: "invalid_bundle", field: where, hint: "counter must be an integer >= 0" };
+    }
+  }
+  if (cpState.messages !== undefined) {
+    if (!Array.isArray(cpState.messages) || cpState.messages.length > 1000) {
+      return { error: "invalid_bundle", field: "checkpoint.state.messages", hint: "messages must be an array of at most 1000 entries" };
+    }
+    for (const m of cpState.messages) {
+      if (!m || typeof m !== "object" || typeof m.role !== "string") {
+        return { error: "invalid_bundle", field: "checkpoint.state.messages[]", hint: "every message must be an object with a string role" };
+      }
+    }
   }
   const d = open();
   const newId = "run-" + randomUUID().slice(0, 12);
@@ -698,7 +788,8 @@ export function importRun(bundle) {
       newId, src.profile ?? "unknown", src.model ?? "unknown", src.model_resolution ?? null,
       src.objective ?? "", src.organism_id ?? "default",
       src.step_count ?? 0, src.total_tokens ?? 0, src.total_cost ?? 0,
-      typeof src.outcome === "string" ? src.outcome : JSON.stringify(src.outcome ?? null),
+      // Imported outcome is caller-supplied result-side text: scrub like live.
+      redactSecrets(typeof src.outcome === "string" ? src.outcome : JSON.stringify(src.outcome ?? null)),
       src.outcome_family ?? null, src.outcome_hash ?? null,
       src.profile_hash ?? null, src.env_hash ?? null, src.unverified ?? 0,
       typeof bundle.receipt === "string" ? bundle.receipt : JSON.stringify(bundle.receipt ?? null),
@@ -706,7 +797,6 @@ export function importRun(bundle) {
       now, now,
     );
   const insStep = d.prepare("INSERT INTO steps (run_id, step, kind, tool, args_hash, duration_ms, tokens, cost, result_summary, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  const srcSteps = Array.isArray(bundle.steps) ? bundle.steps : [];
   for (const s of srcSteps) {
     if (!s || typeof s !== "object") continue;
     insStep.run(newId, s.step ?? 0, s.kind ?? null, s.tool ?? null, s.args_hash ?? null,
@@ -716,7 +806,7 @@ export function importRun(bundle) {
       redactSecrets(typeof s.result_summary === "string" ? s.result_summary : String(s.result_summary ?? "")),
       s.ts ?? now);
   }
-  saveCheckpoint(newId, bundle.checkpoint.step ?? 0, cpState);
+  saveCheckpoint(newId, cpStep, cpState);
   const out = {
     run_id: newId,
     uri: `ape://runs/${newId}`,
@@ -726,7 +816,7 @@ export function importRun(bundle) {
     source_run_id: src.run_id,
     resume_count: (src.resumes ?? 0) + 1,
     steps_imported: srcSteps.length,
-    checkpoint_step: bundle.checkpoint.step ?? 0,
+    checkpoint_step: cpStep,
     resume_with: "ape_agent_resume",
   };
   if (src.status === "running") {

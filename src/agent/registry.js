@@ -67,6 +67,23 @@ export async function invokeTool(tool, args, ctx) {
   return { error: "unknown_tool", name: tool.name };
 }
 
+// Authority inheritance: a child run may never wield authority its parent
+// lacks. Restrictions travel parent -> child -> grandchild; each level takes
+// the intersection (deny wins). The object is extensible (future keys:
+// network, privileged tools); today only `destructive` is enforced.
+// Shape: { destructive?: "deny" | "allow" } — absent key means "no opinion".
+export function intersectRestrictions(parent, child) {
+  const out = { ...(child ?? {}) };
+  if (parent?.destructive === "deny") out.destructive = "deny";
+  return out;
+}
+// Effective destructive policy for a loop: inherited deny always wins;
+// otherwise the profile's own policy applies (default deny).
+export function effectiveDestructivePolicy(profilePolicy, inherited) {
+  if (inherited?.destructive === "deny") return "deny";
+  return profilePolicy ?? "deny";
+}
+
 // Whether invoking this tool with these args is destructive (mutates external or
 // organism state). Checked by the loop BEFORE invoking — the policy gate lives at
 // call time, not just in tool definitions.
@@ -92,19 +109,41 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Child budget = a slice of the parent's REMAINING budget, so parent plus all
 // children can never exceed the parent's ceiling. Pure for testability.
-// remaining: { stepsLeft, tokensLeft, usdLeft, wallMsLeft|null }.
+// remaining: { stepsLeft, tokensLeft, usdLeft, wallMsLeft|null } where a null
+// (or missing) ceiling means UNLIMITED on that dimension — unlimited parents
+// can delegate freely; only finite ceilings constrain. No floor may exceed
+// what remains: an exhausted (or near-exhausted) parent refuses instead of
+// granting a fresh minimum allowance.
 export function sliceChildBudget(remaining = {}, share = 0.25) {
   const s = Math.min(Math.max(Number(share) || 0.25, 0.01), 0.5);
-  const stepsLeft = Number(remaining.stepsLeft ?? 0);
-  if (!(stepsLeft >= 1)) return { error: "parent budget exhausted", detail: "no remaining steps to slice a child budget from" };
+  const stepsLeft = remaining.stepsLeft;
+  const tokensLeft = remaining.tokensLeft;
+  const usdLeft = remaining.usdLeft;
+  const wallMsLeft = remaining.wallMsLeft ?? null;
+  // A dimension caps delegation only when the parent actually has a ceiling.
+  if (stepsLeft != null && !(stepsLeft >= 1)) {
+    return { error: "parent budget exhausted", detail: "no remaining steps to slice a child budget from" };
+  }
+  if (usdLeft != null && !(usdLeft > 0)) {
+    return { error: "parent budget exhausted", detail: "no remaining USD to slice a child budget from" };
+  }
+  if (tokensLeft != null && !(tokensLeft >= 1)) {
+    return { error: "parent budget exhausted", detail: "no remaining tokens to slice a child budget from" };
+  }
+  if (wallMsLeft != null && !(wallMsLeft > 0)) {
+    return { error: "parent budget exhausted", detail: "no remaining wall-clock to slice a child budget from" };
+  }
+  const proportional = (left) => (left == null ? null : Math.max(0, Math.floor(left * s)));
   return {
     share: s,
     limits: {
-      max_steps: Math.max(1, Math.floor(stepsLeft * s)),
-      max_tokens: Math.max(1, Math.floor(Number(remaining.tokensLeft ?? 0) * s)),
-      max_usd: Math.max(0.01, Number((Number(remaining.usdLeft ?? 0) * s).toFixed(4))),
-      max_wall_seconds: remaining.wallMsLeft != null
-        ? Math.max(10, Math.floor((remaining.wallMsLeft / 1000) * s))
+      // Steps: at least 1 when the parent has steps left (within remaining).
+      max_steps: stepsLeft == null ? null : Math.min(Math.max(1, proportional(stepsLeft)), Math.floor(stepsLeft)),
+      // Tokens/USD/wall: strict proportional slice, never above remaining.
+      max_tokens: tokensLeft == null ? null : proportional(tokensLeft),
+      max_usd: usdLeft == null ? null : Math.max(0, Number((usdLeft * s).toFixed(6))),
+      max_wall_seconds: wallMsLeft != null
+        ? Math.max(1, Math.floor((wallMsLeft / 1000) * s))
         : 120,
     },
   };
@@ -142,6 +181,12 @@ export async function runDelegated(args, ctx = {}) {
   }
   const sliced = sliceChildBudget(ctx.budget ?? {}, args.budget_share);
   if (sliced.error) return { error: "delegation_no_budget", detail: sliced.detail };
+  // Authority inheritance: the child runs under the intersection of its own
+  // profile policy and the restrictions imposed by this (parent) loop. Deny
+  // always wins, through any nesting depth — a child can never regain what an
+  // ancestor denied. ctx.restrictions is set by the parent loop's delegateCtx;
+  // absent (direct tool calls, tests) means no inherited restriction.
+  const restrictions = intersectRestrictions(ctx.restrictions ?? null, null);
   const timeoutS = Math.min(Math.max(Number(args.timeout_s ?? 120), 5), 1800);
   const admitted = admitRun({
     profile: args.profile,
@@ -149,6 +194,7 @@ export async function runDelegated(args, ctx = {}) {
     objective: String(args.objective ?? "").slice(0, 4000),
     organism_id: ctx.organism_id ?? "default",
     parent_run_id: ctx.parentRunId ?? null,
+    inherited_policy: Object.keys(restrictions).length ? restrictions : null,
     maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4),
     dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25),
   });
@@ -161,6 +207,7 @@ export async function runDelegated(args, ctx = {}) {
     const worker = fork(join(root, "src", "agent", "worker.js"), [childId, JSON.stringify({
       parentRunId: ctx.parentRunId ?? null,
       budgetCaps: sliced.limits,
+      restrictions: Object.keys(restrictions).length ? restrictions : null,
     })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
     pid = worker.pid;
     worker.unref();
@@ -191,6 +238,9 @@ export async function runDelegated(args, ctx = {}) {
     stop_reason: row.stop_reason ?? null,
     outcome: String(row.outcome ?? "").slice(0, 2000),
     cost_usd: Number(row.total_cost ?? 0),
+    // Parent-side debit needs the child's token spend too (same units as the
+    // parent budget). The loop debits both on completion; see runAgent.
+    tokens: Number(row.total_tokens ?? 0),
     steps: row.step_count ?? 0,
   };
 }

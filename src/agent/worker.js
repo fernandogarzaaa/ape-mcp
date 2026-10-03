@@ -179,6 +179,10 @@ async function main() {
     // Mock runs are hermetic replays: no ADAM I/O (also keeps test workers fast).
     initialContext: (opts.resume || opts.mockScript) ? null : await hydrateContext(req.objective, req.organism_id ?? "default"),
     parentRunId: opts.parentRunId ?? req.parent_run_id ?? null,
+    // Authority inheritance (M1): restrictions imposed by the delegating
+    // parent travel in the fork payload; the loop intersects them with this
+    // run's profile policy so deny cascades through any nesting depth.
+    inheritedRestrictions: opts.restrictions ?? null,
   });
   updateRun(runId, {
     status: result.stop_reason === "model_error" ? "failed" : "done",
