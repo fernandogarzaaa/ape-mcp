@@ -96,18 +96,47 @@ export function installAdam({ asset, dest, url, fetchImpl = defaultFetch, sideca
   return { status: "installed", verified: null, warn: `no checksum sidecar${sidecarTried ? "" : " (unreachable)"} and no pin — installed WITHOUT integrity verification (explicit opt-out)` };
 }
 // Re-verify an already-present binary against its recorded sidecar (stale or
-// swapped binaries fail instead of running). No sidecar: nothing to check
-// against (presence only, as before).
+// swapped binaries fail instead of running). No sidecar: UNVERIFIABLE —
+// presence alone proves nothing about provenance, so callers must treat it
+// as untrusted (fail closed) unless the binary is a local build (see
+// isLocalBuildPath) or an explicit opt-out is set.
 export function verifyPresent(dest) {
   let recorded = null;
   try { recorded = parseChecksumFile(readFileSync(sidecarPathFor(dest), "utf8"), basename(dest)); } catch { /* no record */ }
-  if (!recorded) return { status: "present", verified: null };
+  if (!recorded) return { status: "unverifiable", reason: "no-record" };
   const v = verifyChecksum(dest, recorded);
   if (!v.ok) {
     try { unlinkSync(dest); } catch { /* ignore */ }
     return { status: "refused", reason: "stale-mismatch", expected: recorded, actual: v.actual };
   }
   return { status: "present", verified: "recorded" };
+}
+// Local builds (cargo target/debug) are compiled from the vendored source on
+// this machine: provenance is the local tree, not a download, so no recorded
+// checksum is required. Release-dir binaries are held to the recorded proof.
+export function isLocalBuildPath(dest) {
+  return String(dest ?? "").replace(/\\/g, "/").includes("/target/debug/");
+}
+// Online proof for a present-but-unrecorded binary: fetch the release sidecar
+// for this tag and compare. Success records the sidecar (future hits verify
+// offline); anything else leaves the file untouched and reports unverifiable.
+export function provePresent({ asset, dest, tag, sidecarImpl = defaultSidecar }) {
+  const url = `https://github.com/fernandogarzaaa/ape-mcp/releases/download/${tag}/${asset}`;
+  let text = null;
+  try {
+    text = sidecarImpl(url);
+  } catch {
+    return { status: "unverifiable", reason: "sidecar-unreachable" };
+  }
+  const expected = parseChecksumFile(text, asset);
+  if (!expected) return { status: "unverifiable", reason: "sidecar-no-entry" };
+  const v = verifyChecksum(dest, expected);
+  if (!v.ok) {
+    try { unlinkSync(dest); } catch { /* ignore */ }
+    return { status: "refused", reason: "stale-mismatch", expected, actual: v.actual };
+  }
+  try { writeFileSync(sidecarPathFor(dest), `${expected}  ${basename(dest)}\n`); } catch { /* best-effort */ }
+  return { status: "present", verified: "sidecar" };
 }
 
 const invokedDirectly = String(process.argv[1] || "").replace(/\\/g, "/").endsWith("scripts/fetch-adam.mjs");
@@ -124,12 +153,32 @@ if (invokedDirectly) {
   }
   if (!asset) { console.error("unsupported platform for prebuilt adam-mcp; build from vendors/adam"); process.exit(1); }
   if (existsSync(dest) && !process.argv.includes("--force")) {
-    const v = verifyPresent(dest);
-    if (v.status === "present") {
-      console.log(`present: ${dest}${v.verified ? " (recorded checksum re-verified)" : " (no recorded checksum; use --force to re-fetch with verification)"}`);
+    // Trust-on-first-use bootstrap for LOCAL builds: you compiled it from the
+    // vendored source, so record its hash explicitly (never implied). This is
+    // attestation of local provenance, not a remote integrity proof.
+    if (process.argv.includes("--record-local")) {
+      const v = verifyChecksum(dest, sha256File(dest));
+      try { writeFileSync(sidecarPathFor(dest), `${v.actual}  ${basename(dest)}\n`); } catch { /* ignore */ }
+      console.log(`recorded local build: ${dest} sha256:${v.actual.slice(0, 16)}...`);
       process.exit(0);
     }
-    console.error(`present binary failed re-verification (${v.reason}); deleted. Re-run to fetch verified.`);
+    const v = verifyPresent(dest);
+    if (v.status === "present") {
+      console.log(`present: ${dest} (recorded checksum re-verified)`);
+      process.exit(0);
+    }
+    if (v.status === "refused") {
+      console.error(`present binary failed re-verification (${v.reason}); deleted. Re-run to fetch verified.`);
+      process.exit(1);
+    }
+    // Unverifiable (no record): try an online proof before refusing, so an
+    // intact release binary self-heals instead of forcing a re-download.
+    const proof = provePresent({ asset, dest, tag: TAG });
+    if (proof.status === "present") {
+      console.log(`present: ${dest} (verified against release sidecar, recorded for next time)`);
+      process.exit(0);
+    }
+    console.error(`present binary has no integrity proof (${proof.reason}); refusing to trust it. Re-run with --force to fetch verified, --record-local if you built it from source, or set APE_ADAM_ALLOW_UNVERIFIED=1 to override explicitly.`);
     process.exit(1);
   }
   const url = `https://github.com/fernandogarzaaa/ape-mcp/releases/download/${TAG}/${asset}`;

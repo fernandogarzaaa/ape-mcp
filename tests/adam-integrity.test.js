@@ -4,12 +4,13 @@ import assert from "node:assert/strict";
 // (pin or sidecar) installs; mismatch / missing proof refuses and deletes;
 // explicit opt-out is the only unverified path. Recorded sidecars make
 // present binaries re-verifiable (stale swaps fail instead of running).
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 const dir = mkdtempSync(join(tmpdir(), "ape-adam-int-"));
-const { installAdam, verifyPresent, parseChecksumFile, verifyChecksum, sidecarPathFor } = await import("../scripts/fetch-adam.mjs");
+const { installAdam, verifyPresent, provePresent, parseChecksumFile, verifyChecksum, sidecarPathFor } = await import("../scripts/fetch-adam.mjs");
+const { verifiedAdamBinary } = await import("../src/adam-client.js");
 
 const BYTES = Buffer.from("fake-adam-binary-bytes");
 const HEX = createHash("sha256").update(BYTES).digest("hex");
@@ -71,12 +72,67 @@ test("integrity: present binary re-verifies; swapped binary fails", () => {
   assert.ok(!existsSync(d), "swapped binary deleted");
 });
 
-test("integrity: present binary with no record stays presence-only", () => {
+test("integrity: present binary with no record is unverifiable (fail closed)", () => {
   const d = dest();
   writeFileSync(d, BYTES);
   const v = verifyPresent(d);
-  assert.equal(v.status, "present");
-  assert.equal(v.verified, null);
+  assert.equal(v.status, "unverifiable", "presence alone proves nothing");
+  assert.equal(v.reason, "no-record");
+});
+
+test("integrity: online proof heals an intact-but-unrecorded binary", () => {
+  const d = dest();
+  writeFileSync(d, BYTES);
+  const good = () => `${HEX}  adam-mcp-linux-x64\n`;
+  const p = provePresent({ asset: "adam-mcp-linux-x64", dest: d, tag: "v9.9.9", sidecarImpl: good });
+  assert.equal(p.status, "present");
+  assert.equal(p.verified, "sidecar");
+  assert.equal(verifyPresent(d).status, "present", "proof is recorded for next time");
+});
+
+test("integrity: online proof refuses a swapped binary, unreachable sidecar stays unverifiable", () => {
+  const d = dest();
+  writeFileSync(d, BYTES);
+  const wrong = () => `${"f".repeat(64)}  adam-mcp-linux-x64\n`;
+  const bad = provePresent({ asset: "adam-mcp-linux-x64", dest: d, tag: "v9.9.9", sidecarImpl: wrong });
+  assert.equal(bad.status, "refused");
+  assert.ok(!existsSync(d), "swapped binary deleted");
+  const d2 = dest();
+  writeFileSync(d2, BYTES);
+  const off = provePresent({ asset: "adam-mcp-linux-x64", dest: d2, tag: "v9.9.9", sidecarImpl: () => { throw new Error("offline"); } });
+  assert.equal(off.status, "unverifiable");
+  assert.ok(existsSync(d2), "unproven file left alone (refusal is about trust, not deletion)");
+});
+
+test("integrity: runtime selection enforces proof, trusts local builds, honors opt-out", () => {
+  const prevDir = process.env.APE_ADAM_BIN_DIR;
+  const prevOpt = process.env.APE_ADAM_ALLOW_UNVERIFIED;
+  const base = mkdtempSync(join(tmpdir(), "ape-adam-rt-"));
+  mkdirSync(join(base, "release"), { recursive: true });
+  mkdirSync(join(base, "debug"), { recursive: true });
+  process.env.APE_ADAM_BIN_DIR = base;
+  delete process.env.APE_ADAM_ALLOW_UNVERIFIED;
+  try {
+    const exe = process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp";
+    const rel = join(base, "release", exe);
+    const dbg = join(base, "debug", exe);
+    assert.equal(verifiedAdamBinary(), null, "nothing present -> null (unavailable)");
+    writeFileSync(rel, BYTES);
+    assert.equal(verifiedAdamBinary(), null, "release binary without proof is not selected");
+    writeFileSync(rel + ".sha256", `${HEX}  ${exe}\n`);
+    assert.equal(verifiedAdamBinary(), rel, "recorded release binary selected");
+    writeFileSync(rel, Buffer.from("tampered"));
+    assert.equal(verifiedAdamBinary(), null, "swapped release binary rejected");
+    writeFileSync(dbg, BYTES);
+    assert.equal(verifiedAdamBinary(), dbg, "local debug build trusted by provenance");
+    process.env.APE_ADAM_ALLOW_UNVERIFIED = "1";
+    assert.equal(verifiedAdamBinary(), rel, "explicit opt-out bypasses the check");
+  } finally {
+    if (prevDir === undefined) delete process.env.APE_ADAM_BIN_DIR;
+    else process.env.APE_ADAM_BIN_DIR = prevDir;
+    if (prevOpt === undefined) delete process.env.APE_ADAM_ALLOW_UNVERIFIED;
+    else process.env.APE_ADAM_ALLOW_UNVERIFIED = prevOpt;
+  }
 });
 
 test("integrity: checksum file parsing is strict", () => {

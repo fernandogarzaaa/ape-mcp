@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assetFor, destFor } from "./fetch-adam.mjs";
+import { assetFor, destFor, verifyPresent, isLocalBuildPath } from "./fetch-adam.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(root);
@@ -14,7 +14,19 @@ const asset = assetFor();
 if (!asset) { console.error("unsupported platform"); process.exit(1); }
 let bin = destFor(asset);
 async function ensure() {
-  if (existsSync(bin)) return;
+  if (existsSync(bin)) {
+    // Present is not proven: release binaries need a recorded checksum (or
+    // the explicit opt-out); local debug builds are trusted by provenance.
+    // Fail here — never handshake an unverified production binary.
+    if (!isLocalBuildPath(bin) && process.env.APE_ADAM_ALLOW_UNVERIFIED !== "1") {
+      const v = verifyPresent(bin);
+      if (v.status !== "present") {
+        console.error(`adam binary at ${bin} has no integrity proof (${v.reason ?? "unknown"}); refusing handshake. Re-fetch verified (node scripts/fetch-adam.mjs --force), record a local build (--record-local), or set APE_ADAM_ALLOW_UNVERIFIED=1 to override explicitly.`);
+        process.exit(1);
+      }
+    }
+    return;
+  }
   if (!process.argv.includes("--build-if-missing")) {
     console.error(`missing adam binary for ${asset}; run: node scripts/fetch-adam.mjs`);
     process.exit(1);

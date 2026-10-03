@@ -4,7 +4,8 @@
 // Fallback contract unchanged: {_adam: "unavailable"|"timeout"|"spawn-error"|...} —
 // never a silent stub.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { APE_VERSION } from "./version.js";
@@ -12,13 +13,49 @@ import { APE_VERSION } from "./version.js";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 export function adamBinary() {
-  const cands = [
-    join(root, "vendors", "adam", "target", "release", process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp"),
-    join(root, "vendors", "adam", "target", "debug", process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp"),
-  ];
+  const cands = adamCandidates();
   // NOTE: vendors/adam/bin/adam-mcp is a self-build WRAPPER (shell script), not a
   // binary — intentionally excluded so we never spawn it as an MCP process.
-  return cands.find((p) => existsSync(p)) ?? null;
+  return cands.map((c) => c.path).find((p) => existsSync(p)) ?? null;
+}
+function adamCandidates() {
+  // Test/operator override for the binary location (same release+debug shape).
+  const base = process.env.APE_ADAM_BIN_DIR
+    ? [process.env.APE_ADAM_BIN_DIR]
+    : [join(root, "vendors", "adam", "target")];
+  const exe = process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp";
+  return base.flatMap((b) => [
+    { path: join(b, "release", exe), localBuild: false },
+    { path: join(b, "debug", exe), localBuild: true },
+  ]);
+}
+// Verified resolution (fail-closed): a release-dir binary runs only with a
+// recorded checksum (written by a verified fetch, --record-local, or a proven
+// sidecar); debug-dir binaries are local builds, trusted by provenance; the
+// explicit APE_ADAM_ALLOW_UNVERIFIED=1 opt-out bypasses the check. Anything
+// else resolves to null, which the caller reports as explicitly unavailable
+// (the pre-existing, test-covered contract) — never a silent spawn.
+export function verifiedAdamBinary({ allowUnverified = process.env.APE_ADAM_ALLOW_UNVERIFIED === "1" } = {}) {
+  for (const { path: p, localBuild } of adamCandidates()) {
+    if (!existsSync(p)) continue;
+    if (allowUnverified) return p;
+    if (localBuild) return p;
+    if (recordedChecksumOk(p)) return p;
+  }
+  return null;
+}
+function recordedChecksumOk(path) {
+  let expected = null;
+  try {
+    const line = String(readFileSync(path + ".sha256", "utf8")).split("\n")[0].trim().split(/\s+/)[0] ?? "";
+    if (/^[0-9a-fA-F]{64}$/.test(line)) expected = line.toLowerCase();
+  } catch { return false; }
+  if (!expected) return false;
+  let actual = null;
+  try {
+    actual = createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch { return false; }
+  return actual === expected;
 }
 
 export function dataDir() {
@@ -119,7 +156,7 @@ function makeSession(bin) {
 
 async function ensureSession() {
   if (Date.now() < brokenUntil) return null;
-  const bin = adamBinary();
+  const bin = verifiedAdamBinary();
   if (!bin) return null;
   if (session && session.alive && session.bin === bin) {
     if (session.initPromise) await session.initPromise;
