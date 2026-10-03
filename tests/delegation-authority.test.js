@@ -122,16 +122,31 @@ test("M2: slice refuses exhausted dimensions, never floors above remaining", () 
   assert.ok(sliceChildBudget({ ...full, tokensLeft: 0 }).error, "no tokens left refuses");
   assert.ok(sliceChildBudget({ ...full, wallMsLeft: 0 }).error, "no wall left refuses");
   // Near-exhausted: slice stays at or under remaining, never a fresh floor.
-  const thin = sliceChildBudget({ stepsLeft: 5, tokensLeft: 2, usdLeft: 0.0004, wallMsLeft: 3000 }, 0.25);
+  const thin = sliceChildBudget({ stepsLeft: 5, tokensLeft: 2, usdLeft: 0.0004, wallMsLeft: 30000 }, 0.25);
   assert.ok(!thin.error);
   assert.ok(thin.limits.max_usd <= 0.0004, `usd slice ${thin.limits.max_usd} within remaining`);
   assert.ok(thin.limits.max_tokens <= 2, "token slice within remaining");
   assert.ok(thin.limits.max_steps <= 5, "step slice within remaining");
+  assert.ok(thin.limits.max_wall_seconds * 1000 <= 30000, `wall slice ${thin.limits.max_wall_seconds}s within remaining`);
   // Unlimited dimensions delegate freely.
   const unlim = sliceChildBudget({ stepsLeft: 5, tokensLeft: null, usdLeft: null, wallMsLeft: null }, 0.25);
   assert.ok(!unlim.error);
   assert.equal(unlim.limits.max_tokens, null, "unlimited tokens stay unlimited");
   assert.equal(unlim.limits.max_usd, null, "unlimited USD stays unlimited");
+});
+
+test("M2: sub-second wall remainder refuses instead of granting a floor above it", () => {
+  // The advisor's edge: 200ms remaining at share 0.5 used to grant a full
+  // 1s floor. Now delegation is refused: a child cannot usefully run in it.
+  for (const ms of [200, 999, 4999]) {
+    const r = sliceChildBudget({ stepsLeft: 10, tokensLeft: 10000, usdLeft: 1.0, wallMsLeft: ms }, 0.5);
+    assert.ok(r.error, `${ms}ms remaining refuses`);
+    assert.match(r.detail ?? "", /minimum viable child grant/, "honest reason");
+  }
+  // At exactly the minimum, the grant is bounded by remaining, never above.
+  const edge = sliceChildBudget({ stepsLeft: 10, tokensLeft: 10000, usdLeft: 1.0, wallMsLeft: 5000 }, 0.5);
+  assert.ok(!edge.error);
+  assert.ok(edge.limits.max_wall_seconds * 1000 <= 5000, `grant ${edge.limits.max_wall_seconds}s within remaining`);
 });
 
 test("M2: child token spend debits the parent ledger totals", async () => {

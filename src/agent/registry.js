@@ -114,6 +114,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // can delegate freely; only finite ceilings constrain. No floor may exceed
 // what remains: an exhausted (or near-exhausted) parent refuses instead of
 // granting a fresh minimum allowance.
+// A child needs a usable wall window (fork + at least one model turn): below
+// this remaining time delegation is refused instead of granting a floor that
+// would exceed what the parent has left. Matches the minimum delegation
+// timeout so a granted child can always in principle complete in time.
+export const MIN_WALL_GRANT_MS = 5000;
 export function sliceChildBudget(remaining = {}, share = 0.25) {
   const s = Math.min(Math.max(Number(share) || 0.25, 0.01), 0.5);
   const stepsLeft = remaining.stepsLeft;
@@ -133,6 +138,9 @@ export function sliceChildBudget(remaining = {}, share = 0.25) {
   if (wallMsLeft != null && !(wallMsLeft > 0)) {
     return { error: "parent budget exhausted", detail: "no remaining wall-clock to slice a child budget from" };
   }
+  if (wallMsLeft != null && wallMsLeft < MIN_WALL_GRANT_MS) {
+    return { error: "parent budget exhausted", detail: `remaining wall-clock (${wallMsLeft}ms) below the minimum viable child grant (${MIN_WALL_GRANT_MS}ms); refusing instead of granting time the parent does not have` };
+  }
   const proportional = (left) => (left == null ? null : Math.max(0, Math.floor(left * s)));
   return {
     share: s,
@@ -143,6 +151,9 @@ export function sliceChildBudget(remaining = {}, share = 0.25) {
       max_tokens: tokensLeft == null ? null : proportional(tokensLeft),
       max_usd: usdLeft == null ? null : Math.max(0, Number((usdLeft * s).toFixed(6))),
       max_wall_seconds: wallMsLeft != null
+        // Rounding floor: reachable only when floor(R*s) is 0, i.e. the
+        // grant is 1s against a remaining R >= 5s (enforced above), so the
+        // grant can never exceed what the parent has left.
         ? Math.max(1, Math.floor((wallMsLeft / 1000) * s))
         : 120,
     },
