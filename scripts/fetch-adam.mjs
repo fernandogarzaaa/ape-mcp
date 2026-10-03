@@ -1,7 +1,7 @@
 // Fetch prebuilt adam-mcp for this platform from the APE GitHub release.
 // Standalone guarantee holds: release binaries are built from vendors/adam (same repo),
 // never from the 5 source repos. Fallback: `cargo build --release -p adam-mcp` in vendors/adam.
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -25,6 +25,16 @@ export function destFor(asset) {
 // it is never installed unverified when an expectation exists. Expectation
 // sources (first wins): APE_ADAM_SHA256 pin, then the release's <asset>.sha256
 // sidecar. Mismatch deletes the file and fails closed.
+//
+// Trust root (explicit): TLS to github.com + the integrity of the ape-mcp
+// release itself (same origin serves both bytes and checksums). There is no
+// signature check: possession of the release is the trust anchor, exactly
+// like the TUI fetch path. This is documented, not assumed.
+// Default is FAIL-CLOSED: with no pin and no sidecar the install is refused
+// (deleted) unless APE_ADAM_ALLOW_UNVERIFIED=1 explicitly opts into the old
+// warn-and-install behavior. A refused install is not fatal to APE: the
+// runtime reports adam-mcp explicitly unavailable (covered by tests) and
+// `cargo build --release -p adam-mcp` in vendors/adam always works offline.
 export function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -38,6 +48,66 @@ export function parseChecksumFile(text, asset) {
 export function verifyChecksum(path, expectedHex) {
   const actual = sha256File(path);
   return { ok: actual.toLowerCase() === String(expectedHex ?? "").trim().toLowerCase(), actual };
+}
+export function sidecarPathFor(dest) {
+  return dest + ".sha256";
+}
+function defaultFetch(url, dest) {
+  execFileSync("curl", ["-fsSL", "-o", dest, url], { stdio: "inherit" });
+  if (process.platform !== "win32") execFileSync("chmod", ["+x", dest]);
+}
+function defaultSidecar(url) {
+  return execFileSync("curl", ["-fsSL", "--max-time", "30", url + ".sha256"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+}
+// Install flow, factored for tests: returns a status object, never exits.
+// fetchImpl(url, dest) downloads; sidecarImpl(url) returns sidecar text or throws.
+// allowUnverified explicitly opts into installing without any integrity proof.
+export function installAdam({ asset, dest, url, fetchImpl = defaultFetch, sidecarImpl = defaultSidecar, pin = null, allowUnverified = false }) {
+  fetchImpl(url, dest);
+  let expected = (pin ?? "").trim() || null;
+  let via = expected ? "pin" : null;
+  let sidecarTried = false;
+  if (!expected) {
+    try {
+      const out = sidecarImpl(url);
+      sidecarTried = true;
+      expected = parseChecksumFile(out, asset);
+      if (expected) via = "sidecar";
+    } catch { /* sidecar absent — handled below */ }
+  }
+  const remove = () => { try { unlinkSync(dest); } catch { /* ignore */ } };
+  const recordSidecar = (hex) => {
+    try { mkdirSync(dirname(dest), { recursive: true }); } catch { /* ignore */ }
+    try { writeFileSync(sidecarPathFor(dest), `${hex}  ${basename(dest)}\n`); } catch { /* best-effort */ }
+  };
+  if (expected) {
+    const v = verifyChecksum(dest, expected);
+    if (!v.ok) {
+      remove();
+      return { status: "refused", reason: "mismatch", expected, actual: v.actual, via };
+    }
+    recordSidecar(expected);
+    return { status: "installed", verified: via, sha256: v.actual };
+  }
+  if (!allowUnverified) {
+    remove();
+    return { status: "refused", reason: "no-checksum", sidecarTried, via: null };
+  }
+  return { status: "installed", verified: null, warn: `no checksum sidecar${sidecarTried ? "" : " (unreachable)"} and no pin — installed WITHOUT integrity verification (explicit opt-out)` };
+}
+// Re-verify an already-present binary against its recorded sidecar (stale or
+// swapped binaries fail instead of running). No sidecar: nothing to check
+// against (presence only, as before).
+export function verifyPresent(dest) {
+  let recorded = null;
+  try { recorded = parseChecksumFile(readFileSync(sidecarPathFor(dest), "utf8"), basename(dest)); } catch { /* no record */ }
+  if (!recorded) return { status: "present", verified: null };
+  const v = verifyChecksum(dest, recorded);
+  if (!v.ok) {
+    try { unlinkSync(dest); } catch { /* ignore */ }
+    return { status: "refused", reason: "stale-mismatch", expected: recorded, actual: v.actual };
+  }
+  return { status: "present", verified: "recorded" };
 }
 
 const invokedDirectly = String(process.argv[1] || "").replace(/\\/g, "/").endsWith("scripts/fetch-adam.mjs");
@@ -53,40 +123,37 @@ if (invokedDirectly) {
     process.exit(asset ? 0 : 1);
   }
   if (!asset) { console.error("unsupported platform for prebuilt adam-mcp; build from vendors/adam"); process.exit(1); }
-  if (existsSync(dest) && !process.argv.includes("--force")) { console.log("present: " + dest); process.exit(0); }
+  if (existsSync(dest) && !process.argv.includes("--force")) {
+    const v = verifyPresent(dest);
+    if (v.status === "present") {
+      console.log(`present: ${dest}${v.verified ? " (recorded checksum re-verified)" : " (no recorded checksum; use --force to re-fetch with verification)"}`);
+      process.exit(0);
+    }
+    console.error(`present binary failed re-verification (${v.reason}); deleted. Re-run to fetch verified.`);
+    process.exit(1);
+  }
   const url = `https://github.com/fernandogarzaaa/ape-mcp/releases/download/${TAG}/${asset}`;
   mkdirSync(dirname(dest), { recursive: true });
   console.log("fetching " + url);
   try {
-    execFileSync("curl", ["-fsSL", "-o", dest, url], { stdio: "inherit" });
-    if (process.platform !== "win32") execFileSync("chmod", ["+x", dest]);
-    let expected = (process.env.APE_ADAM_SHA256 || "").trim() || null;
-    let sidecarTried = false;
-    if (!expected) {
-      // Best-effort sidecar: releases SHOULD publish <asset>.sha256 next to the binary.
-      try {
-        const out = execFileSync("curl", ["-fsSL", "--max-time", "30", url + ".sha256"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-        sidecarTried = true;
-        expected = parseChecksumFile(out, asset);
-        if (!expected) console.warn("checksum sidecar present but has no entry for " + asset);
-      } catch { /* sidecar absent — handled below */ }
-    }
-    if (expected) {
-      const v = verifyChecksum(dest, expected);
-      if (!v.ok) {
-        try { unlinkSync(dest); } catch { /* ignore */ }
-        console.error(`checksum MISMATCH for ${asset}: expected ${expected}, got ${v.actual}; deleted. Refusing to install.`);
-        process.exit(1);
-      }
-      console.log(`checksum ok (${process.env.APE_ADAM_SHA256 ? "pin" : "sidecar"}): sha256:${v.actual.slice(0, 16)}...`);
-    } else if (process.env.APE_ADAM_REQUIRE_CHECKSUM === "1") {
-      try { unlinkSync(dest); } catch { /* ignore */ }
-      console.error("no checksum available and APE_ADAM_REQUIRE_CHECKSUM=1; deleted. Refusing to install.");
+    const r = installAdam({
+      asset, dest, url,
+      pin: (process.env.APE_ADAM_SHA256 || "").trim() || null,
+      allowUnverified: process.env.APE_ADAM_ALLOW_UNVERIFIED === "1",
+    });
+    if (r.status === "installed" && r.verified) {
+      console.log(`checksum ok (${r.verified}): sha256:${r.sha256.slice(0, 16)}...`);
+      console.log("installed: " + dest);
+    } else if (r.status === "installed") {
+      console.warn(`WARNING: ${r.warn}`);
+      console.log("installed: " + dest);
+    } else if (r.reason === "mismatch") {
+      console.error(`checksum MISMATCH for ${asset}: expected ${r.expected}, got ${r.actual}; deleted. Refusing to install.`);
       process.exit(1);
     } else {
-      console.warn(`WARNING: no checksum sidecar${sidecarTried ? "" : " (unreachable)"} and no APE_ADAM_SHA256 pin — installed WITHOUT integrity verification. Set APE_ADAM_REQUIRE_CHECKSUM=1 to fail closed instead.`);
+      console.error("no checksum available (no pin, no sidecar); deleted. Refusing to install. Set APE_ADAM_SHA256 to a pin, publish an <asset>.sha256 sidecar, or set APE_ADAM_ALLOW_UNVERIFIED=1 to override explicitly.");
+      process.exit(1);
     }
-    console.log("installed: " + dest);
   } catch {
     console.error(`fetch failed (release ${TAG} may not have binaries yet); fallback: cd vendors/adam && cargo build --release -p adam-mcp`);
     process.exit(1);
