@@ -305,15 +305,18 @@ async function handleMcpMessage(msg, session = null) {
 }
 
 const MCP_BODY_CAP = 4 * 1024 * 1024;
-function readMcpBody(req) {
+// Single safe body reader for every POST route (M4): rejects past the cap
+// BEFORE the bytes accumulate, destroys the socket, and reports 413.
+// Unbounded `for await` string concat is an OOM primitive — no route may use it.
+export function readCappedBody(req, cap = MCP_BODY_CAP) {
   return new Promise((resolve, reject) => {
     let body = "";
     let size = 0;
     req.on("data", (c) => {
       size += c.length;
-      if (size > MCP_BODY_CAP) {
+      if (size > cap) {
         reject(Object.assign(new Error("body too large"), { status: 413 }));
-        req.destroy();
+        try { req.destroy(); } catch { /* already closing */ }
         return;
       }
       body += c;
@@ -321,6 +324,9 @@ function readMcpBody(req) {
     req.on("end", () => resolve(body));
     req.on("error", reject);
   });
+}
+function readMcpBody(req) {
+  return readCappedBody(req, MCP_BODY_CAP);
 }
 
 async function handleMcpPost(req, res) {
@@ -382,7 +388,12 @@ export function startHttp({ port = 8787, host = "127.0.0.1" } = {}) {
     if (req.method === "POST" && req.url === "/a2a") {
       if (!checkBearer(req).ok) return unauthorized(res, h);
       let body = "";
-      for await (const c of req) body += c;
+      try {
+        body = await readCappedBody(req);
+      } catch {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "body too large" }));
+      }
       try {
         const { id, method, params } = JSON.parse(body || "{}");
         try {
@@ -407,7 +418,12 @@ export function startHttp({ port = 8787, host = "127.0.0.1" } = {}) {
     if (req.method === "POST" && (req.url === "/call" || req.url === "/tasks/get" || req.url === "/agent")) {
       if (!checkBearer(req).ok) return unauthorized(res, h);
       let body = "";
-      for await (const c of req) body += c;
+      try {
+        body = await readCappedBody(req);
+      } catch {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "body too large" }));
+      }
       try {
         if (req.url === "/agent") {
           const { method, params } = JSON.parse(body || "{}");

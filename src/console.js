@@ -13,7 +13,7 @@ import { listRuns, getRun, runningCount, spendSince, stepsSince, maxStepId, reso
 import { connectorList } from "./connectors.js";
 import { listProfiles, describeProfile, listProfileDetails, loadProfile } from "./agent/profiles.js";
 import { protectedResourceDoc } from "./auth.js";
-import { allowedHost } from "./http.js";
+import { allowedHost, readCappedBody } from "./http.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -457,7 +457,12 @@ export function startConsole({ port = 0, open = false, host } = {}) {
     if (req.method === "POST" && (url.pathname === "/api/profile/save" || url.pathname === "/api/connector/save")) {
       if (!checkConsoleBearer(req).ok) return consoleUnauthorized(res);
       let body = "";
-      for await (const c of req) body += c;
+      try {
+        body = await readCappedBody(req);
+      } catch {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "body too large" }));
+      }
       try {
         const { name, yaml } = JSON.parse(body || "{}");
         if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(name ?? "")) || typeof yaml !== "string" || !yaml.trim()) {
@@ -486,7 +491,12 @@ export function startConsole({ port = 0, open = false, host } = {}) {
     if (req.method === "POST" && url.pathname === "/api/call") {
       if (!checkConsoleBearer(req).ok) return consoleUnauthorized(res);
       let body = "";
-      for await (const c of req) body += c;
+      try {
+        body = await readCappedBody(req);
+      } catch {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "body too large" }));
+      }
       try {
         const { name, arguments: a } = JSON.parse(body || "{}");
         const out = await dispatchCall(name, a ?? {});
