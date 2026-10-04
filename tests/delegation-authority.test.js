@@ -185,3 +185,26 @@ test("M2: restored wall-clock does not grant a fresh window", async () => {
   assert.equal(res.stop_reason, "max_wall_seconds", `expired wall halts before any turn, got: ${res.stop_reason}`);
   assert.equal(res.steps.length, 0, "no model turn executed on an expired budget");
 });
+
+test("M2: unlimited parent dimensions delegate freely (null stays unbounded)", async () => {
+  writeProfiles();
+  const res = await runAgent({
+    profile: {
+      name: "del-sec-unlim", model: { provider: "mock", id: "mock-model" }, system: "t",
+      tools: [{ builtin: "delegate" }, { builtin: "finish" }],
+      limits: { max_steps: 10, max_delegate_depth: 2 },
+      policy: { destructive: "deny", verify_before_finish: "off" },
+      stop_conditions: ["no_tool_call_in_step", "explicit_final_answer", "budget_exhausted"],
+    },
+    objective: "supervise without ceilings",
+    mockScript: [
+      { tool: "delegate", args: { profile: "del-sec-child", objective: "subtask" } },
+      { tool: "finish", args: { summary: "synthesized" } },
+    ],
+    parentRunId: "run-sec-unlim",
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer", `unlimited parent completes: ${res.stop_reason}`);
+  const d = res.receipt.delegations[0];
+  assert.ok(d?.run_id, "child ran despite no finite ceilings");
+  assert.equal(runs.getRun(d.run_id).status === "running", false, "child terminal");
+});
