@@ -24,8 +24,8 @@ function baseBundle(over = {}) {
     version: EXPORT_BUNDLE_VERSION,
     run: { run_id: src.run_id, resumes: 0, step_count: 2, total_tokens: 10, total_cost: 0.01, outcome: "fine" },
     steps: [
-      { step: 0, kind: "tool", tool: "probe", resultSummary: "ok" },
-      { step: 1, kind: "model", resultSummary: "done" },
+      { step: 0, kind: "tool", tool: "probe", result_summary: "ok" },
+      { step: 1, kind: "model", result_summary: "done" },
     ],
     checkpoint: { step: 1, state: { messages: [{ role: "user", content: "hi" }], budget: { steps: 1, tokens: 10, usd: 0.01, started: 123 }, destructiveUsed: 0 } },
     receipt: {},
@@ -36,7 +36,7 @@ function baseBundle(over = {}) {
 
 test("import: oversized step list is rejected, not planted", () => {
   const steps = [];
-  for (let i = 0; i < 2500; i++) steps.push({ step: i, kind: "tool", tool: "x", resultSummary: "s" });
+  for (let i = 0; i < 2500; i++) steps.push({ step: i, kind: "tool", tool: "x", result_summary: "s" });
   const out = importRun(baseBundle({ steps }));
   assert.equal(out.error, "import_too_large", JSON.stringify(out).slice(0, 160));
   assert.ok(out.max > 0, "cap reported");
@@ -89,7 +89,7 @@ test("import: unsigned manifest is trusted input (documented, explicit)", () => 
 
 test("import: valid bundle imports, scrubs outcome, plants resumable checkpoint", () => {  const b = baseBundle();
   b.run.outcome = `all good, key was ${SECRET} ok`;
-  b.steps[0].resultSummary = `used ${SECRET} fine`;
+  b.steps[0].result_summary = `used ${SECRET} fine`;
   const out = importRun(b);
   assert.ok(!out.error, JSON.stringify(out).slice(0, 200));
   assert.equal(out.status, "stopped");
@@ -97,6 +97,7 @@ test("import: valid bundle imports, scrubs outcome, plants resumable checkpoint"
   const row = getRun(out.run_id);
   assert.ok(!JSON.stringify(row).includes(SECRET), "no raw secret anywhere in the planted row");
   assert.ok(row.outcome.includes("[redacted]"), "outcome scrubbed at import");
+  assert.ok(row.steps[0].result_summary.includes("[redacted]"), "step summary scrubbed at import");
   assert.equal(row.parent_run_id, b.run.run_id, "lineage linked");
   const cp = loadCheckpoint(out.run_id);
   assert.ok(cp && cp.step === 1, "checkpoint planted");
@@ -129,6 +130,5 @@ test("import: resume from an imported checkpoint runs to completion", async () =
     fin = getRun(out.run_id);
     if (fin.status !== "running") break;
   }
-  assert.ok(["done", "failed"].includes(fin.status), `imported checkpoint resumed to terminal: ${fin.status} / ${fin.stop_reason}`);
-  assert.ok(fin.status === "done" || !/no_checkpoint|invalid/i.test(fin.stop_reason ?? ""), "no checkpoint/shape failure");
+  assert.equal(fin.status, "done", `imported checkpoint completed: ${fin.status} / ${fin.stop_reason}`);
 }, 60000);

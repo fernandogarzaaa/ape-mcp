@@ -132,8 +132,10 @@ Applies when APE listens beyond loopback (see `docs/remote.md`,
 - **Rate limiting**: fixed-window per identity on `/mcp` (`APE_RATE_LIMIT_RPM`
   default 240/min, `Retry-After` on 429); checked before auth. Identity is
   the socket peer unless the peer is a configured trusted proxy
-  (`APE_TRUSTED_PROXIES`, CSV of proxy IPs): only then is leftmost
-  `X-Forwarded-For` honored. Direct clients cannot spoof identity. Bucket
+  (`APE_TRUSTED_PROXIES`, CSV of proxy IPs). Trusted proxies must append
+  their observed peer to `X-Forwarded-For`; APE walks the chain from right
+  to left, stopping at the first untrusted address. Direct clients cannot
+  spoof identity. Bucket
   table is bounded (fail-closed 429 when full).
 - **Sessions**: random UUIDs, 30-min idle expiry, DELETE invalidation, capped
   count (`APE_MAX_MCP_SESSIONS` default 1000, sweep-then-refuse); restart

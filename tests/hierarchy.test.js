@@ -63,11 +63,11 @@ test("hierarchy: node-add creates plan nodes visible in status", async () => {
 
 test("hierarchy: claim and release round-trip through the tool", async () => {
   await dispatchCall("ape_orchestrate", { op: "node-add", node: "h-claim-1", title: "Claim me" });
-  const c = await dispatchCall("ape_orchestrate", { op: "claim", node: "h-claim-1", agent_id: "ape-mcp" });
+  const c = await dispatchCall("ape_orchestrate", { op: "claim", node: "h-claim-1", agent_id: "alice@example.com" });
   assert.ok(!JSON.stringify(c.structuredContent.result).includes("error"), "claimed: " + JSON.stringify(c.structuredContent.result).slice(0, 160));
   assert.ok(c.structuredContent.result.ok, "claim result reports ok:true, got: " + JSON.stringify(c.structuredContent.result).slice(0, 160));
   const held = JSON.stringify((await dispatchCall("ape_orchestrate", { op: "status" })).structuredContent.result);
-  assert.ok(held.includes("ape-mcp"), "lease holder visible");
+  assert.ok(held.includes("alice@example.com"), "lease holder visible");
   const rel = await dispatchCall("ape_orchestrate", { op: "release", node: "h-claim-1" });
   assert.ok(!JSON.stringify(rel.structuredContent.result).toLowerCase().includes("cannot release"), "released cleanly");
 });
@@ -111,4 +111,15 @@ test("hierarchy: supervisor profile ships with delegate + orchestrate", () => {
   assert.ok(p.tools.some((t) => t.builtin === "delegate"), "supervisor can delegate");
   assert.ok(p.tools.some((t) => t.engine === "skein.orchestrate"), "supervisor sees the graph");
   assert.ok((p.limits.max_delegate_depth ?? 0) >= 2, "depth allows a hierarchy");
+});
+
+test("hierarchy: node slugs and agent option safety remain enforced", async () => {
+  for (const args of [
+    { node: "--help" }, { node: "alice@example.com" },
+    { node: "valid-node", agent_id: "--help" },
+    { node: "valid-node", agent_id: "bad\0identity" },
+  ]) {
+    const out = await dispatchCall("ape_orchestrate", { op: "claim", ...args });
+    assert.equal(out.structuredContent.result.error, "invalid_arg");
+  }
 });

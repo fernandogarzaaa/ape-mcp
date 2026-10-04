@@ -5,7 +5,7 @@ import assert from "node:assert";
 // directories (genesis reads verdict.json inside, never an arbitrary file).
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 process.env.APE_DATA_DIR = mkdtempSync(join(tmpdir(), "ape-report-sec-"));
 import { dispatchCall, resolveReportRef } from "../src/server.js";
 import { dataDir } from "../src/trace.js";
@@ -19,7 +19,8 @@ test("report gate: legitimate artifact dir passes", async () => {
   const out = await dispatchCall("ape_report", { ref: "eve-report-test" });
   const flat = JSON.stringify(out);
   assert.ok(!/ref_outside_datadir|ref_not_a_directory|ref_not_found/.test(flat), `gate passed, got: ${flat.slice(0, 200)}`);
-  assert.ok(/SUPPORTED|verdict/i.test(flat), `genesis rendered the artifact: ${flat.slice(0, 200)}`);
+  assert.ok(out.structuredContent.ok, "report dispatch succeeded");
+  assert.match(out.structuredContent.result.output, /VERDICT:\s+SUPPORTED/);
 });
 
 test("report gate: absolute path outside the root is rejected", async () => {
@@ -33,7 +34,9 @@ test("report gate: absolute path outside the root is rejected", async () => {
 });
 
 test("report gate: dot-dot escape is rejected", () => {
-  const gate = resolveReportRef(join("..", "ape-report-outside.txt"));
+  const outside = mkdtempSync(join(tmpdir(), "ape-report-dotdot-"));
+  writeFileSync(join(outside, "escape.txt"), "outside artifact root");
+  const gate = resolveReportRef(join("..", basename(outside), "escape.txt"));
   assert.equal(gate.ok, false);
   assert.equal(gate.error, "ref_outside_datadir");
 });

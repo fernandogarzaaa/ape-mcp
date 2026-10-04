@@ -164,7 +164,7 @@ export async function ssrfCheck(hostname) {
   if (process.env.APE_ALLOW_PRIVATE_EGRESS === "1") return null;
   // Zone IDs (fe80%eth0) are a dialing detail, not identity: strip before
   // classifying so scoped link-local forms cannot slip past as "unknown".
-  const h = String(hostname || "").toLowerCase().split("%")[0].replace(/\.$/, "");
+  const h = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "").split("%")[0].replace(/\.$/, "");
   if (!h) return "empty hostname";
   if (h === "localhost") return "localhost resolves to loopback";
   const lit = normalizeIP(h);
@@ -293,6 +293,7 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
     const maxHops = 5;
     let hopUrl = url;
     let hopInit = init;
+    let crossedOrigin = false;
     let finalUrl = url;
     let res = null;
     for (let hop = 0; hop <= maxHops; hop++) {
@@ -335,13 +336,12 @@ export async function runConnectorOperation(conn, op, input = {}, ctx = {}) {
         // else: clean hop even when explicitly permitted — auth headers stay
         // behind AND the body is dropped, because request bodies can carry
         // secrets and credentials belong to exactly one origin (CR-2).
-        if (same || upgrade) {
-          hopInit = init;
-        } else {
+        if (!same && !upgrade) crossedOrigin = true;
+        if (crossedOrigin) {
           hopInit = { ...cleanInit };
           delete hopInit.body;
         }
-        if (!same && !upgrade) hopUrl = stripSecrets(next);
+        if (crossedOrigin) hopUrl = stripSecrets(next);
         continue;
       }
       res = r;

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 process.env.APE_DATA_DIR = mkdtempSync(join(tmpdir(), "ape-rl-"));
 
-const { startHttp, resetRateLimits, sweepSessions, mcpSessionCount, clientIp, MCP_SESSION_TTL_MS } = await import("../src/http.js");
+const { startHttp, resetRateLimits, checkRateLimit, sweepSessions, mcpSessionCount, clientIp, MCP_SESSION_TTL_MS } = await import("../src/http.js");
 
 let base = null;
 let server = null;
@@ -77,7 +77,11 @@ test("proxy: malformed XFF falls back to the socket peer", () => {
   assert.equal(fake("9.9.9.9", "10.1.2.3"), "10.1.2.3", "untrusted peer: XFF ignored");
   process.env.APE_TRUSTED_PROXIES = "10.1.2.3";
   try {
-    assert.equal(fake("9.9.9.9, 8.8.8.8", "10.1.2.3"), "9.9.9.9", "trusted peer: leftmost wins");
+    assert.equal(fake("9.9.9.9, 8.8.8.8", "10.1.2.3"), "8.8.8.8", "first untrusted hop wins over a forged prefix");
+    assert.equal(fake("9.9.9.9, invalid", "10.1.2.3"), "10.1.2.3", "malformed hop stops trust traversal");
+    assert.equal(fake("9.9.9.9,", "10.1.2.3"), "10.1.2.3", "empty hop stops trust traversal");
+    process.env.APE_TRUSTED_PROXIES += ",8.8.8.8";
+    assert.equal(fake("9.9.9.9, 8.8.8.8", "10.1.2.3"), "9.9.9.9", "configured intermediate proxy is traversed");
     assert.equal(fake("9.9.9.9", "::ffff:10.1.2.3"), "9.9.9.9", "mapped peer form matches");
   } finally {
     delete process.env.APE_TRUSTED_PROXIES;
@@ -104,5 +108,32 @@ test("sessions: minting past the ceiling is refused, sweep reclaims", async () =
     assert.ok(d.sid, "minting works again after sweep");
   } finally {
     delete process.env.APE_MAX_MCP_SESSIONS;
+  }
+});
+
+test("proxy: forged prefixes through a trusted proxy share the observed client bucket", async () => {
+  process.env.APE_TRUSTED_PROXIES = "127.0.0.1";
+  resetRateLimits();
+  try {
+    const statuses = [];
+    for (let i = 0; i < 4; i++) statuses.push((await init({ "X-Forwarded-For": `10.9.9.${i}, 8.8.8.8` })).status);
+    assert.deepEqual(statuses, [200, 200, 200, 429]);
+  } finally { delete process.env.APE_TRUSTED_PROXIES; }
+});
+
+test("rate buckets: capacity rejects newcomers, preserves existing counts, and reclaims expired entries", () => {
+  resetRateLimits();
+  process.env.APE_RATE_LIMIT_WINDOW_MS = "1000";
+  try {
+    for (let i = 0; i < 20000; i++) assert.equal(checkRateLimit(`ip-${i}`, 0).limited, false);
+    for (let i = 0; i < 3; i++) assert.equal(checkRateLimit(`new-${i}`, 1).limited, true);
+    assert.equal(checkRateLimit("ip-0", 1).limited, false);
+    assert.equal(checkRateLimit("ip-0", 1).limited, false);
+    assert.equal(checkRateLimit("ip-0", 1).limited, true);
+    assert.equal(checkRateLimit("ip-0", 1000).limited, false, "existing expired bucket resets");
+    assert.equal(checkRateLimit("new-0", 1000).limited, false, "expired entries reclaimed before insertion");
+  } finally {
+    delete process.env.APE_RATE_LIMIT_WINDOW_MS;
+    resetRateLimits();
   }
 });

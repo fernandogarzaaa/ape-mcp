@@ -2,6 +2,7 @@
 // ephemeral ports. Route behavior is preserved verbatim; bin keeps CLI parsing
 // and calls startHttp({ port, host }).
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import { randomUUID } from "node:crypto";
 import { dispatchCall, toolsList, discover, agentMethod, resourcesList, readResource, promptsList, getPrompt, negotiateProtocolVersion } from "./server.js";
 import { listRuns, stepsSince, maxStepId } from "./runs.js";
@@ -33,8 +34,7 @@ function hostAllowedOr403(req, res) {
 
 // --- Rate limiting (§21): fixed-window per client IP on /mcp ---
 // Checked BEFORE auth so the bearer endpoint itself resists brute force.
-// Trusts X-Forwarded-For (single-proxy deployment: Caddy sets it; direct
-// access is loopback-only where spoofing is meaningless).
+// Walks X-Forwarded-For through explicitly trusted proxy IPs, right to left.
 const rateBuckets = new Map(); // ip -> { windowStart, count }
 export function rateLimitRpm() {
   const v = Number(process.env.APE_RATE_LIMIT_RPM);
@@ -56,9 +56,15 @@ export function clientIp(req) {
   const trusted = trustedProxies();
   if (peer && trusted.has(peer)) {
     const xff = String(req.headers["x-forwarded-for"] || "")
-      .split(",").map((s) => s.trim()).filter(Boolean);
-    // Leftmost is the original client; each entry must be non-empty.
-    if (xff.length) return xff[0].slice(0, 128);
+      .split(",").map(normalizePeer);
+    // Proxies must append their observed peer. Stop at the first untrusted
+    // address; anything to its left may have been supplied by that client.
+    let client = peer;
+    for (let i = xff.length - 1; i >= 0 && trusted.has(client); i--) {
+      if (!isIP(xff[i])) return client;
+      client = xff[i];
+    }
+    return client;
   }
   return peer || "unknown";
 }
@@ -81,21 +87,18 @@ export function checkRateLimit(ip, nowMs = Date.now()) {
   const rpm = rateLimitRpm();
   const win = rateLimitWindowMs();
   let b = rateBuckets.get(ip);
+  // Sweep and enforce the ceiling BEFORE inserting an unseen identity.
+  if (!b && rateBuckets.size >= MAX_RATE_BUCKETS) {
+    for (const [k, v] of rateBuckets) {
+      if (nowMs - v.windowStart >= win) rateBuckets.delete(k);
+    }
+    if (rateBuckets.size >= MAX_RATE_BUCKETS) {
+      return { limited: true, retryAfterMs: win };
+    }
+  }
   if (!b || nowMs - b.windowStart >= win) {
     b = { windowStart: nowMs, count: 0 };
     rateBuckets.set(ip, b);
-  }
-  // Bounded table, fail-closed: with XFF untrusted by default each socket IP
-  // owns exactly one bucket, so a full table means a real flood, not spoofing.
-  // Sweep expired first; if still full, refuse newcomers instead of growing.
-  if (rateBuckets.size > MAX_RATE_BUCKETS) {
-    for (const [k, v] of rateBuckets) {
-      if (nowMs - v.windowStart >= win) rateBuckets.delete(k);
-      if (rateBuckets.size <= MAX_RATE_BUCKETS) break;
-    }
-    if (rateBuckets.size > MAX_RATE_BUCKETS && !rateBuckets.has(ip)) {
-      return { limited: true, retryAfterMs: win };
-    }
   }
   b.count++;
   if (b.count > rpm) return { limited: true, retryAfterMs: Math.max(0, b.windowStart + win - nowMs) };
@@ -359,18 +362,22 @@ const MCP_BODY_CAP = 4 * 1024 * 1024;
 // Unbounded `for await` string concat is an OOM primitive — no route may use it.
 export function readCappedBody(req, cap = MCP_BODY_CAP) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    const chunks = [];
     let size = 0;
     req.on("data", (c) => {
+      if (size > cap) return;
       size += c.length;
       if (size > cap) {
+        chunks.length = 0;
         reject(Object.assign(new Error("body too large"), { status: 413 }));
         try { req.destroy(); } catch { /* already closing */ }
         return;
       }
-      body += c;
+      chunks.push(c);
     });
-    req.on("end", () => resolve(body));
+    req.on("end", () => {
+      if (size <= cap) resolve(Buffer.concat(chunks, size).toString("utf8"));
+    });
     req.on("error", reject);
   });
 }

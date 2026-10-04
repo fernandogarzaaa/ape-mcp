@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
 process.env.APE_DATA_DIR = mkdtempSync(join(tmpdir(), "ape-ssrf-"));
-import { normalizeIP, ipBlocked, ssrfCheck } from "../src/connectors.js";
+import dns from "node:dns/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { normalizeIP, ipBlocked, ssrfCheck, runConnectorOperation } from "../src/connectors.js";
 import { dispatchCall } from "../src/server.js";
 // NOTE: APE_ALLOW_PRIVATE_EGRESS is toggled per test below. The unit matrix
 // runs with the net ENGAGED (flag off); loopback fixtures need it ON.
@@ -55,7 +57,7 @@ function fixture(routes) {
       let body = "";
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
-        seen.push({ url: req.url, method: req.method, body });
+        seen.push({ url: req.url, method: req.method, body, headers: req.headers });
         const r = routes[req.url];
         if (r?.redirect) {
           res.writeHead(302, { location: r.redirect });
@@ -115,9 +117,9 @@ test("ssrf: hop to non-allowlisted host is egress_denied_redirect", async () => 
   } finally { flagOff(); }
 });
 
-test("ssrf: cross-origin redirect carries no body", async () => {
+test("ssrf: credentials stay stripped across later same-origin redirect hops", async () => {
   flagOn();
-  const b = await fixture({});
+  const b = await fixture({ "/sink": { redirect: "/final" } });
   const a = await new Promise((resolve) => {
     const srv = http.createServer((req, res) => {
       if (req.url === "/post") {
@@ -131,11 +133,13 @@ test("ssrf: cross-origin redirect carries no body", async () => {
     srv.listen(0, "127.0.0.1", () => resolve({ srv, port: srv.address().port }));
   });
   try {
+    process.env.APE_TEST_REDIRECT_TOKEN = "synthetic-redirect-token";
     writeConn("tmp-xorigin", [
       "name: tmp-xorigin",
       `base_url: http://127.0.0.1:${a.port}`,
       `egress_allow: [127.0.0.1]`,
       "allow_cross_origin_redirects: true",
+      "auth: { type: bearer, token_env: APE_TEST_REDIRECT_TOKEN }",
       "operations:",
       "  - name: send",
       "    method: POST",
@@ -147,12 +151,37 @@ test("ssrf: cross-origin redirect carries no body", async () => {
     ].join("\n"));
     const out = await dispatchCall("ape_connector_call", { connector: "tmp-xorigin", operation: "send", input: {} });
     assert.ok(JSON.stringify(out).includes('"ok":true'), `chain completes: ${JSON.stringify(out).slice(0, 160)}`);
-    const sink = b.seen.find((s) => s.url === "/sink");
-    assert.ok(sink, "redirect reached the sink");
-    assert.ok(!sink.body.includes("TOP-SECRET-BODY-VALUE"), `body stripped cross-origin, got: ${sink.body.slice(0, 120)}`);
+    for (const path of ["/sink", "/final"]) {
+      const sink = b.seen.find((s) => s.url === path);
+      assert.ok(sink, `redirect reached ${path}`);
+      assert.equal(sink.body, "", "body remains stripped");
+      assert.equal(sink.headers.authorization, undefined, "auth remains stripped");
+    }
   } finally {
     a.srv.close();
     b.srv.close();
+    delete process.env.APE_TEST_REDIRECT_TOKEN;
     flagOff();
+  }
+});
+
+test("ssrf: bracketed private IPv6 connector literals are blocked without DNS", async (t) => {
+  flagOff();
+  const lookup = t.mock.method(dns, "lookup", async () => { throw new Error("DNS unavailable"); });
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not fetch"); });
+  syncBuiltinESMExports();
+  try {
+    for (const host of ["[::1]", "[fd00::1]", "[fe80::1]", "[::ffff:7f00:1]"]) {
+      const result = await runConnectorOperation({
+        name: "ipv6", base_url: `http://${host}`, egress_allow: [host],
+        operations: [{ name: "go", method: "GET", path: "/" }],
+      }, { name: "go", method: "GET", path: "/" }, {});
+      assert.equal(result.error, "ssrf_denied", host);
+    }
+    assert.equal(lookup.mock.callCount(), 0, "literal classification never relies on DNS");
+    assert.equal(fetchMock.mock.callCount(), 0, "blocked before network traffic");
+  } finally {
+    lookup.mock.restore();
+    syncBuiltinESMExports();
   }
 });

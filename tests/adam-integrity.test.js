@@ -4,12 +4,13 @@ import assert from "node:assert/strict";
 // (pin or sidecar) installs; mismatch / missing proof refuses and deletes;
 // explicit opt-out is the only unverified path. Recorded sidecars make
 // present binaries re-verifiable (stale swaps fail instead of running).
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 const dir = mkdtempSync(join(tmpdir(), "ape-adam-int-"));
-const { installAdam, verifyPresent, provePresent, parseChecksumFile, verifyChecksum, sidecarPathFor } = await import("../scripts/fetch-adam.mjs");
+const { assetFor, installAdam, verifyPresent, provePresent, parseChecksumFile, verifyChecksum, sidecarPathFor } = await import("../scripts/fetch-adam.mjs");
 const { verifiedAdamBinary } = await import("../src/adam-client.js");
 
 const BYTES = Buffer.from("fake-adam-binary-bytes");
@@ -141,4 +142,29 @@ test("integrity: checksum file parsing is strict", () => {
   assert.equal(parseChecksumFile("not-a-checksum\n", "adam-mcp-linux-x64"), null);
   assert.equal(parseChecksumFile(`${HEX}  other-asset\n`, "adam-mcp-linux-x64"), null);
   assert.deepEqual(verifyChecksum(((p) => (writeFileSync(p, BYTES), p))(join(dir, "v")) , HEX).ok, true);
+});
+
+test("integrity: present-binary CLI explicitly opts out before online proof", (t) => {
+  if (!assetFor()) return t.skip("no prebuilt binary for this platform");
+  const base = mkdtempSync(join(tmpdir(), "ape-adam-cli-"));
+  const scripts = join(base, "scripts");
+  const release = join(base, "vendors", "adam", "target", "release");
+  mkdirSync(scripts, { recursive: true });
+  mkdirSync(release, { recursive: true });
+  const script = join(scripts, "fetch-adam.mjs");
+  copyFileSync(new URL("../scripts/fetch-adam.mjs", import.meta.url), script);
+  const binary = join(release, process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp");
+  writeFileSync(binary, BYTES);
+  const run = (opt) => spawnSync(process.execPath, [script], {
+    encoding: "utf8", timeout: 5000,
+    env: { ...process.env, PATH: scripts, APE_ADAM_ALLOW_UNVERIFIED: opt, APE_ADAM_SHA256: "" },
+  });
+  const refused = run("0");
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.match(refused.stderr, /no integrity proof/);
+  const accepted = run("1");
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.match(accepted.stderr, /WITHOUT integrity verification/);
+  assert.deepEqual(readFileSync(binary), BYTES);
+  assert.equal(existsSync(sidecarPathFor(binary)), false, "opt-out does not manufacture proof");
 });

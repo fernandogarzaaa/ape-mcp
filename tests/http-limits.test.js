@@ -13,7 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 process.env.APE_DATA_DIR = mkdtempSync(join(tmpdir(), "ape-limits-"));
 
-const { startHttp } = await import("../src/http.js");
+import { Readable } from "node:stream";
+const { startHttp, readCappedBody } = await import("../src/http.js");
 const { startConsole, consoleSessionToken } = await import("../src/console.js");
 
 const CAP = 4 * 1024 * 1024;
@@ -49,15 +50,17 @@ function assertRejected(r, where) {
 }
 // Valid JSON padded to an exact byte size.
 function paddedCall(size) {
-  const pad = "p".repeat(Math.max(0, size - 64));
-  return JSON.stringify({ padding: pad });
+  const payload = { name: "ape_status", arguments: {}, padding: "" };
+  payload.padding = "p".repeat(size - Buffer.byteLength(JSON.stringify(payload)));
+  return JSON.stringify(payload);
 }
 
 test("limits: body exactly at the cap parses normally", async () => {
   const body = paddedCall(CAP);
-  assert.ok(Buffer.byteLength(body) <= CAP && Buffer.byteLength(body) > CAP - 128, `sized ${Buffer.byteLength(body)}`);
+  assert.equal(Buffer.byteLength(body), CAP);
   const r = await rawPost("/call", body);
-  assert.notEqual(r.status, 413, `at-cap accepted, got ${r.status}: ${r.text}`);
+  assert.notEqual(r.status, "socket-closed");
+  assert.equal(r.status, 200, `at-cap accepted, got ${r.status}: ${r.text}`);
 });
 
 test("limits: body over the cap is rejected early on /call", async () => {
@@ -106,4 +109,12 @@ test("limits: console /api/call enforces the same cap", async () => {
   } finally {
     started.server.close();
   }
+});
+
+test("limits: split UTF-8 characters survive bounded body collection", async () => {
+  const text = JSON.stringify({ value: "é🙂漢" });
+  const bytes = Buffer.from(text);
+  const chunks = Array.from(bytes, (byte) => Buffer.from([byte]));
+  assert.equal(await readCappedBody(Readable.from(chunks), bytes.length), text);
+  await assert.rejects(readCappedBody(Readable.from(chunks), bytes.length - 1), { status: 413 });
 });

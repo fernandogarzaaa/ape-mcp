@@ -39,7 +39,7 @@ const SECRET_RES = [
   // Query-string / fragment credentials (?key= / &token= / #access_token=).
   /([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret)=)[^&\s"'{}]+/gi,
 ];
-const ASSIGN_RE = /((?:api[_-]?key|refresh[_-]?token|password|passwd|token|secret)\s*[:=]\s*["']?)[^"'\s,}]+/gi;
+const ASSIGN_RE = /((["']?)(?:api[_-]?key|refresh[_-]?token|password|passwd|passphrase|token|secret)\2\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^"'\s,}]+)/gi;
 export function redactSecrets(text) {
   let out = String(text ?? "");
   for (const re of SECRET_RES) {
@@ -47,7 +47,10 @@ export function redactSecrets(text) {
     out = out.replace(re, "[redacted]");
   }
   ASSIGN_RE.lastIndex = 0;
-  return out.replace(ASSIGN_RE, "$1[redacted]");
+  return out.replace(ASSIGN_RE, (match, prefix) => {
+    const quote = match[prefix.length];
+    return prefix + (quote === '"' || quote === "'" ? `${quote}[redacted]${quote}` : "[redacted]");
+  });
 }
 export function emitTrace(entry) {
   try {

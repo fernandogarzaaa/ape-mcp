@@ -129,9 +129,12 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       // Remaining MINUS outstanding escrow: parallel batches snapshot in
       // order within one tick, and each snapshot already reflects every
       // prior reservation, so concurrent children can never overlap.
-      stepsLeft: (profile.limits?.max_steps ?? 0) - budget.steps - budget.reservedSteps,
-      tokensLeft: (profile.limits?.max_tokens ?? 0) - budget.tokens - budget.reservedTokens,
-      usdLeft: (profile.limits?.max_usd ?? 0) - budget.usd - budget.reservedUsd,
+      stepsLeft: profile.limits?.max_steps == null ? null
+        : profile.limits.max_steps - budget.steps - budget.reservedSteps,
+      tokensLeft: profile.limits?.max_tokens == null ? null
+        : profile.limits.max_tokens - budget.tokens - budget.reservedTokens,
+      usdLeft: profile.limits?.max_usd == null ? null
+        : profile.limits.max_usd - budget.usd - budget.reservedUsd,
       wallMsLeft: profile.limits?.max_wall_seconds != null
         ? profile.limits.max_wall_seconds * 1000 - (Date.now() - startedAt)
         : null,

@@ -162,3 +162,25 @@ test("reserve: timeout kills the child, debits partials, releases the rest", asy
     else process.env.APE_MOCK_STEP_DELAY_MS = prevDelay;
   }
 }, 90000);
+
+test("reserve: null and omitted parent limits permit delegation", async () => {
+  writeChild();
+  for (const unlimited of [null, undefined]) {
+    const profile = parentProfile(1);
+    for (const limit of ["max_steps", "max_tokens", "max_usd"]) {
+      if (unlimited === undefined) delete profile.limits[limit];
+      else profile.limits[limit] = unlimited;
+    }
+    const res = await runAgent({
+      profile, objective: "delegate with unlimited dimensions",
+      mockScript: [
+        { tool: "delegate", args: { profile: "del-rsv-child", objective: "complete" } },
+        { tool: "finish", args: { summary: "completed" } },
+      ],
+      parentRunId: "run-rsv-unlimited",
+    });
+    assert.equal(res.stop_reason, "explicit_final_answer");
+    assert.equal(res.receipt.delegations.length, 1);
+    assert.equal(runs.getRun(res.receipt.delegations[0].run_id).status, "done");
+  }
+});

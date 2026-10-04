@@ -173,6 +173,10 @@ if (invokedDirectly) {
     }
     // Unverifiable (no record): try an online proof before refusing, so an
     // intact release binary self-heals instead of forcing a re-download.
+    if (process.env.APE_ADAM_ALLOW_UNVERIFIED === "1") {
+      console.warn(`WARNING: accepting present binary WITHOUT integrity verification (APE_ADAM_ALLOW_UNVERIFIED=1): ${dest}`);
+      process.exit(0);
+    }
     const proof = provePresent({ asset, dest, tag: TAG });
     if (proof.status === "present") {
       console.log(`present: ${dest} (verified against release sidecar, recorded for next time)`);

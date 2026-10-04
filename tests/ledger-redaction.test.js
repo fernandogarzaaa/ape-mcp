@@ -69,12 +69,13 @@ test("ledger: imported step history persists scrubbed", () => {
   const out = importRun({
     version: 1,
     run: { run_id: src.run_id, resumes: 0 },
-    steps: [{ step: 0, kind: "tool", tool: "probe", resultSummary: `leaked ${SECRETS.akia} plus ${SECRETS.query}` }],
+    steps: [{ step: 0, kind: "tool", tool: "probe", result_summary: `leaked ${SECRETS.akia} plus ${SECRETS.query}` }],
     checkpoint: { step: 0, state: {} },
   });
   assert.ok(!out.error, JSON.stringify(out).slice(0, 160));
   const row = getRun(out.run_id);
   const stored = row.steps[row.steps.length - 1].result_summary;
+  assert.ok(stored.includes("[redacted]"), "imported summary scrubbed");
   assert.ok(!stored.includes(SECRETS.akia) && !stored.includes("qk-fake-9999"), "imported row clean");
 });
 
@@ -108,6 +109,22 @@ test("ledger: mock-run outcome persists scrubbed end to end", async () => {
     if (st.structuredContent.result.status !== "running") break;
   }
   const fin = await dispatchCall("ape_agent_status", { run_id: runId });
+  assert.equal(fin.structuredContent.result.status, "done");
+  assert.ok(fin.structuredContent.result.outcome, "completed outcome present");
   const flat = JSON.stringify(fin.structuredContent.result);
   assert.ok(!flat.includes(SECRETS.openai), "outcome clean through status read path");
+});
+
+test("redact: quoted credentials including commas and escaped quotes are fully scrubbed at persistence boundaries", () => {
+  const json = JSON.stringify({ password: 'first,second "third"', api_key: "json-api-value", token: "json-token-value" });
+  assert.deepEqual(JSON.parse(redactSecrets(json)), { password: "[redacted]", api_key: "[redacted]", token: "[redacted]" });
+  const assignments = `password="first,second third" passphrase=value secret='one,two three' token=plain`;
+  assert.equal(redactSecrets(assignments), `password="[redacted]" passphrase=[redacted] secret='[redacted]' token=[redacted]`);
+  const adm = admitRun({ profile: "repo-triage", model: "mock-model", objective: "quoted redaction" });
+  assert.ok(!adm.error);
+  recordStep(adm.run_id, { step: 1, kind: "tool", tool: "quoted", resultSummary: json });
+  assert.equal(getRun(adm.run_id).steps[0].result_summary, redactSecrets(json));
+  emitTrace({ tool: "quoted", resultSummary: json });
+  const hit = readFileSync(tracePath(), "utf8").trim().split("\n").map(JSON.parse).find((entry) => entry.tool === "quoted");
+  assert.equal(hit.resultSummary, redactSecrets(json));
 });

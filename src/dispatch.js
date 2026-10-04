@@ -134,15 +134,13 @@ export const dispatch = {
     return { run_a, run_b, ...r };
   },
   async orchestrate({ op = "status", node = "", agent_id = "ape-mcp", title = "", goal = "", context = "", constraints = "", completion = "", depends_on = "" } = {}) {
-    // argv safety: execFile blocks shell injection, but a positional that
-    // starts with "-" would still parse as a CLI flag inside skein. Node ids
-    // and agent ids are slugs everywhere in the tree; enforce that shape and
-    // reject anything else before spawning. (Flagged values like --title are
-    // consumed as values by argparse and need no check.)
-    for (const [field, v] of [["node", node], ["agent_id", agent_id]]) {
-      if (v !== "" && v != null && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(v))) {
-        return { op, node, error: "invalid_arg", field, hint: `${field} must match [A-Za-z0-9._-] and not start with '-'` };
-      }
+    // Node IDs are positional slugs. Agent identities are free-form values
+    // for --agent-id (including email addresses), but must not become flags.
+    if (node !== "" && node != null && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(node))) {
+      return { op, node, error: "invalid_arg", field: "node", hint: "node must match [A-Za-z0-9._-] and not start with '-'" };
+    }
+    if (agent_id != null && (typeof agent_id !== "string" || /^-/.test(agent_id) || /[\x00-\x1f\x7f]/.test(agent_id))) {
+      return { op, node, error: "invalid_arg", field: "agent_id", hint: "agent_id must be a string without control characters and not start with '-'" };
     }
     const s = skeinSrc();
     if (!s) return fail("skein", "vendors/skein/src missing");
