@@ -108,6 +108,17 @@ jobs:
           node scripts/smoke.mjs
           node --test tests/ape.test.js
           node scripts/fetch-adam.mjs --check || true
+      - name: Close superseded auto-update PRs
+        # One open auto-update PR at a time: pins on main stay stale until a
+        # human merges, so every run would otherwise pile up another PR.
+        # This closes older auto-update PRs right before the fresh one below
+        # is opened; the newest sync is always the one awaiting review.
+        env:
+          GH_TOKEN: ${{ secrets.APE_SYNC_TOKEN || github.token }}
+        run: |
+          for n in $(gh pr list --label auto-update --state open --json number --jq '.[].number'); do
+            gh pr close "$n" --comment "Superseded: the latest auto-update run opens a fresh sync PR that replaces this one."
+          done
       - name: Open update PR
         uses: peter-evans/create-pull-request@v8
         with:
