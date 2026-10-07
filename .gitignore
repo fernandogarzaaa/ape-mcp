@@ -28,3 +28,8 @@ vendors/adam/target/release/*
 !vendors/adam/target/release/adam-mcp
 !vendors/genesis/dist/
 !vendors/eve/dist/
+
+# Never commit real env files (only .env.example templates).
+.env
+.env.*
+!.env.example
