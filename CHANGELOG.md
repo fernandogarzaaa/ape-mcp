@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Dependabot now also checks the root npm package and the `tui/` Cargo crate weekly.
+- `.env.example` documents the environment variables APE reads; local `.env` files are git-ignored.
+
 ## 1.1.2
 
 O1 console security hardening (audit verification first):
