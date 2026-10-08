@@ -25,7 +25,7 @@
         "LICENSE",
         ".claude-plugin"
       ],
-      "sha": "af9c797476d8f64559a0477918be6b10d076a5ec"
+      "sha": "11ec949db0a2565fd473927ab5e4771efaa4593c"
     },
     {
       "dest": "vendors/eve",
@@ -55,7 +55,7 @@
         ".codex",
         ".claude-plugin"
       ],
-      "sha": "6ee1c010dc74719f645d3ddc69db1f2e1cbfc706"
+      "sha": "89eff8a425e06d28bbbe3641eb2fbc94fbe98e2d"
     },
     {
       "dest": "vendors/adam",
@@ -91,8 +91,8 @@
         "CHANGELOG.md",
         ".github"
       ],
-      "sha": "910b00b4a61ee201a80b772923f40b9de438bef1"
+      "sha": "63e99abd77450928811f45319cf18f272b9baaf5"
     }
   ],
-  "at": "2026-10-02T03:01:42.959Z"
+  "at": "2026-10-08T22:37:42.957Z"
 }
