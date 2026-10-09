@@ -3,7 +3,7 @@
 // Tool results are untrusted data: they are framed as such before re-entering the model.
 import { makeBudget } from "./budget.js";
 import { chat, estimateCost, toolSchemas, mockPlan, clearMock, providerTimeoutMs } from "./providers.js";
-import { internalTools, invokeTool, isDestructiveCall, frameToolOutput } from "./registry.js";
+import { internalTools, invokeTool, isDestructiveCall, frameToolOutput, effectiveDestructivePolicy } from "./registry.js";
 import { isRetryable, fingerprint, lookupImmunity, recordImmunity, selectRepair, shrinkArgs } from "./recovery.js";
 import { DEFAULT_VERIFY_TOOLS } from "./profiles.js";
 import { correlateEvidence, buildEvidence } from "./evidence.js";
@@ -44,13 +44,19 @@ function checkGrounding(steps, profile) {
   return { ok: true, reason: "agree", correlation: corr };
 }
 
-export async function runAgent({ profile, objective, organism_id = "default", onStep, onCheckpoint, mockScript, mockCostPerCall = 0, resolvedModel, resolvedChain = null, routing = null, initial = null, initialContext = null, depth = 0, parentRunId = null }) {
+export async function runAgent({ profile, objective, organism_id = "default", onStep, onCheckpoint, mockScript, mockCostPerCall = 0, resolvedModel, resolvedChain = null, routing = null, initial = null, initialContext = null, depth = 0, parentRunId = null, inheritedRestrictions = null }) {
   const budget = makeBudget(profile.limits);
   // Resume: seed budget counters from the checkpoint so numbering and ceilings continue.
   if (initial?.budget) {
     budget.steps = initial.budget.steps ?? 0;
     budget.tokens = initial.budget.tokens ?? 0;
     budget.usd = initial.budget.usd ?? 0;
+    // Wall-clock continuity: a resume must NOT open a fresh wall window.
+    // started travels in the checkpoint (see onCheckpoint below); fall back
+    // to now only for pre-hardening checkpoints that predate the field.
+    if (typeof initial.budget.started === "number" && Number.isFinite(initial.budget.started) && initial.budget.started >= 0) {
+      budget.started = initial.budget.started;
+    }
   }
   const tools = internalTools(profile);
   // resolvedModel comes from host detection; otherwise fall back to the profile config
@@ -72,7 +78,14 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   const chainHasMock = providerCfgs.some((p) => p.provider === "mock");
 
   const steps = [];
-  const startedAt = Date.now();
+  // Wall clock is budget continuity, not process lifetime: on resume this is
+  // the ORIGINAL run start (restored above), so max_wall_seconds cannot be
+  // renewed by restarting the worker.
+  const startedAt = budget.started;
+  // Effective authority for this loop: inherited deny (from every ancestor
+  // via delegation) always wins over this profile's own declaration.
+  const inherited = initial?.inheritedRestrictions ?? inheritedRestrictions ?? null;
+  const effectiveDestructive = effectiveDestructivePolicy(profile.policy?.destructive, inherited);
   let stopReason = null;
   let outcome = null;
   let unverified = false;
@@ -104,15 +117,47 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     depth,
     parentRunId,
     maxDelegateDepth: profile.limits?.max_delegate_depth ?? 2,
+    // The child's authority is this loop's EFFECTIVE policy (already
+    // intersected with every ancestor): deny cascades, allow does not.
+    restrictions: { destructive: effectiveDestructive },
+    // Budget escrow endpoints: the child reserves its slice synchronously at
+    // spawn and releases the unused part at completion (see runDelegated).
+    // Bound closures, so parallel batches share one atomic ledger.
+    reserveBudget: (r) => budget.reserve(r),
+    refundBudget: (r) => budget.refund(r),
     budget: {
-      stepsLeft: (profile.limits?.max_steps ?? 0) - budget.steps,
-      tokensLeft: (profile.limits?.max_tokens ?? 0) - budget.tokens,
-      usdLeft: (profile.limits?.max_usd ?? 0) - budget.usd,
+      // Remaining MINUS outstanding escrow: parallel batches snapshot in
+      // order within one tick, and each snapshot already reflects every
+      // prior reservation, so concurrent children can never overlap.
+      stepsLeft: profile.limits?.max_steps == null ? null
+        : profile.limits.max_steps - budget.steps - budget.reservedSteps,
+      tokensLeft: profile.limits?.max_tokens == null ? null
+        : profile.limits.max_tokens - budget.tokens - budget.reservedTokens,
+      usdLeft: profile.limits?.max_usd == null ? null
+        : profile.limits.max_usd - budget.usd - budget.reservedUsd,
       wallMsLeft: profile.limits?.max_wall_seconds != null
         ? profile.limits.max_wall_seconds * 1000 - (Date.now() - startedAt)
         : null,
     },
   });
+  // M2 settlement: the child's consumption is charged here (spend), while the
+  // escrow reserved at spawn was already released in full by runDelegated —
+  // the two never overlap, so there is no double charge: reserve(+S) ...
+  // refund(+S back) ... spend(+C) nets exactly +C with zero reserved.
+  // The numbers ride on the recorded delegate step so parent row totals stay
+  // honest. Failed/cancelled children settle their recorded partials the
+  // same way.
+  const debitDelegation = (tc, res) => {
+    if (tc?.name !== "delegate") return { tokens: 0, cost: 0, note: "" };
+    // Completed delegations carry consumed totals; timeouts carry recorded
+    // partials (the child row was settled before return). Anything else
+    // (refusals, depth caps) consumed nothing.
+    const settled = res?.delegated ? res : (res?.error === "delegation_timeout" && res?.consumed ? { tokens: res.consumed.tokens, cost_usd: res.consumed.cost } : null);
+    if (!settled) return { tokens: 0, cost: 0, note: "" };
+    const t = Number(settled.tokens ?? 0), c = Number(settled.cost_usd ?? 0);
+    if (t > 0 || c > 0) budget.spend({ tokens: t, cost: c });
+    return { tokens: t, cost: c, note: (t > 0 || c > 0) ? ` debited:tokens=${t} cost=$${c}` : "" };
+  };
   const verifyTools = (profile.policy?.verify_tools?.length ? profile.policy.verify_tools : DEFAULT_VERIFY_TOOLS);
   const collectEvidence = (stepObj, res) => {
     if (res?.error) return;
@@ -140,9 +185,12 @@ export async function runAgent({ profile, objective, organism_id = "default", on
     const maxRetries = profile.limits?.max_retries ?? 1;
     const repairs = [];
     const delegations = [];
-    const collectDelegation = (r) => {
-      if (r?.delegated) delegations.push({ run_id: r.run_id, profile: r.profile, cost_usd: r.cost_usd ?? 0, outcome_status: r.outcome_status ?? null, stop_reason: r.stop_reason ?? null });
-    };
+  const collectDelegation = (r) => {
+    if (r?.delegated) delegations.push({ run_id: r.run_id, profile: r.profile, cost_usd: r.cost_usd ?? 0, tokens: r.tokens ?? 0, outcome_status: r.outcome_status ?? null, stop_reason: r.stop_reason ?? null, reserved: r.reserved ?? null, refunded: r.refunded ?? null });
+    // Failed delegations that still forked a child (timeout, fork failure)
+    // are audited too: the child row exists and its partials were settled.
+    else if (r?.run_id && typeof r?.error === "string" && r.error.startsWith("delegation_")) delegations.push({ run_id: r.run_id, profile: null, cost_usd: 0, tokens: 0, outcome_status: null, stop_reason: null, error: r.error, reserved: null, refunded: r.refunded ?? null });
+  };
     let res;
     try { res = await invokeTool(tool, tc.args ?? {}, delegateCtx()); }
     catch (e) { res = { error: "handler_failed", message: String(e).slice(0, 200) }; }
@@ -200,7 +248,8 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       const prefix = attempts > 1 ? `retry:${attempts}:${repairs.map((r) => r.repair).join("+")}:` : "";
       repairLog.push(...repairs);
       delegationLog.push(...delegations);
-      const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs, tokens: 0, cost: 0, parallel: true, resultSummary: prefix + JSON.stringify(res).slice(0, 200) };
+      const dbt = debitDelegation(tc, res);
+      const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs, tokens: dbt.tokens, cost: dbt.cost, parallel: true, resultSummary: prefix + JSON.stringify(res).slice(0, 200) + dbt.note };
       collectEvidence(toolStep, res);
       record(toolStep);
       messages.push({ role: "tool", toolCallId: tc.id, content: frameToolOutput(tc.name, JSON.stringify(res).slice(0, 8000)) });
@@ -367,9 +416,12 @@ const toolCalls = resp.toolCalls ?? [];
         } else if (isDestructiveCall(tool, tc.args ?? {})) {
           // Destructive calls never run silently inside a loop. Default policy denies;
           // allowed profiles are capped per run; every attempt hits the audit stream.
-          const allowed = (profile.policy?.destructive ?? "deny") === "allow";
+          // The policy enforced here is the EFFECTIVE one: an inherited deny from
+          // any ancestor overrides this profile's own declaration (see
+          // effectiveDestructivePolicy). A child can never regain authority denied above.
+          const allowed = effectiveDestructive === "allow";
           const maxD = profile.limits?.max_destructive ?? 1;
-          const auditEntry = { tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args ?? {})), policy: profile.policy?.destructive ?? "deny", destructiveUsed };
+          const auditEntry = { tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args ?? {})), policy: effectiveDestructive, inherited: inherited?.destructive ?? null, destructiveUsed };
           if (!allowed) {
             res = { error: "destructive_not_allowed", tool: tc.name, hint: "this profile denies unattended destructive calls; finish with a proposal for the user to confirm instead" };
             const audit = auditDestructive({ ...auditEntry, verdict: "denied" });
@@ -400,7 +452,8 @@ const toolCalls = resp.toolCalls ?? [];
           repairLog.push(...simple.repairs);
           delegationLog.push(...simple.delegations);
           const prefix = simple.attempts > 1 ? `retry:${simple.attempts}:${simple.repairs.map((r) => r.repair).join("+")}:` : "";
-          const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: simple.durationMs, tokens: 0, cost: 0, resultSummary: prefix + JSON.stringify(res).slice(0, 200) };
+          const dbt = debitDelegation(tc, res);
+          const toolStep = { step: budget.steps, kind: "tool", tool: tc.name, argsHash: shaShort(JSON.stringify(tc.args)), durationMs: simple.durationMs, tokens: dbt.tokens, cost: dbt.cost, resultSummary: prefix + JSON.stringify(res).slice(0, 200) + dbt.note };
           collectEvidence(toolStep, res);
           record(toolStep);
         }
@@ -417,7 +470,8 @@ const toolCalls = resp.toolCalls ?? [];
       // Checkpoint: persist loop state so a replacement worker can resume.
       try {
         onCheckpoint?.({
-          messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd },
+          messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd, started: budget.started },
+          inheritedRestrictions: inherited,
           destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider, repairLog, delegationLog,
         });
       } catch { /* checkpointing never breaks the loop */ }

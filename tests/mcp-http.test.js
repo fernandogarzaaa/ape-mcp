@@ -488,14 +488,16 @@ test("mcp: HTTP 429 on /mcp flood with Retry-After", async () => {
   resetRateLimits();
   try {
     const { sid } = await initSession();
-    const h = { headers: { "mcp-session-id": sid, "X-Forwarded-For": "198.51.100.7" } };
-    assert.equal((await post({ jsonrpc: "2.0", id: 80, method: "ping" }, h)).status, 200);
-    assert.equal((await post({ jsonrpc: "2.0", id: 81, method: "ping" }, h)).status, 200);
+    // M5 contract: X-Forwarded-For from a direct (untrusted) client is
+    // ignored, so rotating it buys nothing — init + first ping fill the
+    // socket bucket (rpm=2), and every further request 429s.
+    const h = (xff) => ({ headers: { "mcp-session-id": sid, "X-Forwarded-For": xff } });
+    assert.equal((await post({ jsonrpc: "2.0", id: 81, method: "ping" }, h("198.51.100.7"))).status, 200);
     const flooded = await fetch(base + "/mcp", {
-      method: "POST", headers: { "Content-Type": "application/json", ...auth, "mcp-session-id": sid, "X-Forwarded-For": "198.51.100.7" },
+      method: "POST", headers: { "Content-Type": "application/json", ...auth, "mcp-session-id": sid, "X-Forwarded-For": "198.51.100.8" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 82, method: "ping" }),
     });
-    assert.equal(flooded.status, 429, "flood refused");
+    assert.equal(flooded.status, 429, "flood refused despite rotated XFF");
     assert.ok(flooded.headers.get("retry-after"), "Retry-After present");
     assert.equal((await flooded.json()).error, "rate_limited");
   } finally {

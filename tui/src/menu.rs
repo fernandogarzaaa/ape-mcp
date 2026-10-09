@@ -245,7 +245,8 @@ pub fn wrap_text(text: &str, max: usize) -> Vec<String> {
             let cut_len = cut.len();
             let cur_is_empty = lines.last().map(|l| l.is_empty()).unwrap_or(true);
             if cur_is_empty {
-                *lines.last_mut().unwrap() = cut;
+                // Invariant: lines starts non-empty and is only pushed to below.
+                *lines.last_mut().expect("wrap lines non-empty") = cut;
             } else {
                 lines.push(cut);
             }
@@ -257,14 +258,15 @@ pub fn wrap_text(text: &str, max: usize) -> Vec<String> {
         // chars only.)
         let cur_is_empty = lines.last().map(|l| l.is_empty()).unwrap_or(true);
         if cur_is_empty {
-            *lines.last_mut().unwrap() = rest.to_string();
+            // Same invariant: only push()s happen in this function.
+            *lines.last_mut().expect("wrap lines non-empty") = rest.to_string();
         } else {
-            let cur_len: usize = lines.last().unwrap().chars().count();
+            let cur_len: usize = lines.last().expect("wrap lines non-empty").chars().count();
             if cur_len + 1 + rest.chars().count() > max {
                 lines.push(rest.to_string());
             } else {
-                lines.last_mut().unwrap().push(' ');
-                lines.last_mut().unwrap().push_str(rest);
+                lines.last_mut().expect("wrap lines non-empty").push(' ');
+                lines.last_mut().expect("wrap lines non-empty").push_str(rest);
             }
         }
     };
@@ -706,7 +708,10 @@ impl Menu {
                 Some(i) => *pos = Some(i + 1),
             }
         }
-        let text = history[pos.unwrap()].clone();
+        // pos is Some(i) with i < history.len(): the None arm returns above,
+        // and i+1 either stays in range or resets to None. history itself is
+        // non-empty (early return at function top), so indexing is safe.
+        let text = history[pos.expect("history position set")].clone();
         editor.replace(&text);
     }
 

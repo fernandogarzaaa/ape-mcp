@@ -16,17 +16,30 @@ export function newTraceId() {
 }
 // Key-like strings must never land in traces, displays, or ledgers:
 // upstream providers sometimes echo credentials inside error text.
-// Conservative patterns (vendor key prefixes + bearer/token assignments);
-// unknown shapes pass through rather than risk mangling real messages.
+// Focused patterns for high-signal secret classes (vendor key prefixes,
+// PEM blocks, bearer/query/assignment forms); unknown shapes pass through
+// rather than risk mangling real messages. Redaction is heuristic, not
+// universal: it catches known credential SHAPES, not all secrets. Callers
+// must still avoid placing raw credentials in tool output, and operators
+// must not paste secrets into objectives/args (caller input is stored
+// verbatim for replay fidelity; only RESULT-side text is scrubbed).
 const SECRET_RES = [
   /sk-(?:ant|proj|test)-?[\w-]{8,}/g,
   /sk-[A-Za-z0-9-_]{12,}/g,
   /xox[bpas]-[A-Za-z0-9-]+/g,
   /gh[pousr]_[A-Za-z0-9]+/g,
   /AIza[0-9A-Za-z\-_]{10,}/g,
-  /Bearer\s+[A-Za-z0-9\-._~+/=]+/g,
+  /xai-[A-Za-z0-9-_]{10,}/g,
+  /gsk_[A-Za-z0-9]{20,}/g,
+  /AKIA[0-9A-Z]{16}/g,
+  /bearer\s+[A-Za-z0-9\-._~+/=]{8,}/gi,
+  // PEM private-key block (header through END marker; bounded in practice
+  // because summaries are sliced to a few hundred chars before this runs).
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[A-Za-z0-9+/=\s]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+  // Query-string / fragment credentials (?key= / &token= / #access_token=).
+  /([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret)=)[^&\s"'{}]+/gi,
 ];
-const ASSIGN_RE = /((?:api[_-]?key|token|secret)\s*[:=]\s*["']?)[^"'\s,}]+/gi;
+const ASSIGN_RE = /((["']?)(?:api[_-]?key|refresh[_-]?token|password|passwd|passphrase|token|secret)\2\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^"'\s,}]+)/gi;
 export function redactSecrets(text) {
   let out = String(text ?? "");
   for (const re of SECRET_RES) {
@@ -34,7 +47,10 @@ export function redactSecrets(text) {
     out = out.replace(re, "[redacted]");
   }
   ASSIGN_RE.lastIndex = 0;
-  return out.replace(ASSIGN_RE, "$1[redacted]");
+  return out.replace(ASSIGN_RE, (match, prefix) => {
+    const quote = match[prefix.length];
+    return prefix + (quote === '"' || quote === "'" ? `${quote}[redacted]${quote}` : "[redacted]");
+  });
 }
 export function emitTrace(entry) {
   try {

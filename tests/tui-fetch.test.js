@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fetchTui, parseSums, assetName } from "../scripts/tui-fetch.mjs";
+import { fetchTui, parseSums, assetName, ensurePrebuilt, readRecordedSums } from "../scripts/tui-fetch.mjs";
 
 const BYTES = Buffer.from("fake-ape-tui-binary");
 const HASH = createHash("sha256").update(BYTES).digest("hex");
@@ -79,4 +79,42 @@ test("tui-fetch: missing sums or asset never writes", async (t) => {
   assert.equal(r2.ok, false);
   assert.match(r2.reason, /download failed/);
   assert.ok(!existsSync(d2));
+});
+
+test("tui-fetch: verified download records a sidecar; hits re-verify offline", async (t) => {
+  const { server, base } = await serve();
+  t.after(() => server.close());
+  const dir = mkdtempSync(join(tmpdir(), "ape-tui-fetch-"));
+  const dest = join(dir, "ape-tui.exe");
+  const failingFetch = () => { throw new Error("must not fetch on hit"); };
+  const r1 = await ensurePrebuilt({ version: "9.9.9", platform: "win-x64", isWindows: true, dest, fetchImpl: fetch, fetchBase: base });
+  assert.equal(r1.status, "ready", `downloaded: ${r1.reason ?? ""}`);
+  assert.ok(readRecordedSums(dest), "sidecar recorded");
+  // Present + recorded: re-verifies with NO network (fetch would throw).
+  const r2 = await ensurePrebuilt({ version: "9.9.9", platform: "win-x64", isWindows: true, dest, fetchImpl: failingFetch, fetchBase: base });
+  assert.equal(r2.status, "ready");
+  assert.equal(r2.verified, "recorded");
+});
+
+test("tui-fetch: swapped present binary is deleted, refetch attempted", async (t) => {
+  const { server, base } = await serve();
+  t.after(() => server.close());
+  const dir = mkdtempSync(join(tmpdir(), "ape-tui-fetch-"));
+  const dest = join(dir, "ape-tui.exe");
+  const { writeFileSync } = await import("node:fs");
+  await ensurePrebuilt({ version: "9.9.9", platform: "win-x64", isWindows: true, dest, fetchImpl: fetch, fetchBase: base });
+  writeFileSync(dest, Buffer.from("swapped-by-attacker"));
+  const r = await ensurePrebuilt({ version: "9.9.9", platform: "win-x64", isWindows: true, dest, fetchImpl: fetch, fetchBase: base });
+  // Swap detected -> deleted -> fresh verified fetch restores the good bytes.
+  assert.equal(r.status, "ready", `refetched after swap: ${r.reason ?? ""}`);
+  assert.deepEqual(readFileSync(dest), BYTES, "good bytes restored");
+});
+
+test("tui-fetch: present binary with no record stays presence-only", async () => {
+  const { writeFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "ape-tui-fetch-"));
+  const dest = join(dir, "ape-tui.exe");
+  writeFileSync(dest, BYTES);
+  const r = await ensurePrebuilt({ version: "9.9.9", platform: "win-x64", isWindows: true, dest, fetchImpl: () => { throw new Error("no network"); } });
+  assert.equal(r.status, "skipped", "older installs keep working offline");
 });

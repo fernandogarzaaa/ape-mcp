@@ -2,6 +2,7 @@
 // ephemeral ports. Route behavior is preserved verbatim; bin keeps CLI parsing
 // and calls startHttp({ port, host }).
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import { randomUUID } from "node:crypto";
 import { dispatchCall, toolsList, discover, agentMethod, resourcesList, readResource, promptsList, getPrompt, negotiateProtocolVersion } from "./server.js";
 import { listRuns, stepsSince, maxStepId } from "./runs.js";
@@ -33,8 +34,7 @@ function hostAllowedOr403(req, res) {
 
 // --- Rate limiting (§21): fixed-window per client IP on /mcp ---
 // Checked BEFORE auth so the bearer endpoint itself resists brute force.
-// Trusts X-Forwarded-For (single-proxy deployment: Caddy sets it; direct
-// access is loopback-only where spoofing is meaningless).
+// Walks X-Forwarded-For through explicitly trusted proxy IPs, right to left.
 const rateBuckets = new Map(); // ip -> { windowStart, count }
 export function rateLimitRpm() {
   const v = Number(process.env.APE_RATE_LIMIT_RPM);
@@ -45,19 +45,60 @@ export function rateLimitWindowMs() {
   return Number.isFinite(v) && v > 0 ? v : 60000;
 }
 export function clientIp(req) {
-  const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return xff || req.socket?.remoteAddress || "unknown";
+  // Explicit trusted-proxy model (M5): forwarding headers are attacker input
+  // unless the immediate peer is a configured trusted proxy. Direct clients
+  // must never be able to spoof the rate-limit identity.
+  // APE_TRUSTED_PROXIES: comma-separated peer IPs (compare normalized; the
+  // IPv4-mapped form ::ffff:a.b.c.d equals a.b.c.d). Empty (default) = trust
+  // nothing, always use the socket peer. Do NOT assume Caddy: set this only
+  // when a proxy you operate is actually in front.
+  const peer = normalizePeer(req.socket?.remoteAddress);
+  const trusted = trustedProxies();
+  if (peer && trusted.has(peer)) {
+    const xff = String(req.headers["x-forwarded-for"] || "")
+      .split(",").map(normalizePeer);
+    // Proxies must append their observed peer. Stop at the first untrusted
+    // address; anything to its left may have been supplied by that client.
+    let client = peer;
+    for (let i = xff.length - 1; i >= 0 && trusted.has(client); i--) {
+      if (!isIP(xff[i])) return client;
+      client = xff[i];
+    }
+    return client;
+  }
+  return peer || "unknown";
+}
+export function trustedProxies() {
+  const out = new Set();
+  for (const s of String(process.env.APE_TRUSTED_PROXIES || "").split(",")) {
+    const n = normalizePeer(s.trim());
+    if (n) out.add(n);
+  }
+  return out;
+}
+function normalizePeer(addr) {
+  const s = String(addr || "").trim().toLowerCase();
+  if (!s) return "";
+  // Node reports IPv4 peers as ::ffff:127.0.0.1 on dual-stack sockets.
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  return m ? m[1] : s;
 }
 export function checkRateLimit(ip, nowMs = Date.now()) {
   const rpm = rateLimitRpm();
   const win = rateLimitWindowMs();
   let b = rateBuckets.get(ip);
+  // Sweep and enforce the ceiling BEFORE inserting an unseen identity.
+  if (!b && rateBuckets.size >= MAX_RATE_BUCKETS) {
+    for (const [k, v] of rateBuckets) {
+      if (nowMs - v.windowStart >= win) rateBuckets.delete(k);
+    }
+    if (rateBuckets.size >= MAX_RATE_BUCKETS) {
+      return { limited: true, retryAfterMs: win };
+    }
+  }
   if (!b || nowMs - b.windowStart >= win) {
     b = { windowStart: nowMs, count: 0 };
     rateBuckets.set(ip, b);
-  }
-  if (rateBuckets.size > 10000) {
-    for (const [k, v] of rateBuckets) if (nowMs - v.windowStart >= win) rateBuckets.delete(k);
   }
   b.count++;
   if (b.count > rpm) return { limited: true, retryAfterMs: Math.max(0, b.windowStart + win - nowMs) };
@@ -77,6 +118,8 @@ function rateLimitedOr429(req, res) {
 
 // --- Fail-closed bind policy (Phase 11) ---
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
+// Hard ceiling on distinct rate-limit identities (fail-closed when full).
+const MAX_RATE_BUCKETS = 20000;
 export function resolveBindConfig({ host = "127.0.0.1" } = {}) {
   const h = String(host || "127.0.0.1");
   if (LOOPBACK_HOSTS.has(h.toLowerCase())) return { ok: true, host: h };
@@ -106,7 +149,12 @@ function applyCors(req, res) {
 export const MCP_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MCP_SESSION_HEADER = "mcp-session-id";
 export const MCP_SESSION_NOT_FOUND = -32001;
+export const MCP_SESSION_LIMIT = -32002;
 const mcpSessions = new Map(); // id -> { createdAt, lastSeen, clientInfo }
+export function maxMcpSessions() {
+  const v = Number(process.env.APE_MAX_MCP_SESSIONS);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1000;
+}
 export function sweepSessions(nowMs = Date.now()) {
   let swept = 0;
   for (const [id, s] of mcpSessions) {
@@ -190,6 +238,10 @@ function takeSession(req) {
   return { id, ...s };
 }
 function newSession(clientInfo = null) {
+  // Bounded sessions (M5): sweep expired first; refuse (honest null) when
+  // still at capacity instead of growing memory without bound.
+  sweepSessions();
+  if (mcpSessions.size >= maxMcpSessions()) return null;
   const id = randomUUID();
   const now = Date.now();
   mcpSessions.set(id, { createdAt: now, lastSeen: now, clientInfo });
@@ -305,22 +357,32 @@ async function handleMcpMessage(msg, session = null) {
 }
 
 const MCP_BODY_CAP = 4 * 1024 * 1024;
-function readMcpBody(req) {
+// Single safe body reader for every POST route (M4): rejects past the cap
+// BEFORE the bytes accumulate, destroys the socket, and reports 413.
+// Unbounded `for await` string concat is an OOM primitive — no route may use it.
+export function readCappedBody(req, cap = MCP_BODY_CAP) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    const chunks = [];
     let size = 0;
     req.on("data", (c) => {
+      if (size > cap) return;
       size += c.length;
-      if (size > MCP_BODY_CAP) {
+      if (size > cap) {
+        chunks.length = 0;
         reject(Object.assign(new Error("body too large"), { status: 413 }));
-        req.destroy();
+        try { req.destroy(); } catch { /* already closing */ }
         return;
       }
-      body += c;
+      chunks.push(c);
     });
-    req.on("end", () => resolve(body));
+    req.on("end", () => {
+      if (size <= cap) resolve(Buffer.concat(chunks, size).toString("utf8"));
+    });
     req.on("error", reject);
   });
+}
+function readMcpBody(req) {
+  return readCappedBody(req, MCP_BODY_CAP);
 }
 
 async function handleMcpPost(req, res) {
@@ -354,6 +416,12 @@ async function handleMcpPost(req, res) {
     const handled = await handleMcpMessage(msg, session);
     if (handled.newSession) {
       newSessionId = newSession(handled.clientInfo);
+      if (!newSessionId) {
+        // At capacity: honest error instead of a headerless success the
+        // client would mistake for a session.
+        responses.push(mcpError(msg?.id, MCP_SESSION_LIMIT, "session-limit: server at session capacity, retry later"));
+        continue;
+      }
     }
     if (handled.response) responses.push(handled.response);
   }
@@ -382,7 +450,12 @@ export function startHttp({ port = 8787, host = "127.0.0.1" } = {}) {
     if (req.method === "POST" && req.url === "/a2a") {
       if (!checkBearer(req).ok) return unauthorized(res, h);
       let body = "";
-      for await (const c of req) body += c;
+      try {
+        body = await readCappedBody(req);
+      } catch {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "body too large" }));
+      }
       try {
         const { id, method, params } = JSON.parse(body || "{}");
         try {
@@ -407,7 +480,12 @@ export function startHttp({ port = 8787, host = "127.0.0.1" } = {}) {
     if (req.method === "POST" && (req.url === "/call" || req.url === "/tasks/get" || req.url === "/agent")) {
       if (!checkBearer(req).ok) return unauthorized(res, h);
       let body = "";
-      for await (const c of req) body += c;
+      try {
+        body = await readCappedBody(req);
+      } catch {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "body too large" }));
+      }
       try {
         if (req.url === "/agent") {
           const { method, params } = JSON.parse(body || "{}");

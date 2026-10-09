@@ -30,7 +30,7 @@ malicious dependency · compromised AWS identity · operator error.
 | Prompt injection → infrastructure | Tool output + recalled memory framed untrusted; connectors can't reach metadata; confirm gates on destructive ops | Adversarial test suite is a follow-up |
 | DoS (payload/CPU) | 4 MB body cap, connector timeouts, provider wall-time abort, budget halts | No WAF/ALB (explicit non-goal); rate limit is coarse |
 | Cost abuse (LLM amplifier) | Same as runaway spend + receipts per run | No billing alerts yet |
-| Supply chain (npm/Caddy/binary) | Pinned vendors, license gate, checksummed ADAM fetch, lockfiles | Caddy apt + NodeSource scripts trust upstream; Dependabot not enabled |
+| Supply chain (npm/Caddy/binary) | Pinned vendors, license gate, fail-closed ADAM fetch (pin/sidecar verified, explicit opt-out only), TUI verify-on-hit, lockfiles | Caddy apt + NodeSource scripts trust upstream; Dependabot not enabled |
 | Host compromise | SSH scoped to operator IP; unattended-upgrades; no instance role (nothing to steal for AWS) | No IDS/FIM; EBS unencrypted (theft of volume = ledger read) |
 
 ## Tool capability matrix (§19 design basis)

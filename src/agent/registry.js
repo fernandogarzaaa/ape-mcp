@@ -67,6 +67,23 @@ export async function invokeTool(tool, args, ctx) {
   return { error: "unknown_tool", name: tool.name };
 }
 
+// Authority inheritance: a child run may never wield authority its parent
+// lacks. Restrictions travel parent -> child -> grandchild; each level takes
+// the intersection (deny wins). The object is extensible (future keys:
+// network, privileged tools); today only `destructive` is enforced.
+// Shape: { destructive?: "deny" | "allow" } — absent key means "no opinion".
+export function intersectRestrictions(parent, child) {
+  const out = { ...(child ?? {}) };
+  if (parent?.destructive === "deny") out.destructive = "deny";
+  return out;
+}
+// Effective destructive policy for a loop: inherited deny always wins;
+// otherwise the profile's own policy applies (default deny).
+export function effectiveDestructivePolicy(profilePolicy, inherited) {
+  if (inherited?.destructive === "deny") return "deny";
+  return profilePolicy ?? "deny";
+}
+
 // Whether invoking this tool with these args is destructive (mutates external or
 // organism state). Checked by the loop BEFORE invoking — the policy gate lives at
 // call time, not just in tool definitions.
@@ -92,19 +109,52 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Child budget = a slice of the parent's REMAINING budget, so parent plus all
 // children can never exceed the parent's ceiling. Pure for testability.
-// remaining: { stepsLeft, tokensLeft, usdLeft, wallMsLeft|null }.
+// remaining: { stepsLeft, tokensLeft, usdLeft, wallMsLeft|null } where a null
+// (or missing) ceiling means UNLIMITED on that dimension — unlimited parents
+// can delegate freely; only finite ceilings constrain. No floor may exceed
+// what remains: an exhausted (or near-exhausted) parent refuses instead of
+// granting a fresh minimum allowance.
+// A child needs a usable wall window (fork + at least one model turn): below
+// this remaining time delegation is refused instead of granting a floor that
+// would exceed what the parent has left. Matches the minimum delegation
+// timeout so a granted child can always in principle complete in time.
+export const MIN_WALL_GRANT_MS = 5000;
 export function sliceChildBudget(remaining = {}, share = 0.25) {
   const s = Math.min(Math.max(Number(share) || 0.25, 0.01), 0.5);
-  const stepsLeft = Number(remaining.stepsLeft ?? 0);
-  if (!(stepsLeft >= 1)) return { error: "parent budget exhausted", detail: "no remaining steps to slice a child budget from" };
+  const stepsLeft = remaining.stepsLeft;
+  const tokensLeft = remaining.tokensLeft;
+  const usdLeft = remaining.usdLeft;
+  const wallMsLeft = remaining.wallMsLeft ?? null;
+  // A dimension caps delegation only when the parent actually has a ceiling.
+  if (stepsLeft != null && !(stepsLeft >= 1)) {
+    return { error: "parent budget exhausted", detail: "no remaining steps to slice a child budget from" };
+  }
+  if (usdLeft != null && !(usdLeft > 0)) {
+    return { error: "parent budget exhausted", detail: "no remaining USD to slice a child budget from" };
+  }
+  if (tokensLeft != null && !(tokensLeft >= 1)) {
+    return { error: "parent budget exhausted", detail: "no remaining tokens to slice a child budget from" };
+  }
+  if (wallMsLeft != null && !(wallMsLeft > 0)) {
+    return { error: "parent budget exhausted", detail: "no remaining wall-clock to slice a child budget from" };
+  }
+  if (wallMsLeft != null && wallMsLeft < MIN_WALL_GRANT_MS) {
+    return { error: "parent budget exhausted", detail: `remaining wall-clock (${wallMsLeft}ms) below the minimum viable child grant (${MIN_WALL_GRANT_MS}ms); refusing instead of granting time the parent does not have` };
+  }
+  const proportional = (left) => (left == null ? null : Math.max(0, Math.floor(left * s)));
   return {
     share: s,
     limits: {
-      max_steps: Math.max(1, Math.floor(stepsLeft * s)),
-      max_tokens: Math.max(1, Math.floor(Number(remaining.tokensLeft ?? 0) * s)),
-      max_usd: Math.max(0.01, Number((Number(remaining.usdLeft ?? 0) * s).toFixed(4))),
-      max_wall_seconds: remaining.wallMsLeft != null
-        ? Math.max(10, Math.floor((remaining.wallMsLeft / 1000) * s))
+      // Steps: at least 1 when the parent has steps left (within remaining).
+      max_steps: stepsLeft == null ? null : Math.min(Math.max(1, proportional(stepsLeft)), Math.floor(stepsLeft)),
+      // Tokens/USD/wall: strict proportional slice, never above remaining.
+      max_tokens: tokensLeft == null ? null : proportional(tokensLeft),
+      max_usd: usdLeft == null ? null : Math.max(0, Number((usdLeft * s).toFixed(6))),
+      max_wall_seconds: wallMsLeft != null
+        // Rounding floor: reachable only when floor(R*s) is 0, i.e. the
+        // grant is 1s against a remaining R >= 5s (enforced above), so the
+        // grant can never exceed what the parent has left.
+        ? Math.max(1, Math.floor((wallMsLeft / 1000) * s))
         : 120,
     },
   };
@@ -142,6 +192,12 @@ export async function runDelegated(args, ctx = {}) {
   }
   const sliced = sliceChildBudget(ctx.budget ?? {}, args.budget_share);
   if (sliced.error) return { error: "delegation_no_budget", detail: sliced.detail };
+  // Authority inheritance: the child runs under the intersection of its own
+  // profile policy and the restrictions imposed by this (parent) loop. Deny
+  // always wins, through any nesting depth — a child can never regain what an
+  // ancestor denied. ctx.restrictions is set by the parent loop's delegateCtx;
+  // absent (direct tool calls, tests) means no inherited restriction.
+  const restrictions = intersectRestrictions(ctx.restrictions ?? null, null);
   const timeoutS = Math.min(Math.max(Number(args.timeout_s ?? 120), 5), 1800);
   const admitted = admitRun({
     profile: args.profile,
@@ -149,6 +205,7 @@ export async function runDelegated(args, ctx = {}) {
     objective: String(args.objective ?? "").slice(0, 4000),
     organism_id: ctx.organism_id ?? "default",
     parent_run_id: ctx.parentRunId ?? null,
+    inherited_policy: Object.keys(restrictions).length ? restrictions : null,
     maxConcurrent: Number(process.env.APE_MAX_CONCURRENT_RUNS ?? 4),
     dailyCapUsd: Number(process.env.APE_MAX_DAILY_USD ?? 25),
   });
@@ -156,33 +213,74 @@ export async function runDelegated(args, ctx = {}) {
     return { error: "delegation_refused", detail: admitted.error, hint: admitted.hint ?? null };
   }
   const childId = admitted.run_id;
-  let pid = null;
+  // Budget escrow (atomic reservation): the granted slice is committed to
+  // the parent budget synchronously, BEFORE forking. Parallel batches run
+  // their pre-await prefixes in order within one tick, so the second child
+  // snapshots remaining budget AFTER the first child's reservation —
+  // overlapping grants are impossible. Unused escrow is released at every
+  // exit (completion, timeout, fork failure). ctx.reserveBudget/refundBudget
+  // come from the parent loop; absent (direct calls) reservation is skipped.
+  const reserveBudget = typeof ctx.reserveBudget === "function" ? ctx.reserveBudget : null;
+  const refundBudget = typeof ctx.refundBudget === "function" ? ctx.refundBudget : null;
+  const escrow = {
+    steps: sliced.limits.max_steps ?? 0,
+    tokens: sliced.limits.max_tokens ?? 0,
+    cost: sliced.limits.max_usd ?? 0,
+  };
+  if (reserveBudget) reserveBudget(escrow);
+  const release = () => {
+    // Settle escrow IN FULL: the loop separately spends the child's actual
+    // consumption (see debitDelegation), so the escrow account must return
+    // to zero here — never netted against consumption, which would leak the
+    // remainder into every future ceiling check.
+    if (!refundBudget) return { steps: 0, tokens: 0, cost: 0 };
+    const back = { ...escrow };
+    refundBudget(back);
+    return back;
+  };
+  let worker = null;
   try {
-    const worker = fork(join(root, "src", "agent", "worker.js"), [childId, JSON.stringify({
+    worker = fork(join(root, "src", "agent", "worker.js"), [childId, JSON.stringify({
       parentRunId: ctx.parentRunId ?? null,
       budgetCaps: sliced.limits,
+      restrictions: Object.keys(restrictions).length ? restrictions : null,
     })], { stdio: ["ignore", "ignore", "inherit", "ipc"], detached: true, execArgv: [] });
-    pid = worker.pid;
     worker.unref();
-    try { updateRun(childId, { worker_pid: pid }); } catch { /* row write best-effort */ }
+    try { updateRun(childId, { worker_pid: worker.pid }); } catch { /* row write best-effort */ }
   } catch (e) {
+    // Fork failed: nothing consumed; release the full escrow.
+    const refunded = release();
     try { updateRun(childId, { status: "failed", stop_reason: "worker_crash", outcome: String(e).slice(0, 200), finished_at: new Date().toISOString() }); } catch { /* ignore */ }
-    return { error: "delegation_fork_failed", run_id: childId, detail: String(e?.message ?? e).slice(0, 200) };
+    return { error: "delegation_fork_failed", run_id: childId, detail: String(e?.message ?? e).slice(0, 200), refunded };
   }
   const deadlineMs = Math.min(timeoutS * 1000, (sliced.limits.max_wall_seconds ?? timeoutS) * 1000);
   const waited = await waitForRun(
     {
       getRunFn: (id) => getRun(id),
-      killFn: () => { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } },
+      // M7: kill the retained handle (exact child), never a bare PID that
+      // may have been recycled. `worker` is assigned above before any await,
+      // so the closure always names this fork (it previously referenced a
+      // block-scoped const and silently never killed on timeout).
+      killFn: () => { try { worker?.kill("SIGKILL"); } catch { /* gone */ } },
     },
     childId,
     deadlineMs
   );
   if (waited.timeout) {
+    // Timeout: the child is killed above; settle escrow in full (the loop
+    // spends the recorded partials separately) and report both.
+    let consumed = { steps: 0, tokens: 0, cost: 0 };
+    try {
+      const partial = getRun(childId);
+      consumed = { steps: partial.step_count ?? 0, tokens: partial.total_tokens ?? 0, cost: partial.total_cost ?? 0 };
+    } catch { /* row read best-effort */ }
+    const refunded = release();
     try { updateRun(childId, { status: "stopped", stop_reason: "delegation_timeout", outcome: `delegated run killed after ${timeoutS}s without reaching terminal state`, finished_at: new Date().toISOString() }); } catch { /* ignore */ }
-    return { error: "delegation_timeout", run_id: childId, timeout_s: timeoutS, hint: "narrow the sub-objective or raise timeout_s" };
+    return { error: "delegation_timeout", run_id: childId, timeout_s: timeoutS, hint: "narrow the sub-objective or raise timeout_s", consumed, refunded };
   }
   const row = waited.terminal;
+  const consumed = { steps: row.step_count ?? 0, tokens: Number(row.total_tokens ?? 0), cost: Number(row.total_cost ?? 0) };
+  const refunded = release();
   return {
     delegated: true,
     run_id: childId,
@@ -190,7 +288,13 @@ export async function runDelegated(args, ctx = {}) {
     outcome_status: row.outcome_status ?? row.status,
     stop_reason: row.stop_reason ?? null,
     outcome: String(row.outcome ?? "").slice(0, 2000),
-    cost_usd: Number(row.total_cost ?? 0),
-    steps: row.step_count ?? 0,
+    cost_usd: consumed.cost,
+    // Parent-side visibility needs the child's token spend too (same units as
+    // the parent budget). The loop settles these against the escrow (see
+    // debitDelegation in runAgent): no double charge.
+    tokens: consumed.tokens,
+    steps: consumed.steps,
+    reserved: escrow,
+    refunded,
   };
 }

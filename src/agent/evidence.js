@@ -12,6 +12,7 @@
 //   conflict     — >=1 positive AND >=1 negative, or a lone negative
 //   insufficient — zero sources, or neutrals only
 import { sha256hex } from "./outcomes.js";
+import { redactSecrets } from "../trace.js";
 
 // Full verifier results are capped for memory (matches the tool-message cap).
 export const EVIDENCE_FULL_CAP = 8000;
@@ -20,7 +21,9 @@ export const EVIDENCE_FULL_CAP = 8000;
 // 300-char ledger summary. A verdict past the truncation point must not
 // silently degrade to "neutral". The digest pins the exact bytes judged.
 export function buildEvidence({ tool, fullText, step, eveThreshold = 50 }) {
-  const full = String(fullText ?? "").slice(0, EVIDENCE_FULL_CAP);
+  // Evidence excerpts persist in the run receipt: scrub credential shapes
+  // before judging so the digest pins, and the excerpt stores, clean text.
+  const full = redactSecrets(String(fullText ?? "")).slice(0, EVIDENCE_FULL_CAP);
   const v = extractVerdict(tool, full);
   let verdict = v.verdict;
   if (verdict === "__SCORE__") verdict = (v.score ?? 0) >= eveThreshold ? "positive" : "negative";

@@ -12,6 +12,7 @@ import { familyOf, profileHash, envFingerprint } from "./outcomes.js";
 import { connectorList } from "../connectors.js";
 import { getRun, updateRun, recordStep, recentRuns, saveCheckpoint, loadCheckpoint, findDuplicate } from "../runs.js";
 import { adamCall } from "../adam-client.js";
+import { redactSecrets } from "../trace.js";
 
 const runId = process.argv[2];
 let opts = {};
@@ -96,7 +97,9 @@ async function main() {
     updateRun(runId, {
       status: "failed",
       stop_reason: "no_provider",
-      outcome: `provider resolution failed: ${chainErrors.map((e) => `${e.provider ?? "?"}:${e.error}`).join("; ").slice(0, 300) || "no resolvable provider"}`,
+      // Provider errors can echo credentials (upstream error text is untrusted):
+      // scrub before persisting.
+      outcome: redactSecrets(`provider resolution failed: ${chainErrors.map((e) => `${e.provider ?? "?"}:${e.error}`).join("; ").slice(0, 300) || "no resolvable provider"}`),
       finished_at: new Date().toISOString(),
     });
     process.exit(1);
@@ -176,6 +179,10 @@ async function main() {
     // Mock runs are hermetic replays: no ADAM I/O (also keeps test workers fast).
     initialContext: (opts.resume || opts.mockScript) ? null : await hydrateContext(req.objective, req.organism_id ?? "default"),
     parentRunId: opts.parentRunId ?? req.parent_run_id ?? null,
+    // Authority inheritance (M1): restrictions imposed by the delegating
+    // parent travel in the fork payload; the loop intersects them with this
+    // run's profile policy so deny cascades through any nesting depth.
+    inheritedRestrictions: opts.restrictions ?? null,
   });
   updateRun(runId, {
     status: result.stop_reason === "model_error" ? "failed" : "done",
@@ -190,13 +197,13 @@ async function main() {
     outcome_hash: result.receipt.outcome_hash ?? null,
     parent_run_id: opts.parentRunId ?? req.parent_run_id ?? null,
     receipt: JSON.stringify({ ...result.receipt, run_id: runId, ...((opts.parentRunId ?? req.parent_run_id) ? { parent_run_id: opts.parentRunId ?? req.parent_run_id } : {}) }).slice(0, 2000),
-    outcome: typeof result.outcome === "string" ? result.outcome.slice(0, 4000) : JSON.stringify(result.outcome ?? null).slice(0, 4000),
+    outcome: redactSecrets(typeof result.outcome === "string" ? result.outcome.slice(0, 4000) : JSON.stringify(result.outcome ?? null).slice(0, 4000)),
     finished_at: new Date().toISOString(),
   });
   // Structural feedback loop (not gated on the model calling memory.store): every run
   // leaves an outcome record the next run on a similar objective can recall.
   try {
-    const summary = `run ${req.profile}: objective="${String(req.objective).slice(0, 200)}" stop=${result.stop_reason} steps=${result.step_count} cost=$${Number(result.total_cost).toFixed(4)} model=${result.model_provider}/${result.model} outcome="${String(typeof result.outcome === "string" ? result.outcome : JSON.stringify(result.outcome ?? "")).slice(0, 300)}"`;
+    const summary = redactSecrets(`run ${req.profile}: objective="${String(req.objective).slice(0, 200)}" stop=${result.stop_reason} steps=${result.step_count} cost=$${Number(result.total_cost).toFixed(4)} model=${result.model_provider}/${result.model} outcome="${String(typeof result.outcome === "string" ? result.outcome : JSON.stringify(result.outcome ?? "")).slice(0, 300)}"`);
     await adamCall("adam_memory_store", { kind: "episodic", content: summary, origin: "observation", confidence: 0.8 }, req.organism_id ?? "default");
   } catch { /* outcome memory is best-effort; the run already succeeded */ }
   // Genome-mutation feedback: consecutive failures for one profile propose an
@@ -208,7 +215,7 @@ async function main() {
 }
 
 main().catch((e) => {
-  try { updateRun(runId, { status: "failed", stop_reason: "worker_crash", outcome: String(e).slice(0, 400), finished_at: new Date().toISOString() }); } catch { /* ignore */ }
+  try { updateRun(runId, { status: "failed", stop_reason: "worker_crash", outcome: redactSecrets(String(e).slice(0, 400)), finished_at: new Date().toISOString() }); } catch { /* ignore */ }
   process.exit(1);
 });
 

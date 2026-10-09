@@ -14,6 +14,9 @@ export function compressHistory(messages, { maxHistoryTokens = 60000, keepRecent
   const head = messages.slice(0, 1);
   const tail = messages.slice(-keepRecentTurns * 2);
   const middle = messages.slice(1, Math.max(1, messages.length - keepRecentTurns * 2));
+  // Short histories have no middle to digest: emitting head+tail would
+  // duplicate the overlap (the objective twice). Pass through untouched.
+  if (!middle.length) return { messages, compressed: 0, savedTokens: 0 };
   let compressed = 0;
   const digested = middle.map((m) => {
     if (m.role === "tool") {

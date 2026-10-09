@@ -20,6 +20,8 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 test("cli: version is single-sourced from package.json", () => {
   assert.equal(APE_VERSION, pkg.version);
   assert.equal(discover().server.version, pkg.version);
+  // Static MCP metadata must not drift from the release version either.
+  assert.equal(pkg.mcp?.server?.version, pkg.version, "package.json mcp.server.version tracks the release");
 });
 
 test("cli: --version prints the version and exits 0", () => {

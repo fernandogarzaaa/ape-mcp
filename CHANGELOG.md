@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (security hardening + integrity pass, toward 1.1.3)
+
+- Ledger redaction at every persistence boundary (step summaries live +
+  imported, run outcomes, evidence excerpts, ADAM outcome memory) with
+  expanded secret patterns (AKIA, PEM blocks, case-insensitive bearer,
+  query-string creds, xai-/gsk-, password/passwd/refresh_token); heuristic
+  limits documented.
+- Delegation is now a security boundary: child authority intersects all
+  ancestors (deny cascades, nested-safe, recorded on the child row); child
+  USD+token spend debits the parent ledger immediately; budget slices refuse
+  exhaustion without floors; wall-clock survives resume.
+- Run import hardened: step-count cap, numeric/checkpoint validation,
+  lineage resume-cap enforcement, outcome scrubbing, unsigned-trusted-input
+  semantics with a signing-verifier extension point.
+- `ape_report` sandboxed to the run-data root (no absolute/`..`/symlink
+  escape, directory-only) with honest rejection errors.
+- Unified 4MB body cap on every POST route; trusted-proxy rate-limit
+  identity (XFF only from configured peers) + bounded sessions; parser-aware
+  SSRF (short/hex/v4-mapped forms, no cross-origin bodies); handle-exact
+  worker control (bare PIDs never signaled); ADAM prebuilt fail-closed by
+  default; restored `context.test.js` + harness fails on missing test files.
+- Hygiene: MCP server version tracking test, SECURITY.md currency,
+  `updateRun` column allowlist, cancel-not-found honesty, Skein argv slug
+  validation, SSE/polling + `?t=` history documented, TUI `expect()`s,
+  TUI verify-on-hit. Invariants: `docs/SECURITY_INVARIANTS.md`.
+
 ## 1.1.2
 
 O1 console security hardening (audit verification first):
