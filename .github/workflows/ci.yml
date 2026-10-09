@@ -12,7 +12,7 @@ jobs:
         node: [22, 24]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
@@ -40,7 +40,7 @@ jobs:
   adam-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 22 }
       - uses: dtolnay/rust-toolchain@stable
@@ -51,7 +51,7 @@ jobs:
   tui:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: ape-tui unit tests
         run: cargo test --manifest-path tui/Cargo.toml
@@ -64,7 +64,7 @@ jobs:
     env:
       APE_TUI_FETCH_BASE: http://127.0.0.1:18787
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 24 }
       - uses: dtolnay/rust-toolchain@stable
