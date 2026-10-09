@@ -21,7 +21,11 @@ export const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export function tuiPlatform() {
   return process.platform === "win32" ? "win-x64"
     : process.platform === "darwin" ? (process.arch === "arm64" ? "darwin-arm64" : "darwin-x64")
-    : "linux-x64";
+    // Linux: name the real arch. A linux-x64 binary on an arm64 host fails
+    // with a cryptic "/bin/sh: Syntax error" (the kernel cannot exec it and
+    // the shell tries to parse the ELF). No linux-arm64 release asset exists
+    // yet, so the fetch 404s cleanly and the launcher falls back to cargo.
+    : process.arch === "x64" ? "linux-x64" : `linux-${process.arch}`;
 }
 
 export function tuiExePath(fromRoot = root) {
