@@ -58,8 +58,11 @@ test("fetch-adam maps every platform to an asset + local binary when present", a
   assert.equal(m.assetFor("linux", "x64"), "adam-mcp-linux-x64");
   // Presence is environment-dependent (win-x64 ships in-repo; other platforms
   // build via cargo or fetch from Release) â€” assert shape, not presence.
+  // Platforms without a release asset (e.g. linux-arm64) honestly map to null;
+  // ADAM then reports unavailable and `cargo build` in vendors/adam is the path.
+  assert.equal(m.assetFor("linux", "arm64"), null);
   const asset = m.assetFor(process.platform, process.arch);
-  assert.ok(asset);
+  if (!asset) return;
   assert.ok(m.destFor(asset).endsWith(process.platform === "win32" ? "adam-mcp.exe" : "adam-mcp"));
   if (existsSync(m.destFor(asset))) assert.ok(true, "vendored binary present");
 });
