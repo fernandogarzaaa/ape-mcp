@@ -6,10 +6,12 @@
  */
 import { behavioralSuite } from "./behavioral.js";
 import { codeSuite } from "./code.js";
+import { codePySuite } from "./code-py.js";
 import { jsonSuite } from "./json.js";
 import { mathSuite } from "./math.js";
 export const SUITES = {
     code: codeSuite,
+    "code-py": codePySuite,
     json: jsonSuite,
     math: mathSuite,
     behavioral: behavioralSuite,
@@ -20,5 +22,5 @@ export function suiteNames() {
 export function getSuite(name) {
     return SUITES[name];
 }
-export { codeSuite, jsonSuite, mathSuite, behavioralSuite };
+export { codeSuite, codePySuite, jsonSuite, mathSuite, behavioralSuite };
 //# sourceMappingURL=index.js.map
