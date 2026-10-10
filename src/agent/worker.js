@@ -4,7 +4,8 @@
 // memory (so future runs can recall it without the model having to store one), exits.
 import { loadProfile } from "./profiles.js";
 import { runAgent } from "./loop.js";
-import { resolveModel, resolveChain, applyCredentialPolicy } from "./providers.js";
+import { resolveModel, resolveChain, applyCredentialPolicy, userDefaults } from "./providers.js";
+import { hasMembers as freepoolHasMembers } from "./freepool/index.js";
 import { detectProviders } from "./hostdetect.js";
 import { classifyObjective, selectRoutedModel } from "./router.js";
 import { rankBySimilarity, buildHydrationContext } from "./similarity.js";
@@ -62,7 +63,39 @@ async function main() {
   // local spend is disallowed for this profile.
   const credAllow = profile.policy?.credential_policy?.allow;
   const routingOn = (profile.policy?.routing ?? true) && profile.model.provider === "auto" && !opts.provider && !opts.model && !opts.mockScript && (!credAllow?.length || credAllow.includes("local"));
-  if (routingOn) {
+  // Cost-aware routing (default for provider:auto when freepool members are
+  // available): one "freepool/cost" entry that walks local -> free tiers ->
+  // paid, escalating only on need and only within budget. Opt out with
+  // policy.routing:false, APE_COST_ROUTING=0, an explicit provider/model, or
+  // a pinned provider (APE_PROVIDER / TUI pin). Credential policy applies to
+  // the paid ladder too: a disallowed paid provider never joins it.
+  const costOn = (profile.policy?.routing ?? true) && profile.model.provider === "auto" && !opts.provider && !opts.model && !opts.mockScript
+    && process.env.APE_COST_ROUTING !== "0" && !process.env.APE_PROVIDER && !userDefaults().provider
+    && (!credAllow?.length || credAllow.includes("freepool"));
+  let costChain = null;
+  if (costOn && freepoolHasMembers()) {
+    const cls = classifyObjective(req.objective);
+    const rc = await resolveChain(profile.model, {});
+    const paid = rc.chain.filter((e) => !["mock", "local", "freepool"].includes(e.provider) && (!credAllow?.length || credAllow.includes(e.provider)));
+    let localModel = null;
+    if ((!credAllow?.length || credAllow.includes("local")) && (await detectProviders()).includes("local")) {
+      const l = await resolveModel({ provider: "local", id: "auto" });
+      if (l && !l.error && l.id) localModel = l.id;
+    }
+    resolved = { provider: "freepool", id: "cost", key: null, resolution: "cost-routed", source: "freepool", pool: { paid, localModel } };
+    costChain = [resolved];
+    routing = {
+      routed: true,
+      strategy: "cost",
+      category: cls.category,
+      confidence: cls.confidence,
+      reason: "cost routing: local -> free tiers -> paid only on need (within budget)",
+      provider: "freepool",
+      model: "cost",
+      paid_ladder: paid.map((e) => `${e.provider}/${e.id}`),
+      local: localModel ? true : false,
+    };
+  } else if (routingOn) {
     const cls = classifyObjective(req.objective);
     routing = { routed: false, category: cls.category, confidence: cls.confidence, reason: cls.reasons.join("; ") };
     if (cls.category === "trivial" && cls.confidence > 0) {
@@ -82,7 +115,11 @@ async function main() {
   // fallback still runs. A task-routed primary keeps its place at the head.
   let chain = [];
   let chainErrors = [];
-  if (resolved) {
+  if (costChain) {
+    // Paid providers already sit inside the cost ladder; appending them again
+    // as loop fallbacks could double-spend.
+    chain = costChain;
+  } else if (resolved) {
     const rc = await resolveChain(profile.model, {}, { skipPrimary: true });
     chain = [resolved, ...rc.chain];
     chainErrors = rc.errors;
