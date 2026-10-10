@@ -10,12 +10,118 @@
       "limits_header_requests": "day",
       "account_limits": {},
       "models": [
-        { "id": "llama-3.1-8b-instant", "tier": 1, "speed": 3, "context": 131072, "tools": true, "limits": { "rpm": 30, "rpd": 14400, "tpm": 6000, "tpd": 500000 } },
-        { "id": "llama-3.3-70b-versatile", "tier": 2, "speed": 3, "context": 131072, "tools": true, "limits": { "rpm": 30, "rpd": 1000, "tpm": 12000, "tpd": 100000 } },
-        { "id": "openai/gpt-oss-20b", "tier": 2, "speed": 3, "context": 131072, "tools": true, "limits": { "rpm": 30, "rpd": 1000, "tpm": 8000, "tpd": 200000 } },
-        { "id": "openai/gpt-oss-120b", "tier": 3, "speed": 3, "context": 131072, "tools": true, "limits": { "rpm": 30, "rpd": 1000, "tpm": 8000, "tpd": 200000 } },
-        { "id": "qwen/qwen3-32b", "tier": 2, "speed": 3, "context": 131072, "tools": true, "limits": { "rpm": 60, "rpd": 1000, "tpm": 6000, "tpd": 500000 } },
-        { "id": "moonshotai/kimi-k2-instruct-0905", "tier": 3, "speed": 3, "context": 262144, "tools": true, "limits": { "rpm": 60, "rpd": 1000, "tpm": 10000, "tpd": 300000 } }
+        {
+          "id": "llama-3.1-8b-instant",
+          "tier": 1,
+          "speed": 3,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 14400,
+            "tpm": 6000,
+            "tpd": 500000
+          },
+          "retired": "2026-10-10"
+        },
+        {
+          "id": "llama-3.3-70b-versatile",
+          "tier": 2,
+          "speed": 3,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 1000,
+            "tpm": 12000,
+            "tpd": 100000
+          },
+          "retired": "2026-10-10"
+        },
+        {
+          "id": "openai/gpt-oss-20b",
+          "tier": 2,
+          "speed": 3,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 1000,
+            "tpm": 8000,
+            "tpd": 200000
+          }
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "tier": 3,
+          "speed": 3,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 1000,
+            "tpm": 8000,
+            "tpd": 200000
+          }
+        },
+        {
+          "id": "qwen/qwen3-32b",
+          "tier": 2,
+          "speed": 3,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 60,
+            "rpd": 1000,
+            "tpm": 6000,
+            "tpd": 500000
+          },
+          "retired": "2026-10-10"
+        },
+        {
+          "id": "moonshotai/kimi-k2-instruct-0905",
+          "tier": 3,
+          "speed": 3,
+          "context": 262144,
+          "tools": true,
+          "limits": {
+            "rpm": 60,
+            "rpd": 1000,
+            "tpm": 10000,
+            "tpd": 300000
+          },
+          "retired": "2026-10-10"
+        },
+        {
+          "id": "allam-2-7b",
+          "tier": 1,
+          "speed": 2,
+          "context": 4096,
+          "tools": false,
+          "limits": {
+            "rpm": null,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          },
+          "added": "2026-10-10",
+          "note": "excluded: 4k context, Arabic-focused; not a general pool model",
+          "excluded": true
+        },
+        {
+          "id": "qwen/qwen3.8-27b",
+          "tier": 3,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": null,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          },
+          "added": "2026-10-10"
+        }
       ]
     },
     "cerebras": {
@@ -24,10 +130,58 @@
       "tos_note": "Free tier for personal/dev use.",
       "account_limits": {},
       "models": [
-        { "id": "llama3.1-8b", "tier": 1, "speed": 3, "context": 8192, "tools": true, "limits": { "rpm": 30, "rpd": 14400, "tpm": 60000, "tpd": 1000000 } },
-        { "id": "llama-3.3-70b", "tier": 2, "speed": 3, "context": 65536, "tools": true, "limits": { "rpm": 30, "rpd": 14400, "tpm": 64000, "tpd": 1000000 } },
-        { "id": "gpt-oss-120b", "tier": 3, "speed": 3, "context": 65536, "tools": true, "limits": { "rpm": 30, "rpd": 14400, "tpm": 64000, "tpd": 1000000 } },
-        { "id": "qwen-3-235b-a22b-instruct-2507", "tier": 3, "speed": 3, "context": 65536, "tools": true, "limits": { "rpm": 30, "rpd": 14400, "tpm": 60000, "tpd": 1000000 } }
+        {
+          "id": "llama3.1-8b",
+          "tier": 1,
+          "speed": 3,
+          "context": 8192,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 14400,
+            "tpm": 60000,
+            "tpd": 1000000
+          }
+        },
+        {
+          "id": "llama-3.3-70b",
+          "tier": 2,
+          "speed": 3,
+          "context": 65536,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 14400,
+            "tpm": 64000,
+            "tpd": 1000000
+          }
+        },
+        {
+          "id": "gpt-oss-120b",
+          "tier": 3,
+          "speed": 3,
+          "context": 65536,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 14400,
+            "tpm": 64000,
+            "tpd": 1000000
+          }
+        },
+        {
+          "id": "qwen-3-235b-a22b-instruct-2507",
+          "tier": 3,
+          "speed": 3,
+          "context": 65536,
+          "tools": true,
+          "limits": {
+            "rpm": 30,
+            "rpd": 14400,
+            "tpm": 60000,
+            "tpd": 1000000
+          }
+        }
       ]
     },
     "gemini": {
@@ -36,46 +190,245 @@
       "tos_note": "Free-tier prompts/outputs may be used by Google to improve products; not available in some regions (EEA/UK/CH restrictions). Do not send sensitive data.",
       "account_limits": {},
       "models": [
-        { "id": "gemini-2.5-flash-lite", "tier": 2, "speed": 3, "context": 1048576, "tools": true, "limits": { "rpm": 15, "rpd": 1000, "tpm": 250000, "tpd": null } },
-        { "id": "gemini-2.5-flash", "tier": 3, "speed": 2, "context": 1048576, "tools": true, "limits": { "rpm": 10, "rpd": 250, "tpm": 250000, "tpd": null } },
-        { "id": "gemini-2.5-pro", "tier": 4, "speed": 1, "context": 1048576, "tools": true, "limits": { "rpm": 5, "rpd": 100, "tpm": 250000, "tpd": null } }
+        {
+          "id": "gemini-2.5-flash-lite",
+          "tier": 2,
+          "speed": 3,
+          "context": 1048576,
+          "tools": true,
+          "limits": {
+            "rpm": 15,
+            "rpd": 1000,
+            "tpm": 250000,
+            "tpd": null
+          }
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "tier": 3,
+          "speed": 2,
+          "context": 1048576,
+          "tools": true,
+          "limits": {
+            "rpm": 10,
+            "rpd": 250,
+            "tpm": 250000,
+            "tpd": null
+          }
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "tier": 4,
+          "speed": 1,
+          "context": 1048576,
+          "tools": true,
+          "limits": {
+            "rpm": 5,
+            "rpd": 100,
+            "tpm": 250000,
+            "tpd": null
+          }
+        }
       ]
     },
     "mistral": {
       "name": "Mistral (La Plateforme, Experiment plan)",
       "tos": "ok",
       "tos_note": "Free Experiment plan; requests may be used for training unless opted out in console. Personal/dev use.",
-      "account_limits": { "rpm": 60 },
+      "account_limits": {
+        "rpm": 60
+      },
       "models": [
-        { "id": "mistral-small-latest", "tier": 2, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": 60, "rpd": null, "tpm": 500000, "tpd": null } },
-        { "id": "codestral-latest", "tier": 3, "speed": 2, "context": 256000, "tools": true, "limits": { "rpm": 60, "rpd": null, "tpm": 500000, "tpd": null } },
-        { "id": "mistral-medium-latest", "tier": 3, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": 60, "rpd": null, "tpm": 500000, "tpd": null } },
-        { "id": "mistral-large-latest", "tier": 3, "speed": 1, "context": 131072, "tools": true, "limits": { "rpm": 60, "rpd": null, "tpm": 500000, "tpd": null } }
+        {
+          "id": "mistral-small-latest",
+          "tier": 2,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 60,
+            "rpd": null,
+            "tpm": 500000,
+            "tpd": null
+          }
+        },
+        {
+          "id": "codestral-latest",
+          "tier": 3,
+          "speed": 2,
+          "context": 256000,
+          "tools": true,
+          "limits": {
+            "rpm": 60,
+            "rpd": null,
+            "tpm": 500000,
+            "tpd": null
+          }
+        },
+        {
+          "id": "mistral-medium-latest",
+          "tier": 3,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 60,
+            "rpd": null,
+            "tpm": 500000,
+            "tpd": null
+          }
+        },
+        {
+          "id": "mistral-large-latest",
+          "tier": 3,
+          "speed": 1,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 60,
+            "rpd": null,
+            "tpm": 500000,
+            "tpd": null
+          }
+        }
       ]
     },
     "openrouter": {
       "name": "OpenRouter (:free models only)",
       "tos": "ok",
       "tos_note": "Only ':free' model ids are pooled. Account-wide cap ~50 requests/day (1000/day after a one-time $10 credit purchase). Some free upstreams log prompts.",
-      "account_limits": { "rpm": 20, "rpd": 50 },
+      "account_limits": {
+        "rpm": 20,
+        "rpd": 50
+      },
       "models": [
-        { "id": "meta-llama/llama-3.3-70b-instruct:free", "tier": 2, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": 20, "rpd": 50, "tpm": null, "tpd": null } },
-        { "id": "openai/gpt-oss-20b:free", "tier": 2, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": 20, "rpd": 50, "tpm": null, "tpd": null } },
-        { "id": "z-ai/glm-4.5-air:free", "tier": 3, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": 20, "rpd": 50, "tpm": null, "tpd": null } },
-        { "id": "qwen/qwen3-coder:free", "tier": 3, "speed": 2, "context": 262144, "tools": true, "limits": { "rpm": 20, "rpd": 50, "tpm": null, "tpd": null } },
-        { "id": "deepseek/deepseek-chat-v3.1:free", "tier": 4, "speed": 1, "context": 163840, "tools": true, "limits": { "rpm": 20, "rpd": 50, "tpm": null, "tpd": null } }
+        {
+          "id": "meta-llama/llama-3.3-70b-instruct:free",
+          "tier": 2,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 20,
+            "rpd": 50,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "openai/gpt-oss-20b:free",
+          "tier": 2,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 20,
+            "rpd": 50,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "z-ai/glm-4.5-air:free",
+          "tier": 3,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 20,
+            "rpd": 50,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "qwen/qwen3-coder:free",
+          "tier": 3,
+          "speed": 2,
+          "context": 262144,
+          "tools": true,
+          "limits": {
+            "rpm": 20,
+            "rpd": 50,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "deepseek/deepseek-chat-v3.1:free",
+          "tier": 4,
+          "speed": 1,
+          "context": 163840,
+          "tools": true,
+          "limits": {
+            "rpm": 20,
+            "rpd": 50,
+            "tpm": null,
+            "tpd": null
+          }
+        }
       ]
     },
     "nvidia": {
       "name": "NVIDIA NIM (build.nvidia.com)",
       "tos": "caution",
       "tos_note": "Developer/trial access intended for prototyping and evaluation, not production. ~40 RPM account-wide.",
-      "account_limits": { "rpm": 40 },
+      "account_limits": {
+        "rpm": 40
+      },
       "models": [
-        { "id": "meta/llama-3.3-70b-instruct", "tier": 2, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": 40, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "openai/gpt-oss-120b", "tier": 3, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": 40, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "qwen/qwen3-coder-480b-a35b-instruct", "tier": 4, "speed": 1, "context": 262144, "tools": true, "limits": { "rpm": 40, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "deepseek-ai/deepseek-v3.1", "tier": 4, "speed": 1, "context": 131072, "tools": true, "limits": { "rpm": 40, "rpd": null, "tpm": null, "tpd": null } }
+        {
+          "id": "meta/llama-3.3-70b-instruct",
+          "tier": 2,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 40,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "tier": 3,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 40,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "qwen/qwen3-coder-480b-a35b-instruct",
+          "tier": 4,
+          "speed": 1,
+          "context": 262144,
+          "tools": true,
+          "limits": {
+            "rpm": 40,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "deepseek-ai/deepseek-v3.1",
+          "tier": 4,
+          "speed": 1,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": 40,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        }
       ]
     },
     "cloudflare": {
@@ -84,9 +437,45 @@
       "tos_note": "Free allocation of ~10k neurons/day per account; beyond that requires the paid plan (calls fail, not billed, on the free plan).",
       "account_limits": {},
       "models": [
-        { "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "tier": 2, "speed": 2, "context": 24000, "tools": true, "limits": { "rpm": 300, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "@cf/openai/gpt-oss-120b", "tier": 3, "speed": 2, "context": 128000, "tools": true, "limits": { "rpm": 300, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "@cf/meta/llama-3.1-8b-instruct-fast", "tier": 1, "speed": 3, "context": 128000, "tools": false, "limits": { "rpm": 300, "rpd": null, "tpm": null, "tpd": null } }
+        {
+          "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+          "tier": 2,
+          "speed": 2,
+          "context": 24000,
+          "tools": true,
+          "limits": {
+            "rpm": 300,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "@cf/openai/gpt-oss-120b",
+          "tier": 3,
+          "speed": 2,
+          "context": 128000,
+          "tools": true,
+          "limits": {
+            "rpm": 300,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "@cf/meta/llama-3.1-8b-instruct-fast",
+          "tier": 1,
+          "speed": 3,
+          "context": 128000,
+          "tools": false,
+          "limits": {
+            "rpm": 300,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        }
       ]
     },
     "huggingface": {
@@ -95,9 +484,45 @@
       "tos_note": "Small monthly free credit; calls fail once it is spent (no billing without a payment method).",
       "account_limits": {},
       "models": [
-        { "id": "meta-llama/Llama-3.3-70B-Instruct", "tier": 2, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": null, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "openai/gpt-oss-120b", "tier": 3, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": null, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "Qwen/Qwen3-Coder-480B-A35B-Instruct", "tier": 4, "speed": 1, "context": 262144, "tools": true, "limits": { "rpm": null, "rpd": null, "tpm": null, "tpd": null } }
+        {
+          "id": "meta-llama/Llama-3.3-70B-Instruct",
+          "tier": 2,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": null,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "tier": 3,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": null,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+          "tier": 4,
+          "speed": 1,
+          "context": 262144,
+          "tools": true,
+          "limits": {
+            "rpm": null,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        }
       ]
     },
     "opencode": {
@@ -106,25 +531,93 @@
       "tos_note": "Only models OpenCode Zen lists as free. Free models may be time-limited and may log data for model improvement.",
       "account_limits": {},
       "models": [
-        { "id": "muse-spark-1.3-contributor-free", "tier": 3, "speed": 2, "context": 131072, "tools": true, "limits": { "rpm": null, "rpd": null, "tpm": null, "tpd": null } },
-        { "id": "big-pickle", "tier": 3, "speed": 2, "context": 200000, "tools": true, "limits": { "rpm": null, "rpd": null, "tpm": null, "tpd": null } }
+        {
+          "id": "muse-spark-1.3-contributor-free",
+          "tier": 3,
+          "speed": 2,
+          "context": 131072,
+          "tools": true,
+          "limits": {
+            "rpm": null,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        },
+        {
+          "id": "big-pickle",
+          "tier": 3,
+          "speed": 2,
+          "context": 200000,
+          "tools": true,
+          "limits": {
+            "rpm": null,
+            "rpd": null,
+            "tpm": null,
+            "tpd": null
+          }
+        }
       ]
     }
   },
   "paid": {
     "note": "USD per million tokens for paid providers the cost router may escalate to. Estimates; COST_PER_MTok in providers.js wins where both define a model. tier uses the same 1-4 scale.",
     "rates": {
-      "claude-sonnet-4-6": { "in": 3, "out": 15, "tier": 4 },
-      "claude-sonnet-4-5": { "in": 3, "out": 15, "tier": 4 },
-      "claude-3-5-haiku": { "in": 0.8, "out": 4, "tier": 2 },
-      "gpt-4.1": { "in": 2, "out": 8, "tier": 4 },
-      "gpt-4.1-mini": { "in": 0.4, "out": 1.6, "tier": 3 },
-      "gpt-4o": { "in": 2.5, "out": 10, "tier": 3 },
-      "gpt-4o-mini": { "in": 0.15, "out": 0.6, "tier": 2 },
-      "o3-mini": { "in": 1.1, "out": 4.4, "tier": 4 },
-      "anthropic/claude-sonnet-4-6": { "in": 3, "out": 15, "tier": 4 },
-      "deepseek-ai/DeepSeek-V4-Flash-0731": { "in": 0.3, "out": 1.2, "tier": 3 }
+      "claude-sonnet-4-6": {
+        "in": 3,
+        "out": 15,
+        "tier": 4
+      },
+      "claude-sonnet-4-5": {
+        "in": 3,
+        "out": 15,
+        "tier": 4
+      },
+      "claude-3-5-haiku": {
+        "in": 0.8,
+        "out": 4,
+        "tier": 2
+      },
+      "gpt-4.1": {
+        "in": 2,
+        "out": 8,
+        "tier": 4
+      },
+      "gpt-4.1-mini": {
+        "in": 0.4,
+        "out": 1.6,
+        "tier": 3
+      },
+      "gpt-4o": {
+        "in": 2.5,
+        "out": 10,
+        "tier": 3
+      },
+      "gpt-4o-mini": {
+        "in": 0.15,
+        "out": 0.6,
+        "tier": 2
+      },
+      "o3-mini": {
+        "in": 1.1,
+        "out": 4.4,
+        "tier": 4
+      },
+      "anthropic/claude-sonnet-4-6": {
+        "in": 3,
+        "out": 15,
+        "tier": 4
+      },
+      "deepseek-ai/DeepSeek-V4-Flash-0731": {
+        "in": 0.3,
+        "out": 1.2,
+        "tier": 3
+      }
     },
-    "default": { "in": 2, "out": 8, "tier": 3 }
+    "default": {
+      "in": 2,
+      "out": 8,
+      "tier": 3
+    }
   }
 }

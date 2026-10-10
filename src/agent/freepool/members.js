@@ -63,15 +63,19 @@ export function keysFor(provider, env = process.env) {
 }
 
 let catalogCache = null;
-export function loadCatalog(path = CATALOG_PATH) {
-  if (path === CATALOG_PATH && catalogCache) return catalogCache;
+// APE_FREEPOOL_CATALOG overrides the catalog file (tests pin a fixture so a
+// catalog refresh never changes test outcomes).
+export function loadCatalog(path = null) {
+  const isDefault = path == null;
+  path = path ?? (process.env.APE_FREEPOOL_CATALOG || CATALOG_PATH);
+  if (isDefault && catalogCache) return catalogCache;
   let cat;
   try {
     cat = JSON.parse(readFileSync(path, "utf8"));
   } catch {
     cat = { schema: 1, providers: {}, paid: { rates: {}, default: { in: 2, out: 8, tier: 3 } } };
   }
-  if (path === CATALOG_PATH) catalogCache = cat;
+  if (isDefault) catalogCache = cat;
   return cat;
 }
 export function _resetCatalogCache() { catalogCache = null; }
@@ -112,7 +116,7 @@ export function poolMembers(opts = {}) {
     if (!keys.length) continue; // missing key: skip silently, never attempt
     const baseUrl = spec.base(env);
     if (!baseUrl) continue;
-    const models = (entry.models ?? []).filter((m) => m && m.id && !m.retired && (!spec.modelFilter || spec.modelFilter(m.id)));
+    const models = (entry.models ?? []).filter((m) => m && m.id && !m.retired && !m.excluded && (!spec.modelFilter || spec.modelFilter(m.id)));
     if (!models.length) continue;
     out.push({ provider, name: entry.name ?? provider, tos: entry.tos ?? "ok", baseUrl, keys, account_limits: entry.account_limits ?? {}, limits_header_requests: entry.limits_header_requests, models });
   }
@@ -145,7 +149,7 @@ export function memberInventory(env = process.env) {
       key_present: keys.length > 0,
       key_count: keys.length,
       tos: entry.tos ?? "unknown",
-      models: (entry.models ?? []).filter((m) => !m.retired && (!spec.modelFilter || spec.modelFilter(m.id))).length,
+      models: (entry.models ?? []).filter((m) => !m.retired && !m.excluded && (!spec.modelFilter || spec.modelFilter(m.id))).length,
     };
   });
 }

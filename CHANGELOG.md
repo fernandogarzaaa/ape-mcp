@@ -2,6 +2,11 @@
 
 ## Unreleased (freepool provider + cost-aware routing)
 
+- Catalog refreshed live against Groq (2026-10-10): retired `llama-3.1-8b-instant`,
+  `llama-3.3-70b-versatile`, `qwen/qwen3-32b`, `kimi-k2-instruct-0905`; added
+  `qwen/qwen3.8-27b`. Models can be hand-`excluded` (kept, never revived by
+  refresh), e.g. `allam-2-7b`. Tests pin `tests/fixtures/freepool-catalog.json`
+  (`APE_FREEPOOL_CATALOG`) so catalog refreshes never change test outcomes.
 - New virtual provider `freepool`: stacked free OpenAI-compatible tiers
   (Groq, Cerebras, Gemini, Mistral, OpenRouter `:free`, NVIDIA NIM,
   Cloudflare Workers AI, Hugging Face router, OpenCode Zen, local).

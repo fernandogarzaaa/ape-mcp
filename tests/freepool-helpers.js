@@ -4,6 +4,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PROVIDER_SPECS } from "../src/agent/freepool/members.js";
+import { fileURLToPath } from "node:url";
+
+// Pin the catalog to a fixture so nightly catalog refreshes never change test outcomes.
+process.env.APE_FREEPOOL_CATALOG = fileURLToPath(new URL("./fixtures/freepool-catalog.json", import.meta.url));
 import * as L from "../src/agent/freepool/ledger.js";
 import { _resetRunMemory, registerTierClassifier } from "../src/agent/freepool/costroute.js";
 

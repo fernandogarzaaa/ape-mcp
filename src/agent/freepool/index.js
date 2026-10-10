@@ -318,7 +318,7 @@ export function freepoolModels({ provider = null, tools = null } = {}) {
     const spec = PROVIDER_SPECS[p];
     if (!spec) continue;
     for (const m of entry.models ?? []) {
-      if (m.retired || (spec.modelFilter && !spec.modelFilter(m.id))) continue;
+      if (m.retired || m.excluded || (spec.modelFilter && !spec.modelFilter(m.id))) continue;
       if (tools === true && !m.tools) continue;
       rows.push({ provider: p, id: m.id, tier: m.tier, tier_name: TIER_NAMES[m.tier] ?? null, speed: m.speed, context: m.context, tools: !!m.tools, limits: m.limits ?? {}, available: active.has(p), tos: entry.tos ?? "unknown" });
     }

@@ -52,6 +52,7 @@ export function mergeProvider(entry, discovered, { provider, today }) {
   const seen = new Set();
   for (const m of entry?.models ?? []) {
     seen.add(m.id);
+    if (m.excluded) { out.models.push(m); continue; } // hand-excluded: never revived or retired
     const d = found.get(m.id);
     if (d) {
       const next = { ...m };

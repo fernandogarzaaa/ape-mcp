@@ -135,3 +135,12 @@ test("discovery: only keyed providers queried; each provider's listing shape par
   assert.equal(seen.find((s) => s.url.includes("groq")).auth, "Bearer gsk_disc_a");
   assert.equal(await discoverProvider("groq", { env: {}, fetchImpl }), null, "no key -> not queried");
 });
+
+test("catalog merge: hand-excluded models are kept as-is and never revived", async () => {
+  const { mergeProvider } = await import("../src/agent/freepool/catalog-refresh.js");
+  const entry = { models: [{ id: "allam-2-7b", tier: 1, tools: false, excluded: true }] };
+  const { entry: out, added, revived, retired } = mergeProvider(entry, [{ id: "allam-2-7b" }], { provider: "groq", today: "2026-10-10" });
+  assert.equal(out.models.length, 1);
+  assert.equal(out.models[0].excluded, true);
+  assert.deepEqual([added, revived, retired], [[], [], []]);
+});
