@@ -72,7 +72,7 @@ export class VerifierAdapter {
         }
         const parsed = parseJsonLoose(result.stdout);
         if (parsed === null) {
-            return response("error", result, duration_ms, null, "verifier stdout was not parseable JSON");
+            return response("error", result, duration_ms, null, unparseableNote(result));
         }
         if (rule.kind === "json_pass") {
             const field = rule.field ?? "pass";
@@ -90,6 +90,31 @@ export class VerifierAdapter {
         }
         return response(value >= threshold ? "accept" : "reject", result, duration_ms, value, null);
     }
+}
+/**
+ * Explain an unparseable verdict well enough to act on. A verifier that crashed
+ * (missing file, import error, wrong interpreter) also produces no JSON, and
+ * "not parseable JSON" alone hides that; the exit code and the last stderr line
+ * (redacted) usually name the real problem.
+ */
+function unparseableNote(result) {
+    const base = "verifier stdout was not parseable JSON";
+    const details = [];
+    if (result.exit_code !== 0 && result.exit_code !== null)
+        details.push(`exit ${result.exit_code}`);
+    if (result.stdout.trim() === "")
+        details.push("empty stdout");
+    const lines = result.stderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line !== "");
+    // Prefer the line that names the failure (Node ends traces with its version
+    // banner, Python with the exception line), else the last line.
+    const errorLine = [...lines].reverse().find((line) => /error|exception|cannot|not found|no such/i.test(line)) ??
+        lines.at(-1);
+    if (errorLine)
+        details.push(`stderr: ${redact(errorLine).slice(0, 200)}`);
+    return details.length > 0 ? `${base} (${details.join("; ")})` : base;
 }
 function response(observed, result, duration_ms, raw_reward, note) {
     return {

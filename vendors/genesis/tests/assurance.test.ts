@@ -44,7 +44,7 @@ describe("taxonomy", () => {
   });
 
   it("registers a suite per domain", () => {
-    expect(suiteNames()).toEqual(["behavioral", "code", "json", "math"]);
+    expect(suiteNames()).toEqual(["behavioral", "code", "code-py", "json", "math"]);
   });
 });
 
@@ -206,6 +206,30 @@ describe("verifier adapter", () => {
     const call = runner.calls[0];
     expect(call?.command[1]).toContain("task.json");
     expect(call?.command[2]).toContain("completion.txt");
+  });
+
+  it("explains an unparseable verdict with exit code and the failing stderr line", async () => {
+    const runner = new FakeRunner(
+      {},
+      {
+        exit_code: 1,
+        stdout: "",
+        stderr: "node:internal/modules/cjs/loader:1228\nError: Cannot find module '/x/verifier.mjs'\n    at Module._resolveFilename\n\nNode.js v22.0.0\n",
+      },
+    );
+    const probe = codeSuite.probes[0];
+    if (!probe) throw new Error("fixture");
+
+    const response = await new VerifierAdapter(
+      { name: "t", command: ["x", "{task_file}", "{completion_file}"], accept: { kind: "json_reward" }, timeout_ms: 100 },
+      runner,
+    ).judge(probe);
+
+    expect(response.observed).toBe("error");
+    expect(response.note).toContain("not parseable JSON");
+    expect(response.note).toContain("exit 1");
+    expect(response.note).toContain("Cannot find module");
+    expect(response.note).not.toContain("Node.js v22");
   });
 
   it("parses JSON embedded in surrounding output", () => {
