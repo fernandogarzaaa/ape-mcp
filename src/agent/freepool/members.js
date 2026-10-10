@@ -3,7 +3,9 @@
 // the nightly catalog refresh may change model lists and limits, but it can
 // never add a network destination (egress stays reviewable in source and is
 // listed by `ape-mcp doctor`). Cohere is deliberately absent: its trial-key
-// terms forbid personal/production use outside evaluation.
+// terms forbid personal/production use outside evaluation. GitHub Models was
+// dropped when GitHub retired it (2026-07-30): GITHUB_TOKEN /
+// GITHUB_MODELS_TOKEN no longer put anything into the pool.
 //
 // Keys come only from environment variables. Several keys per provider are
 // allowed (comma-separated) and rotated. A member with no key is skipped
@@ -26,7 +28,6 @@ export const PROVIDER_SPECS = {
   mistral: { env: ["MISTRAL_API_KEY"], base: () => "https://api.mistral.ai/v1" },
   openrouter: { env: ["OPENROUTER_API_KEY"], base: () => "https://openrouter.ai/api/v1", modelFilter: (id) => id.endsWith(":free") },
   nvidia: { env: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"], base: () => "https://integrate.api.nvidia.com/v1" },
-  github: { env: ["GITHUB_MODELS_TOKEN", "GITHUB_TOKEN"], base: () => "https://models.github.ai/inference" },
   cloudflare: {
     env: ["CLOUDFLARE_API_TOKEN"],
     requires: ["CLOUDFLARE_ACCOUNT_ID"],
@@ -74,6 +75,8 @@ export function loadCatalog(path = CATALOG_PATH) {
   return cat;
 }
 export function _resetCatalogCache() { catalogCache = null; }
+// Test seam: serve a synthetic catalog from loadCatalog() until reset.
+export function _setCatalogForTest(cat) { catalogCache = cat; }
 
 function localMember(env, opts) {
   const model = opts.localModel || env.APE_FREEPOOL_LOCAL_MODEL || null;

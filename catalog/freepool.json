@@ -78,18 +78,6 @@
         { "id": "deepseek-ai/deepseek-v3.1", "tier": 4, "speed": 1, "context": 131072, "tools": true, "limits": { "rpm": 40, "rpd": null, "tpm": null, "tpd": null } }
       ]
     },
-    "github": {
-      "name": "GitHub Models",
-      "tos": "caution",
-      "tos_note": "Free usage is for prototyping/experimentation and is rate-limited per request size (free tier input caps ~8k tokens on high-tier models). Not for production.",
-      "account_limits": {},
-      "models": [
-        { "id": "openai/gpt-4.1-mini", "tier": 3, "speed": 2, "context": 8000, "tools": true, "limits": { "rpm": 15, "rpd": 150, "tpm": null, "tpd": null } },
-        { "id": "openai/gpt-4.1", "tier": 4, "speed": 2, "context": 8000, "tools": true, "limits": { "rpm": 10, "rpd": 50, "tpm": null, "tpd": null } },
-        { "id": "openai/gpt-4o-mini", "tier": 2, "speed": 2, "context": 8000, "tools": true, "limits": { "rpm": 15, "rpd": 150, "tpm": null, "tpd": null } },
-        { "id": "meta/Llama-3.3-70B-Instruct", "tier": 2, "speed": 2, "context": 8000, "tools": false, "limits": { "rpm": 15, "rpd": 150, "tpm": null, "tpd": null } }
-      ]
-    },
     "cloudflare": {
       "name": "Cloudflare Workers AI",
       "tos": "ok",

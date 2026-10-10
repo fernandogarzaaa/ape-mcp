@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "../src/sqlite.js";
 import { chat, egressHosts, CALLABLE_PROVIDERS, resolveModel, toolSchemas } from "../src/agent/providers.js";
 import { freepoolStatus, freepoolModels, validateResponse, parseFreepoolId } from "../src/agent/freepool/index.js";
-import { poolMembers, freepoolEgressHosts, keysFor, PROVIDER_SPECS, EXCLUDED_PROVIDERS } from "../src/agent/freepool/members.js";
+import { poolMembers, freepoolEgressHosts, keysFor, PROVIDER_SPECS, EXCLUDED_PROVIDERS, loadCatalog, _setCatalogForTest, _resetCatalogCache } from "../src/agent/freepool/members.js";
 import { buildCandidates } from "../src/agent/freepool/select.js";
 import { parseRateHeaders, parseLimitFromBody, parseRetryAfter, parseDuration, classifyFailure } from "../src/agent/freepool/ratelimits.js";
 import * as L from "../src/agent/freepool/ledger.js";
@@ -270,30 +270,94 @@ test("tool calls keep working through the pool (openaiChat path)", async () => {
   assert.equal("tool_choice" in calls[1].body, false);
 });
 
-test("tool-requiring calls route only to tool-capable models", async () => {
-  fresh({ GITHUB_MODELS_TOKEN: "github_pat_tooltest_aaaaaaaaaaaaaaa" });
+// Synthetic catalog: groq with one tool-less model and small (8k) contexts,
+// so tool filtering and the context cap are exercised on a live member.
+function withGroqFixture(fn) {
+  const base = JSON.parse(JSON.stringify(loadCatalog()));
+  const lim = { rpm: 30, rpd: 1000, tpm: null, tpd: null };
+  base.providers.groq = {
+    ...base.providers.groq,
+    models: [
+      { id: "fixture/tools-small", tier: 2, speed: 3, context: 8000, tools: true, limits: lim },
+      { id: "fixture/tools-big", tier: 3, speed: 2, context: 8000, tools: true, limits: lim },
+      { id: "fixture/no-tools", tier: 2, speed: 3, context: 8000, tools: false, limits: lim },
+    ],
+  };
+  _setCatalogForTest(base);
+  const done = () => _resetCatalogCache();
+  try {
+    const r = fn();
+    if (r && typeof r.then === "function") return r.finally(done);
+    done();
+    return r;
+  } catch (e) { done(); throw e; }
+}
+
+test("tool-requiring calls route only to tool-capable models", () => withGroqFixture(async () => {
+  fresh({ GROQ_API_KEY: "gsk_tooltest_aaaaaaaaaaaaaaaaaaaaaa" });
   const members = poolMembers();
   const withTools = buildCandidates(members, { strategy: "auto", needTools: true, estTokens: 10 });
   assert.ok(withTools.candidates.length > 0);
   assert.ok(withTools.candidates.every((c) => c.tools), "every candidate supports tools");
-  assert.ok(withTools.skipped.some((s) => s.id === "github/meta/Llama-3.3-70B-Instruct" && s.reason === "no tool support"));
+  assert.ok(withTools.skipped.some((s) => s.id === "groq/fixture/no-tools" && s.reason === "no tool support"));
   const noTools = buildCandidates(members, { strategy: "auto", needTools: false, estTokens: 10 });
-  assert.ok(noTools.candidates.some((c) => c.model === "meta/Llama-3.3-70B-Instruct"), "tool-less model is fine without tools");
+  assert.ok(noTools.candidates.some((c) => c.model === "fixture/no-tools"), "tool-less model is fine without tools");
   const calls = mockFetch(() => toolChat("finish", { summary: "x" }));
-  await assert.rejects(call("github/meta/Llama", { tools: FINISH_TOOL }), /no candidate served/);
+  await assert.rejects(call("groq/fixture/no", { tools: FINISH_TOOL }), /no candidate served/);
   assert.equal(calls.length, 0, "never sent to a tool-less model");
-  const r = await call("github/", { tools: FINISH_TOOL });
-  assert.ok(r.servedBy.model !== "meta/Llama-3.3-70B-Instruct");
-  assert.equal(calls[0].url, "https://models.github.ai/inference/chat/completions");
-});
+  const r = await call("groq/", { tools: FINISH_TOOL });
+  assert.ok(r.servedBy.model !== "fixture/no-tools");
+  assert.equal(calls[0].url, "https://api.groq.com/openai/v1/chat/completions");
+}));
 
-test("context filter: oversized prompts skip small-context models", () => {
-  fresh({ GITHUB_MODELS_TOKEN: "github_pat_ctx_aaaaaaaaaaaaaaaaaaa" });
+test("context filter: oversized prompts skip small-context models", () => withGroqFixture(() => {
+  fresh({ GROQ_API_KEY: "gsk_ctx_aaaaaaaaaaaaaaaaaaaaaaaaaaa" });
   const { candidates, skipped } = buildCandidates(poolMembers(), { strategy: "auto", estTokens: 9000 });
-  assert.equal(candidates.length, 0, "GitHub Models free tier caps input near 8k");
-  assert.ok(skipped.every((s) => /context 8000 < estimated 9000/.test(s.reason)));
+  assert.equal(candidates.length, 0, "every fixture model caps input at 8k");
+  assert.ok(skipped.length === 3 && skipped.every((s) => /context 8000 < estimated 9000/.test(s.reason)));
+}));
+
+test("GitHub Models is retired: GITHUB_TOKEN alone yields no pool members", async () => {
+  fresh({ GITHUB_TOKEN: "ghp_retired_aaaaaaaaaaaaaaaaaaaaaaaaaa", GITHUB_MODELS_TOKEN: "github_pat_retired_bbbbbbbbbbbbbbbb" });
+  assert.ok(!("github" in PROVIDER_SPECS), "no github member spec");
+  assert.ok(!("github" in loadCatalog().providers), "no github catalog entry");
+  assert.deepEqual(poolMembers(), []);
+  assert.ok(freepoolStatus().members.every((m) => !m.key_present), "no member reports a key from GITHUB_TOKEN");
+  assert.ok(!freepoolEgressHosts().includes("https://models.github.ai"));
+  const calls = mockFetch(() => okChat());
+  await assert.rejects(call("auto"), /no members configured/);
+  assert.equal(calls.length, 0);
 });
 
+test("non-JSON 2xx is an invalid upstream: benched with a cooldown, not 'network'", async () => {
+  const KEY = "gsk_nonjson_aaaaaaaaaaaaaaaaaaaaaaaa";
+  fresh({ GROQ_API_KEY: KEY, CEREBRAS_API_KEY: "csk-nonjson-bbbbbbbbbbbbbbbbbbbb" });
+  // Groq answers like the retired GitHub Models endpoint: 200 text/plain "OK".
+  const calls = mockFetch((u, init, all, c) => (c.host === "api.groq.com"
+    ? { status: 200, body: "OK", headers: { "content-type": "text/plain; charset=utf-8" } }
+    : okChat("from cerebras")));
+  let err = null;
+  await assert.rejects(call("groq/"), (e) => { err = e; return true; });
+  assert.match(err.message, /non-JSON 2xx from api\.groq\.com/);
+  assert.equal(err.decision.attempts[0].outcome, "upstream_invalid");
+  assert.equal(err.decision.attempts[0].status, 200);
+  assert.ok(err.decision.attempts.every((a) => a.outcome !== "network"));
+  assert.equal(calls.length, 1, "the whole host/key is benched after one bad 2xx");
+  const cd = L.cooldown("groq", "any-model", L.keyHash(KEY));
+  assert.equal(cd?.scope, "key");
+  assert.match(cd.reason, /^invalid upstream: non-JSON 2xx from api\.groq\.com/);
+  const mins = (cd.until - Date.now()) / 60000;
+  assert.ok(mins > 14 && mins <= 15.1, `15 min bench (${mins})`);
+  const r = await call("auto");
+  assert.equal(r.servedBy.provider, "cerebras", "pool fails over past the benched host");
+  assert.equal(calls.filter((c) => c.host === "api.groq.com").length, 1, "benched host not retried");
+
+  // JSON content-type but a body that does not parse: same class.
+  fresh({ GROQ_API_KEY: KEY });
+  mockFetch(() => ({ status: 200, body: "<html>gateway</html>" }));
+  await assert.rejects(call("groq/"), (e) => /non-JSON 2xx from api\.groq\.com \(body is not valid JSON\)/.test(e.message) && e.decision.attempts[0].outcome === "upstream_invalid");
+  assert.equal(classifyFailure({ upstreamInvalid: true, status: 200 }), "upstream_invalid");
+});
 test("strategies order candidates differently (fast vs smart)", () => {
   fresh({ GROQ_API_KEY: "gsk_strat_aaaaaaaaaaaaaaaaaaaaaaaa", GEMINI_API_KEY: "AIzaStrategyTestKey000000000000" });
   const members = poolMembers();
@@ -350,10 +414,11 @@ test("egress: every pool host is listed; Cohere is never a member", () => {
   fresh();
   const all = egressHosts();
   for (const h of freepoolEgressHosts()) assert.ok(all.includes(h), `${h} in egressHosts`);
-  for (const h of ["https://api.cerebras.ai", "https://api.mistral.ai", "https://integrate.api.nvidia.com", "https://models.github.ai", "https://api.cloudflare.com", "https://router.huggingface.co", "https://generativelanguage.googleapis.com", "https://openrouter.ai", "https://api.groq.com", "https://opencode.ai"]) {
+  for (const h of ["https://api.cerebras.ai", "https://api.mistral.ai", "https://integrate.api.nvidia.com", "https://api.cloudflare.com", "https://router.huggingface.co", "https://generativelanguage.googleapis.com", "https://openrouter.ai", "https://api.groq.com", "https://opencode.ai"]) {
     assert.ok(all.includes(h), h);
   }
   assert.ok(!all.some((h) => /cohere/.test(h)));
+  assert.ok(!all.includes("https://models.github.ai"), "retired GitHub Models host is not egress");
   assert.ok(!("cohere" in PROVIDER_SPECS));
   assert.ok(EXCLUDED_PROVIDERS.cohere);
   fresh({ COHERE_API_KEY: "co-xxxxxxxxxxxxxxxx" });

@@ -1,12 +1,15 @@
+# Live freepool smoke against real free tiers, using whichever pool keys are
+# stored as repo secrets. With no pool secret configured the script prints
+# "no pool keys configured; skipping" and exits 0, so branch pushes stay green.
+# (GitHub Models was retired 2026-07-30; the Actions token adds nothing.)
 name: freepool-live-smoke
 on:
   workflow_dispatch:
   push:
     branches: [feat/freepool]
-    paths: ['src/agent/freepool/**', 'scripts/freepool-live-smoke.mjs', '.github/workflows/freepool-live.yml']
+    paths: ['src/agent/freepool/**', 'src/agent/providers.js', 'scripts/freepool-live-smoke.mjs', '.github/workflows/freepool-live.yml']
 permissions:
   contents: read
-  models: read
 jobs:
   live:
     runs-on: ubuntu-latest
@@ -17,15 +20,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts || npm install --ignore-scripts
-      - name: Raw GitHub Models probe
+      - name: Live smoke (pool keys from repo secrets; skips cleanly if none)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          curl -sS -i https://models.github.ai/inference/chat/completions -H "Authorization: Bearer $GITHUB_TOKEN" -H "Content-Type: application/json" -H "Accept: application/vnd.github+json" -d '{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"Reply with exactly: freepool ok"}],"max_tokens":20}' | head -c 1500 || true
-      - name: Live smoke (GitHub Models via GITHUB_TOKEN, plus any repo secrets present)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node scripts/freepool-live-smoke.mjs

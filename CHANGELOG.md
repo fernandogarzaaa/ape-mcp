@@ -3,8 +3,14 @@
 ## Unreleased (freepool provider + cost-aware routing)
 
 - New virtual provider `freepool`: stacked free OpenAI-compatible tiers
-  (Groq, Cerebras, Gemini, Mistral, OpenRouter `:free`, NVIDIA NIM, GitHub
-  Models, Cloudflare Workers AI, Hugging Face router, OpenCode Zen, local).
+  (Groq, Cerebras, Gemini, Mistral, OpenRouter `:free`, NVIDIA NIM,
+  Cloudflare Workers AI, Hugging Face router, OpenCode Zen, local).
+  GitHub Models is not a member: GitHub retired it on 2026-07-30, so
+  `GITHUB_TOKEN` / `GITHUB_MODELS_TOKEN` add nothing to the pool.
+- A `2xx` that is not JSON (wrong content-type or unparseable body) is an
+  `upstream_invalid` failure ("non-JSON 2xx from <host>"): the provider key is
+  benched for 15 minutes and the pool fails over, instead of a misleading
+  "network" error.
   Picks the best healthy `(provider, model, key)` under its limits, calls it
   through the existing `openaiChat` path (tool calls unchanged), fails over
   on 429/5xx/timeout with cooldowns and a bounded attempt count + wall budget.
