@@ -57,7 +57,7 @@ jobs:
           src="tui/target/${{ matrix.target }}/release/ape-tui${{ contains(matrix.os, 'windows') && '.exe' || '' }}"
           cp "$src" "$GITHUB_WORKSPACE/${{ matrix.asset }}"
           ls -la "$GITHUB_WORKSPACE/${{ matrix.asset }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -75,7 +75,7 @@ jobs:
           cd dist-tui
           sha256sum ape-tui-* > SHA256SUMS
           cat SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: SHA256SUMS
           path: dist-tui/SHA256SUMS
