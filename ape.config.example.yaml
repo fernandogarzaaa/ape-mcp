@@ -9,3 +9,13 @@ engines:
   skein: { agent_default: ape-mcp }
   adam: { organism_default: default }
 auth: { mode: local-env }  # v1: env/API keys only; OAuth resource-server later
+# Free-tier model pool (docs/freepool.md). Export any of GROQ_API_KEY,
+# CEREBRAS_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY,
+# NVIDIA_API_KEY, CLOUDFLARE_API_TOKEN+CLOUDFLARE_ACCOUNT_ID,
+# HF_TOKEN, OPENCODE_API_KEY (comma-separate several keys). With provider: auto
+# and pool members present, cost routing is already the default; pin the pool
+# explicitly in a profile like this:
+# model:
+#   provider: freepool
+#   id: cost          # auto | fast | smart | cost | groq/llama (pin prefix)
+#   fallback: { provider: anthropic, id: claude-sonnet-4-6 }

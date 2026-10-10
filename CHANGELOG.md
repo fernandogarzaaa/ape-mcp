@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased (freepool provider + cost-aware routing)
+
+- Catalog refreshed live against Groq (2026-10-10): retired `llama-3.1-8b-instant`,
+  `llama-3.3-70b-versatile`, `qwen/qwen3-32b`, `kimi-k2-instruct-0905`; added
+  `qwen/qwen3.8-27b`. Models can be hand-`excluded` (kept, never revived by
+  refresh), e.g. `allam-2-7b`. Tests pin `tests/fixtures/freepool-catalog.json`
+  (`APE_FREEPOOL_CATALOG`) so catalog refreshes never change test outcomes.
+- New virtual provider `freepool`: stacked free OpenAI-compatible tiers
+  (Groq, Cerebras, Gemini, Mistral, OpenRouter `:free`, NVIDIA NIM,
+  Cloudflare Workers AI, Hugging Face router, OpenCode Zen, local).
+  GitHub Models is not a member: GitHub retired it on 2026-07-30, so
+  `GITHUB_TOKEN` / `GITHUB_MODELS_TOKEN` add nothing to the pool.
+- A `2xx` that is not JSON (wrong content-type or unparseable body) is an
+  `upstream_invalid` failure ("non-JSON 2xx from <host>"): the provider key is
+  benched for 15 minutes and the pool fails over, instead of a misleading
+  "network" error.
+  Picks the best healthy `(provider, model, key)` under its limits, calls it
+  through the existing `openaiChat` path (tool calls unchanged), fails over
+  on 429/5xx/timeout with cooldowns and a bounded attempt count + wall budget.
+  Result carries `servedBy`; runs record `served_by` and `receipt.freepool`.
+- Keys from env only (comma-separated for several, rotated); members without
+  a key are never contacted. Cohere excluded (ToS).
+- Rate ledger `.ape/freepool.db`: RPM/TPM sliding minute, RPD/TPD reset at
+  UTC midnight, ceilings learned from `x-ratelimit-*` headers and 429 bodies,
+  Retry-After + escalating cooldown ladder. Keys stored only as SHA-256
+  prefixes; error text redacted.
+- Strategies `auto`, `fast`, `smart`, `cost`, plus `provider/model` pins;
+  tool-requiring calls only reach tool-capable models.
+- Cost routing (`cost`) is the default for `provider: auto` when pool members
+  are available: required tier from `classifyObjective` + signals (tools,
+  context size, prior failures), ladder local → free → paid, one-tier
+  escalation on quality failures, paid escalation capped by `max_usd` and
+  `credential_policy.max_spend_usd`; decisions recorded per turn. Pluggable
+  `registerTierClassifier` hook for a learned router. Opt out with
+  `APE_COST_ROUTING=0` or `policy.routing: false`.
+- Self-maintained catalog `catalog/freepool.json` (+ paid rates extending
+  `estimateCost`), `scripts/refresh-catalog.mjs`, and a nightly
+  `refresh-catalog` workflow that opens a PR (never auto-merges). Egress
+  hosts stay in code, never in the catalog.
+- MCP tools `ape_freepool_status`, `ape_freepool_models`; `doctor` lists pool
+  members and their egress hosts.
+- `openaiChat` now omits `tools`/`tool_choice` when no tools are passed and
+  attaches `status` to upstream errors (Anthropic too).
+- Docs: `docs/freepool.md`. Credits FreeLLMAPI (MIT) for the design ideas.
+
 ## Unreleased (security hardening + integrity pass, toward 1.1.3)
 
 - Ledger redaction at every persistence boundary (step summaries live +

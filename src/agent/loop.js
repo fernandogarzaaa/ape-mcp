@@ -78,6 +78,35 @@ export async function runAgent({ profile, objective, organism_id = "default", on
   const chainHasMock = providerCfgs.some((p) => p.provider === "mock");
 
   const steps = [];
+  // freepool accounting for the receipt: which upstream served each turn and
+  // the cost-routing decisions (bounded so the receipt keeps its shape).
+  const freepoolLog = initial?.freepoolLog ?? { turns: 0, served: {}, escalations: 0, paid_turns: 0, failures: 0, decisions: [] };
+  const noteFreepool = (servedBy, decision) => {
+    if (servedBy) {
+      freepoolLog.turns++;
+      const k = `${servedBy.provider}/${servedBy.model}`;
+      freepoolLog.served[k] = (freepoolLog.served[k] ?? 0) + 1;
+      if (!servedBy.free) freepoolLog.paid_turns++;
+      freepoolLog.last_served_by = k;
+    } else {
+      freepoolLog.failures++;
+    }
+    if (decision) {
+      freepoolLog.escalations += decision.escalations?.length ?? 0;
+      freepoolLog.decisions.push({
+        strategy: decision.strategy,
+        ...(decision.required_tier != null ? { tier: decision.required_tier, final_tier: decision.final_tier, category: decision.category } : {}),
+        chosen: decision.chosen ?? null,
+        est_cost_usd: decision.est_cost_usd ?? null,
+        escalations: (decision.escalations ?? []).map((e) => `${e.from}->${e.to}:${e.reason}`),
+        attempts: decision.attempts?.length ?? 0,
+        ...(decision.paid_reason ? { paid_reason: decision.paid_reason } : {}),
+        ...(decision.budget_blocked ? { budget_blocked: decision.budget_blocked.length } : {}),
+        ...(decision.stop ? { stop: decision.stop } : {}),
+      });
+      if (freepoolLog.decisions.length > 5) freepoolLog.decisions.splice(0, freepoolLog.decisions.length - 5);
+    }
+  };
   // Wall clock is budget continuity, not process lifetime: on resume this is
   // the ORIGINAL run start (restored above), so max_wall_seconds cannot be
   // renewed by restarting the worker.
@@ -297,13 +326,27 @@ export async function runAgent({ profile, objective, organism_id = "default", on
           // W-3: schemas are derived per serving provider, not once from the
           // primary. A cross-family fallback (Anthropic <-> OpenAI shape)
           // must not inherit the wrong wire format precisely when it matters.
-          resp = await chat({ provider: p.provider, id: p.id, key: p.key, baseUrl: p.baseUrl, convKey }, { system, messages, tools: toolSchemas(p, tools), timeoutMs });
+          const callCfg = { provider: p.provider, id: p.id, key: p.key, baseUrl: p.baseUrl, convKey };
+          if (p.provider === "freepool") {
+            // The pool decides who serves; it needs the paid ladder and the
+            // run's remaining budget so paid escalation never overspends.
+            callCfg.pool = p.pool;
+            callCfg.budget = {
+              usdLeft: profile.limits?.max_usd == null ? null : profile.limits.max_usd - budget.usd - budget.reservedUsd,
+              spendCaps,
+              spentByProvider: { ...spendByProvider },
+            };
+          }
+          resp = await chat(callCfg, { system, messages, tools: toolSchemas(p, tools), timeoutMs });
           usedModel = p.id;
           usedProvider = p.provider;
           usedResolution = p.resolution ?? null;
           fallbackUsed = fallbackUsed || pi > 0;
           break;
-        } catch (e) { lastErr = e; }
+        } catch (e) {
+          lastErr = e;
+          if (e?.decision) noteFreepool(null, e.decision);
+        }
       }
       const modelDur = Date.now() - modelT0;
       if (!resp) {
@@ -321,9 +364,14 @@ export async function runAgent({ profile, objective, organism_id = "default", on
 
       budget.steps++;
       const tokens = resp.usage.inputTokens + resp.usage.outputTokens;
-      const cost = resp.mockCost ?? estimateCost(usedModel, resp.usage);
+      // freepool reports its own cost ($0 on free tiers, estimated on a paid
+      // escalation) and spend is attributed to the provider that served, so
+      // per-provider spend caps keep working behind the pool.
+      const cost = resp.mockCost ?? resp.costUsd ?? estimateCost(usedModel, resp.usage);
       budget.spend({ tokens, cost });
-      spendByProvider[usedProvider] = Number(((spendByProvider[usedProvider] ?? 0) + cost).toFixed(6));
+      const spendKey = resp.servedBy?.provider ?? usedProvider;
+      spendByProvider[spendKey] = Number(((spendByProvider[spendKey] ?? 0) + cost).toFixed(6));
+      if (resp.servedBy) noteFreepool(resp.servedBy, resp.freepool);
       record({ step: budget.steps, kind: "model", tool: null, durationMs: modelDur, tokens, cost, resultSummary: (resp.content ?? "").slice(0, 200) });
 
       // W-1: the budget is checked BEFORE tools run, not after. A model turn
@@ -472,7 +520,7 @@ const toolCalls = resp.toolCalls ?? [];
         onCheckpoint?.({
           messages, budget: { steps: budget.steps, tokens: budget.tokens, usd: budget.usd, started: budget.started },
           inheritedRestrictions: inherited,
-          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider, repairLog, delegationLog,
+          destructiveUsed, lastCallKey, repeatCount, compressions, tokensSavedEstimate, usedModel, usedProvider, usedResolution, fallbackUsed, parallelFanouts, driftState, evidences, spendByProvider, repairLog, delegationLog, freepoolLog,
         });
       } catch { /* checkpointing never breaks the loop */ }
     }
@@ -490,6 +538,7 @@ const toolCalls = resp.toolCalls ?? [];
     model_provider: usedProvider,
     model_resolution: usedResolution ?? resolvedModel?.resolution ?? "explicit",
     fallback_used: fallbackUsed,
+    ...(freepoolLog.last_served_by ? { served_by: freepoolLog.last_served_by } : {}),
     routing,
     stop_reason: stopReason,
     outcome,
@@ -519,6 +568,7 @@ const toolCalls = resp.toolCalls ?? [];
       destructive_used: destructiveUsed,
       parallel_fanouts: parallelFanouts,
       fallback_used: fallbackUsed,
+      ...(freepoolLog.turns || freepoolLog.failures ? { freepool: { served_by: freepoolLog.last_served_by ?? null, served: freepoolLog.served, turns: freepoolLog.turns, paid_turns: freepoolLog.paid_turns, escalations: freepoolLog.escalations, failures: freepoolLog.failures, decisions: freepoolLog.decisions.slice(-3) } } : {}),
       drift: driftReceipt(driftState),
       evidence: evidences,
       repairs: repairLog,

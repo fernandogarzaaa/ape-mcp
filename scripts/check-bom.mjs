@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const ROOTS = ["bin", "src", "scripts", "tests", "docs", "deploy", "console", "mods", "profiles", "connectors", "skills", "schemas", ".github"];
+const ROOTS = ["bin", "src", "scripts", "tests", "docs", "deploy", "console", "mods", "profiles", "connectors", "skills", "schemas", "catalog", ".github"];
 const TOP_FILES = ["package.json", ".npmignore", "install.sh", "install.ps1", "ape.config.example.yaml", "mcpServers.json"];
 const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".venv"]);
 

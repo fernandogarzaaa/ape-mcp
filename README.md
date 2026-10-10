@@ -85,9 +85,13 @@ Set a model key first (`APE_ANTHROPIC_API_KEY` or `APE_OPENAI_API_KEY`); `ape_ag
 
 **Why this exists:** (1) host-chained tool calls are brittle and expensive to orchestrate — APE moves the loop server-side where each step is budgeted, traced, and recoverable; (2) agents need memory, audit, and budgets to be trustworthy — per-step ledger, governed mutations with confirmation gates, destructive-deny by default; (3) third-party access without per-service wrappers — declarative connectors (YAML endpoints, host allowlists, env-referenced auth; nothing outside the allowlist is contactable).
 
+### Free model tiers: `freepool` + cost routing
+
+No paid key? Export any free-tier keys you have (`GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, `CLOUDFLARE_API_TOKEN`+`CLOUDFLARE_ACCOUNT_ID`, `HF_TOKEN`, `OPENCODE_API_KEY`; comma-separate several keys) and APE stacks them as one provider, `freepool`: it picks a healthy model under its rate limits, fails over on 429/5xx/timeout with cooldowns, learns real ceilings from headers, and records which upstream served in the receipt. With `provider: auto`, **cost routing** becomes the default when pool members exist: local model → free tiers → your paid provider only when the task needs it and the budget allows. Strategies `auto | fast | smart | cost`; `ape_freepool_status` / `ape_freepool_models` show members and headroom (never keys). Personal use only — see [docs/freepool.md](docs/freepool.md) for setup, per-provider ToS caveats, and the self-maintained catalog.
+
 ## Docs
 
-Install, [Profiles](docs/profiles.md), [Connectors](docs/connectors.md), [Mods](docs/mods.md), [Security](docs/security.md), [Protocol compatibility](docs/protocol-compat.md), [Fixed task set](docs/task-set.md), [Changelog](CHANGELOG.md)
+Install, [Profiles](docs/profiles.md), [Connectors](docs/connectors.md), [Mods](docs/mods.md), [Security](docs/security.md), [Protocol compatibility](docs/protocol-compat.md), [Fixed task set](docs/task-set.md), [freepool](docs/freepool.md), [Changelog](CHANGELOG.md)
 
 ## License
 
