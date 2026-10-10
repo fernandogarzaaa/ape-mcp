@@ -179,6 +179,18 @@ if (args.includes("--http")) {
     if (adamBin()) console.log("ok    adam-mcp binary");
     else console.log(`warn  adam-mcp binary missing for ${process.platform}-${process.arch}: memory tools report unavailable — run \`node scripts/fetch-adam.mjs\` or \`cargo build --release -p adam-mcp\` in vendors/adam`);
   }
+  // freepool: which free-tier members would serve (key presence only, never
+  // the key) — informational, never a FAIL (no members is a valid setup).
+  {
+    const { memberInventory } = await import("../src/agent/freepool/members.js");
+    const inv = memberInventory();
+    const active = inv.filter((m) => m.key_present);
+    console.log(`freepool members (${active.length}/${inv.length} with keys; docs/freepool.md):`);
+    for (const m of inv) {
+      console.log(`     ${m.key_present ? "key " : "--  "} ${m.provider.padEnd(12)} ${m.env.join("|")}${m.requires.length ? " + " + m.requires.join("+") : ""}${m.key_count > 1 ? `  (${m.key_count} keys)` : ""}${m.tos === "caution" ? "  [ToS: caution]" : ""}`);
+    }
+    if (process.env.APE_FREEPOOL_LOCAL_MODEL) console.log(`     key  local        APE_FREEPOOL_LOCAL_MODEL=${process.env.APE_FREEPOOL_LOCAL_MODEL}`);
+  }
   console.log("egress hosts (providers + connectors):");
   for (const h of [...egressHosts(), ...connectorHosts()].sort()) console.log("     " + h);
   if (fail && checks.some(([n, ok]) => !ok && n.endsWith("deps installed"))) {

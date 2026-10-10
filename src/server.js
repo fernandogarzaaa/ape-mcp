@@ -184,6 +184,8 @@ export const TOOL_DEFS = [
   { name: "ape_agent_deprecate", description: "Mark an outcome variant of a family as deprecated with a reason", inputSchema: { type: "object", properties: { family: { type: "string", description: "outcome family id" }, outcome_hash: { type: "string", description: "variant hash to deprecate" }, reason: { type: "string", description: "why this variant is deprecated" } }, required: ["family", "outcome_hash", "reason"] }, annotations: { readOnly: false, idempotent: true } },
   { name: "ape_connector_call", description: "Call a user-defined connector operation (egress-allowlisted). destructive ops need confirm", inputSchema: { type: "object", properties: { connector: { type: "string", description: "connector name" }, operation: { type: "string", description: "operation to invoke" }, input: { type: "object", description: "operation input object" }, confirm: { type: "boolean", description: "explicit confirm for destructive ops" } }, required: ["connector", "operation"] }, annotations: { readOnly: false, idempotent: false } },
   { name: "ape_connector_list", description: "List loaded connectors + their operations and egress hosts", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_freepool_status", description: "freepool (stacked free LLM tiers) status: members, keys present as booleans, per-model headroom, cooldowns, last errors (redacted), egress hosts. Never returns keys", inputSchema: { type: "object", properties: { } }, annotations: { readOnly: true, idempotent: true } },
+  { name: "ape_freepool_models", description: "freepool catalog: models per provider with capability tier, context, tool support, limits, and whether a key is present to use them", inputSchema: { type: "object", properties: { provider: { type: "string", description: "filter to one provider (e.g. groq)" }, tools: { type: "boolean", description: "only tool-capable models when true" } } }, annotations: { readOnly: true, idempotent: true } },
   { name: "ape_ledger", description: "Recent governance audit entries (destructive attempts, genesis verdicts) from ledger.jsonl — newest last, optional kind filter", inputSchema: { type: "object", properties: { limit: { type: "number", description: "max entries (default 50, cap 200)" }, kind: { type: "string", description: "substring filter on entry kind" } } }, annotations: { readOnly: true, idempotent: true } },
 ];
 
@@ -618,6 +620,16 @@ export async function dispatchCall(name, args = {}, ctx = {}) {
       }
       case "ape_connector_list": {
         result = { connectors: connectorList().map((c) => ({ name: c.name, source: c.source, egress_allow: c.egress_allow, operations: c.operations.map((o) => ({ name: o.name, method: o.method, path: o.path, annotations: o.annotations })) })) };
+        break;
+      }
+      case "ape_freepool_status": {
+        const { freepoolStatus } = await import("./agent/freepool/index.js");
+        result = freepoolStatus();
+        break;
+      }
+      case "ape_freepool_models": {
+        const { freepoolModels } = await import("./agent/freepool/index.js");
+        result = freepoolModels({ provider: typeof a.provider === "string" && a.provider ? a.provider : null, tools: a.tools === true ? true : null });
         break;
       }
       case "ape_ledger": {
