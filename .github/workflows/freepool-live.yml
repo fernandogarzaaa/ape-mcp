@@ -1,6 +1,9 @@
 name: freepool-live-smoke
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/freepool]
+    paths: ['src/agent/freepool/**', 'scripts/freepool-live-smoke.mjs', '.github/workflows/freepool-live.yml']
 permissions:
   contents: read
   models: read
