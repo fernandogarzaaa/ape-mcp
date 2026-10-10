@@ -26,7 +26,7 @@ test("bundled catalog: well-formed, every provider known, no URLs, no Cohere", (
       for (const k of ["rpm", "rpd", "tpm", "tpd"]) assert.ok(m.limits[k] === null || m.limits[k] > 0, `${p}/${m.id} ${k}`);
     }
   }
-  for (const p of ["gemini", "nvidia", "github"]) assert.equal(cat.providers[p].tos, "caution", `${p} carries a ToS caution`);
+  for (const p of ["gemini", "nvidia"]) assert.equal(cat.providers[p].tos, "caution", `${p} carries a ToS caution`);
   assert.ok(cat.providers.openrouter.models.every((m) => m.id.endsWith(":free")));
   assert.ok(cat.paid.rates["claude-sonnet-4-6"].tier === 4);
 });
@@ -115,7 +115,6 @@ test("discovery: only keyed providers queried; each provider's listing shape par
     if (u === "https://api.groq.com/openai/v1/models") return j({ data: [{ id: "llama-3.1-8b-instant", context_window: 131072 }] });
     if (u === "https://generativelanguage.googleapis.com/v1beta/openai/models") return j({ data: [{ id: "models/gemini-2.5-flash" }] });
     if (u === "https://openrouter.ai/api/v1/models") return j({ data: [{ id: "x/y:free", context_length: 4096, supported_parameters: ["tools", "temperature"] }] });
-    if (u === "https://models.github.ai/catalog/models") return j([{ id: "openai/gpt-4.1", capabilities: ["tool-calling"], limits: { max_input_tokens: 8000 } }]);
     if (u.startsWith("https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/models/search")) return j({ result: [{ name: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", properties: [{ property_id: "context_window", value: "24000" }, { property_id: "function_calling", value: "true" }] }] });
     if (u === "https://api.mistral.ai/v1/models") return j({ error: "secret-echo gsk_shouldnotappear" }, 401);
     return j({}, 404);
@@ -125,12 +124,11 @@ test("discovery: only keyed providers queried; each provider's listing shape par
     CLOUDFLARE_API_TOKEN: "cf_disc", CLOUDFLARE_ACCOUNT_ID: "0123456789abcdef0123456789abcdef", MISTRAL_API_KEY: "mist_disc",
   };
   const res = await discoverAll({ env, fetchImpl });
-  assert.deepEqual(Object.keys(res).sort(), ["cloudflare", "gemini", "github", "groq", "mistral", "openrouter"], "unkeyed providers not queried");
-  assert.ok(!seen.some((s) => /cerebras|nvidia|huggingface|opencode/.test(s.url)));
+  assert.deepEqual(Object.keys(res).sort(), ["cloudflare", "gemini", "groq", "mistral", "openrouter"], "unkeyed providers (and a bare GITHUB_TOKEN) not queried");
+  assert.ok(!seen.some((s) => /cerebras|nvidia|huggingface|opencode|models\.github\.ai/.test(s.url)));
   assert.deepEqual(res.groq, [{ id: "llama-3.1-8b-instant", context: 131072, tools: undefined }]);
   assert.equal(res.gemini[0].id, "gemini-2.5-flash", "models/ prefix stripped");
   assert.deepEqual(res.openrouter, [{ id: "x/y:free", context: 4096, tools: true }]);
-  assert.deepEqual(res.github, [{ id: "openai/gpt-4.1", context: 8000, tools: true }]);
   assert.deepEqual(res.cloudflare, [{ id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", context: 24000, tools: true }]);
   assert.deepEqual(res.mistral, { error: "discovery failed (401)" });
   assert.ok(!JSON.stringify(res).includes("gsk_shouldnotappear"));

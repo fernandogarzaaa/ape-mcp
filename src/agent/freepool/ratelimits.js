@@ -116,8 +116,11 @@ export function parseLimitFromBody(text) {
 //   not_found    404                    -> model cooldown 24h (gone from host)
 //   bad_request  400/413/422            -> quality-ish: no cooldown, escalate (cost)
 //   invalid      empty / unparseable output (raised by validateResponse)
+//   upstream_invalid  2xx that is not JSON (wrong content-type / bad body):
+//                broken or retired host -> provider-key bench 15 min, fail over
 export function classifyFailure(err) {
   const status = Number(err?.status ?? NaN);
+  if (err?.upstreamInvalid) return "upstream_invalid";
   if (err?.invalid) return "invalid";
   if (status === 429) return "rate_limit";
   if (status === 401 || status === 403) return "auth";

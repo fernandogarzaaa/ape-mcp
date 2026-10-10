@@ -51,7 +51,6 @@ available, APE now uses **cost routing** automatically (see below).
 | Mistral (Experiment plan) | `MISTRAL_API_KEY` | api.mistral.ai | ok (training opt-out) |
 | OpenRouter (`:free` models only) | `OPENROUTER_API_KEY` | openrouter.ai | ok |
 | NVIDIA NIM | `NVIDIA_API_KEY` (or `NVIDIA_NIM_API_KEY`) | integrate.api.nvidia.com | **caution** |
-| GitHub Models | `GITHUB_MODELS_TOKEN` (or `GITHUB_TOKEN`) | models.github.ai | **caution** |
 | Cloudflare Workers AI | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | api.cloudflare.com | ok |
 | Hugging Face router | `HF_TOKEN` (or `HUGGINGFACE_API_KEY`) | router.huggingface.co | ok |
 | OpenCode Zen (free models) | `OPENCODE_API_KEY` | opencode.ai | ok |
@@ -68,9 +67,14 @@ available, APE now uses **cost routing** automatically (see below).
   joins automatically.
 - **Excluded: Cohere.** Its trial-key terms do not allow this kind of
   personal/production use, so it is not a member even if `COHERE_API_KEY` is set.
-- `GITHUB_TOKEN` counts as a GitHub Models key. If you export a general
-  `GITHUB_TOKEN` for other tools, GitHub Models joins the pool; use a
-  dedicated `GITHUB_MODELS_TOKEN` if you want that explicit.
+- **GitHub Models: dropped.** GitHub retired GitHub Models on 2026-07-30
+  ([changelog](https://github.blog/changelog/2026-07-30-github-models-is-now-retired/));
+  its old endpoint now answers `200 text/plain "OK"`. It is no longer a
+  member, and `GITHUB_TOKEN` / `GITHUB_MODELS_TOKEN` put nothing in the pool.
+- **Broken upstreams:** a `2xx` whose content-type is not JSON, or whose body
+  does not parse, is classed `upstream_invalid` ("non-JSON 2xx from <host>"),
+  not a network error; that provider key is benched for 15 minutes and the
+  pool fails over.
 
 ### ToS caveats per provider
 
@@ -79,9 +83,6 @@ available, APE now uses **cost routing** automatically (see below).
   offered in some regions (e.g. EEA/UK/CH restrictions). Don't send sensitive data.
 - **NVIDIA NIM (caution):** build.nvidia.com access is a developer trial for
   prototyping and evaluation, not production; ~40 RPM account-wide.
-- **GitHub Models (caution):** free use is for prototyping/experimentation,
-  rate-limited by model tier and request size (high-tier models cap input
-  near 8k tokens on the free tier). Not for production workloads.
 - **Mistral:** the free Experiment plan may use your requests for training
   unless you opt out in the console.
 - **OpenRouter:** only `:free` ids are pooled; ~50 requests/day account-wide
@@ -193,7 +194,7 @@ in `src/agent/freepool/members.js`, so a catalog change can never add a
 network destination.
 
 `scripts/refresh-catalog.mjs` queries each provider's own `/models` listing
-(GitHub Models catalog, Cloudflare model search) with whatever keys are
+(Cloudflare uses its model search) with whatever keys are
 present and merges: curated fields win; new ids are added with a name-based
 tier guess, `tools: false` and unknown limits; ids no longer listed are
 marked `retired` (never deleted); OpenRouter keeps only `:free`; empty or
@@ -201,9 +202,7 @@ failed listings change nothing.
 
 `.github/workflows/refresh-catalog.yml` runs it nightly (and on demand) with
 repo secrets and opens/updates a single PR (`bot/refresh-freepool-catalog`).
-It never auto-merges. Setup: add any subset of the provider secrets (GitHub
-Models needs a PAT stored as `GH_MODELS_TOKEN`; Actions secrets cannot start
-with `GITHUB_`) and enable *Settings → Actions → Allow GitHub Actions to
+It never auto-merges. Setup: add any subset of the provider secrets and enable *Settings → Actions → Allow GitHub Actions to
 create pull requests*. PRs opened with the workflow token do not trigger CI
 on their own; re-run CI from the PR or push an empty commit before merging.
 

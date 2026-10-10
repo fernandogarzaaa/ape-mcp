@@ -113,14 +113,6 @@ export async function discoverProvider(provider, { env = process.env, fetchImpl 
   if (!spec || !keys.length) return null; // no key: not queried
   const key = keys[0];
   const auth = { authorization: `Bearer ${key}` };
-  if (provider === "github") {
-    const j = await getJson(fetchImpl, "https://models.github.ai/catalog/models", { ...auth, accept: "application/vnd.github+json" });
-    return (Array.isArray(j) ? j : []).map((m) => ({
-      id: m.id,
-      context: m.limits?.max_input_tokens ?? null,
-      tools: Array.isArray(m.capabilities) ? m.capabilities.includes("tool-calling") : undefined,
-    }));
-  }
   if (provider === "cloudflare") {
     const acct = String(env.CLOUDFLARE_ACCOUNT_ID ?? "").trim();
     if (!/^[a-f0-9]{32}$/i.test(acct)) return null;

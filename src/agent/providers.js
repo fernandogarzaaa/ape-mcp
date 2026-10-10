@@ -336,6 +336,28 @@ async function refreshAnthropicOAuth(refreshToken) {
 }
 
 // --- OpenAI-compatible ---
+// A 2xx that is not JSON (wrong content-type, or a body that does not parse)
+// is a broken/retired upstream, not a network fault: e.g. the retired GitHub
+// Models endpoint answers 200 text/plain "OK". Flag it so freepool benches
+// the host instead of reporting "network".
+export async function readJson2xx(res, base) {
+  let host = "upstream";
+  try { host = new URL(res.url || base).host || host; } catch { /* keep */ }
+  const ct = String(res.headers?.get?.("content-type") ?? "").toLowerCase();
+  const text = await res.text();
+  const fail = (why) => {
+    const e = new Error(`non-JSON 2xx from ${host} (${why})`);
+    e.status = res.status;
+    e.upstreamInvalid = true;
+    return e;
+  };
+  if (ct && !ct.includes("json")) throw fail(`content-type ${ct.split(";")[0].trim().slice(0, 60)}`);
+  let data;
+  try { data = JSON.parse(text); } catch { throw fail("body is not valid JSON"); }
+  if (!data || typeof data !== "object") throw fail("body is not a JSON object");
+  return data;
+}
+
 async function openaiChat(cfg, system, messages, tools, timeoutMs) {
   const base = cfg.baseUrl ?? baseUrlFor(cfg.provider);
   const key = cfg.key ?? (cfg.provider === "local" ? null : process.env.OPENAI_API_KEY);
@@ -384,7 +406,7 @@ async function openaiChat(cfg, system, messages, tools, timeoutMs) {
     err.status = res.status;
     throw err;
   }
-  const data = await res.json();
+  const data = await readJson2xx(res, base);
   const msg = data.choices?.[0]?.message ?? {};
   const toolCalls = (msg.tool_calls ?? []).map((tc) => {
     let args = {};

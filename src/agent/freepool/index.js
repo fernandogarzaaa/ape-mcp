@@ -19,6 +19,7 @@ import { redactSecrets } from "../../trace.js";
 export { STRATEGIES, poolMembers, freepoolEgressHosts };
 export const QUALITY_FAILURES = new Set(["bad_request", "invalid"]);
 const ATTEMPT_CAP_MS = 60000;
+export const UPSTREAM_INVALID_COOLDOWN_MS = 15 * 60000;
 const OUT_TOKENS_EST = 1024;
 const NON_PAID = new Set(["mock", "local", "freepool"]);
 
@@ -117,6 +118,11 @@ function applyFailure(c, cls, err, headers) {
     }
     case "server": case "timeout": case "network":
       L.setCooldown(c.provider, c.model, c.keyHash, t + 30000, cls);
+      break;
+    case "upstream_invalid":
+      // The host answered 2xx with something that is not JSON: every model
+      // behind this key/host is suspect, so bench them all for a while.
+      L.setCooldown(c.provider, "*", c.keyHash, t + UPSTREAM_INVALID_COOLDOWN_MS, `invalid upstream: ${msg}`.slice(0, 200));
       break;
     case "auth":
       L.setCooldown(c.provider, "*", c.keyHash, t + 3600000, "auth rejected");
