@@ -8,6 +8,7 @@ import { detectActiveProvider, credentialFor, detectProviders, localProbe } from
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { dataDir } from "../trace.js";
+import { freepoolEgressHosts, poolMembers, loadCatalog } from "./freepool/members.js";
 
 // User-pinned provider/model, written by the TUI provider screen into the
 // same config.json the TUI uses for the default profile ({provider, model}
@@ -69,7 +70,9 @@ const OPENAI_COMPAT = new Set(["openai", "openrouter", "groq", "nebius", "openco
 
 // Providers APE can actually invoke. Anything detected but not in this set (e.g.
 // bedrock, which needs AWS SigV4) is honest-skipped, never silently attempted.
-export const CALLABLE_PROVIDERS = new Set(["anthropic", ...OPENAI_COMPAT, "mock"]);
+// "freepool" is a virtual provider: stacked free tiers behind one name
+// (src/agent/freepool/, docs/freepool.md).
+export const CALLABLE_PROVIDERS = new Set(["anthropic", ...OPENAI_COMPAT, "mock", "freepool"]);
 
 const DEFAULT_MODELS = {
   anthropic: "claude-sonnet-4-6",
@@ -79,14 +82,30 @@ const DEFAULT_MODELS = {
   nebius: "deepseek-ai/DeepSeek-V4-Flash-0731",
   opencode: "muse-spark-1.3-contributor-free",
   local: null,
+  freepool: "auto",
 };
 
 export function defaultModelFor(provider) {
   return DEFAULT_MODELS[provider] ?? null;
 }
 
+// Rates: built-in table first, then the catalog's paid table (exact id or
+// longest prefix), then the conservative default. Free-tier pool calls never
+// reach here with a real model id — freepool reports costUsd 0 for them.
+export function costRateFor(modelId) {
+  if (COST_PER_MTok[modelId]) return COST_PER_MTok[modelId];
+  try {
+    const rates = loadCatalog()?.paid?.rates ?? {};
+    if (rates[modelId]) return rates[modelId];
+    let best = null;
+    for (const k of Object.keys(rates)) if (String(modelId).startsWith(k) && (!best || k.length > best.length)) best = k;
+    if (best) return rates[best];
+  } catch { /* catalog optional */ }
+  return DEFAULT_RATE;
+}
+
 export function estimateCost(modelId, usage) {
-  const r = COST_PER_MTok[modelId] ?? DEFAULT_RATE;
+  const r = costRateFor(modelId);
   return (usage.inputTokens / 1e6) * r.in + (usage.outputTokens / 1e6) * r.out;
 }
 
@@ -95,6 +114,8 @@ export function egressHosts() {
   for (const p of ["openai", "openrouter", "groq", "nebius", "opencode", "google", "local"]) {
     try { hosts.push(new URL(baseUrlFor(p)).origin); } catch { /* skip */ }
   }
+  // freepool members (fixed in code, never from the catalog).
+  hosts.push(...freepoolEgressHosts());
   return [...new Set(hosts)];
 }
 
@@ -126,6 +147,19 @@ export async function resolveModel(modelCfg, overrides = {}) {
   }
 
   // 2. Explicit provider: resolve its credential (env → host stores).
+  if (requestedProvider === "freepool") {
+    const members = poolMembers();
+    if (!members.length) {
+      return {
+        error: "provider_unavailable",
+        provider: "freepool",
+        detected: await detectProviders(),
+        hint: "freepool has no members: set at least one free-tier key (e.g. GROQ_API_KEY, CEREBRAS_API_KEY, GEMINI_API_KEY) — see docs/freepool.md",
+        layers,
+      };
+    }
+    return { provider: "freepool", id: requestedModel || "auto", key: null, resolution: "explicit", source: `freepool (${members.map((m) => m.provider).join(",")})`, layers };
+  }
   if (requestedProvider !== "auto") {
     if (requestedProvider === "local") {
       let id = requestedModel || null;
@@ -273,7 +307,11 @@ async function anthropicChat(cfg, system, messages, tools, timeoutMs) {
   } finally {
     if (timer) clearTimeout(timer);
   }
-  if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) {
+    const err = new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
+  }
   const data = await res.json();
   const toolCalls = (data.content ?? []).filter((b) => b.type === "tool_use").map((b) => ({ id: b.id, name: b.name, args: b.input ?? {} }));
   const text = (data.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
@@ -315,8 +353,8 @@ async function openaiChat(cfg, system, messages, tools, timeoutMs) {
   const body = {
     model: cfg.id,
     messages: [{ role: "system", content: system }, ...wire],
-    tools,
-    tool_choice: "auto",
+    // Some hosts reject tool_choice without tools: send both or neither.
+    ...(tools?.length ? { tools, tool_choice: "auto" } : {}),
   };
   const res = await (async () => {
     if (timeoutMs == null) {
@@ -339,7 +377,13 @@ async function openaiChat(cfg, system, messages, tools, timeoutMs) {
       clearTimeout(timer);
     }
   })();
-  if (!res.ok) throw new Error(`${cfg.provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  // Observer hook (freepool learns rate-limit headers); never breaks a call.
+  if (typeof cfg.onResponse === "function") { try { cfg.onResponse(res); } catch { /* observer only */ } }
+  if (!res.ok) {
+    const err = new Error(`${cfg.provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
+  }
   const data = await res.json();
   const msg = data.choices?.[0]?.message ?? {};
   const toolCalls = (msg.tool_calls ?? []).map((tc) => {
@@ -421,6 +465,10 @@ export async function chat(cfg, { system, messages, tools, timeoutMs = null }) {
     case "google":
     case "local":
       return await openaiChat(cfg, system, messages, tools, timeoutMs);
+    case "freepool": {
+      const { freepoolChat } = await import("./freepool/index.js");
+      return await freepoolChat(cfg, { system, messages, tools, timeoutMs }, { openaiChat, anthropicChat, estimateCost });
+    }
     default:
       throw new Error(`unknown provider: ${cfg.provider}`);
   }
