@@ -17,6 +17,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - name: Raw GitHub Models probe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sS -i https://models.github.ai/inference/chat/completions -H "Authorization: Bearer $GITHUB_TOKEN" -H "Content-Type: application/json" -H "Accept: application/vnd.github+json" -d '{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"Reply with exactly: freepool ok"}],"max_tokens":20}' | head -c 1500 || true
       - name: Live smoke (GitHub Models via GITHUB_TOKEN, plus any repo secrets present)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
