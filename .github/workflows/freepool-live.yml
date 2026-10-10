@@ -1,0 +1,23 @@
+name: freepool-live-smoke
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  models: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - name: Live smoke (GitHub Models via GITHUB_TOKEN, plus any repo secrets present)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: node scripts/freepool-live-smoke.mjs
