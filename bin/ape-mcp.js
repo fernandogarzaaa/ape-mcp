@@ -157,6 +157,9 @@ if (args.includes("--http")) {
     ["node:sqlite", (await import("../src/sqlite.js")).DatabaseSync ? true : false],
     ["vendors/genesis", existsSync(join(root, "vendors/genesis/src/cli"))],
     ["vendors/eve", existsSync(join(root, "vendors/eve/src/cli"))],
+    // Deps marker: written by npm only after a COMPLETE install (see postinstall).
+    ["vendors/genesis deps installed", existsSync(join(root, "vendors/genesis/node_modules/.package-lock.json"))],
+    ["vendors/eve deps installed", existsSync(join(root, "vendors/eve/node_modules/.package-lock.json"))],
     ["vendors/adam", existsSync(join(root, "vendors/adam/crates"))],
     ["vendors/skein", existsSync(join(root, "vendors/skein/src/skein/cli.py"))],
     ["console.html", existsSync(join(root, "console/console.html"))],
@@ -167,8 +170,20 @@ if (args.includes("--http")) {
   ];
   let fail = 0;
   for (const [n, ok] of checks) { console.log((ok ? "ok  " : "FAIL") + "  " + n); if (!ok) fail++; }
+  // Non-fatal: without the adam-mcp binary, memory/genome/beliefs tools
+  // (ape_remember, ape_recall, ape_genome, memory.* in profiles) return
+  // _adam:"unavailable". Say so here instead of letting "ok vendors/adam"
+  // imply they work.
+  {
+    const { adamBin } = await import("../src/dispatch.js");
+    if (adamBin()) console.log("ok    adam-mcp binary");
+    else console.log(`warn  adam-mcp binary missing for ${process.platform}-${process.arch}: memory tools report unavailable — run \`node scripts/fetch-adam.mjs\` or \`cargo build --release -p adam-mcp\` in vendors/adam`);
+  }
   console.log("egress hosts (providers + connectors):");
   for (const h of [...egressHosts(), ...connectorHosts()].sort()) console.log("     " + h);
+  if (fail && checks.some(([n, ok]) => !ok && n.endsWith("deps installed"))) {
+    console.log(`fix: npm --prefix "${join(root, "vendors/eve")}" install --omit=dev --ignore-scripts  (same for vendors/genesis)`);
+  }
   process.exit(fail ? 1 : 0);
 } else if (cmd === "mods") {
   console.log("mods: mods/policy-gates (enabled) — see ape.config.yaml; toggle via mods/<name>/mod.json {enabled}");

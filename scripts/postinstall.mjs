@@ -8,18 +8,26 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Completeness marker: npm writes node_modules/.package-lock.json only at the
+// END of a successful install. Checking bare node_modules/ treated a partial,
+// interrupted install (seen under load: EVE missing `yaml`, so every
+// ape_validate_experience call crashed with ERR_MODULE_NOT_FOUND) as done
+// forever. Retry once; a transient registry/network hiccup is the usual cause.
 for (const v of ["vendors/genesis", "vendors/eve"]) {
   const dir = join(root, v);
   if (!existsSync(join(dir, "package.json"))) continue;
-  if (existsSync(join(dir, "node_modules"))) continue;
-  console.log(`postinstall: installing ${v} dependencies…`);
-  try {
-    execFileSync("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
-      cwd: dir, stdio: "inherit", shell: process.platform === "win32",
-    });
-  } catch {
-    console.error(`postinstall: ${v} install failed; run manually: npm --prefix ${v} install --ignore-scripts`);
+  if (existsSync(join(dir, "node_modules", ".package-lock.json"))) continue;
+  let ok = false;
+  for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
+    console.log(`postinstall: installing ${v} dependencies${attempt > 1 ? " (retry)" : ""}…`);
+    try {
+      execFileSync("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
+        cwd: dir, stdio: "inherit", shell: process.platform === "win32",
+      });
+      ok = existsSync(join(dir, "node_modules", ".package-lock.json"));
+    } catch { /* retry once, then report */ }
   }
+  if (!ok) console.error(`postinstall: ${v} install failed; run manually: npm --prefix "${dir}" install --omit=dev --ignore-scripts  (then: ape-mcp doctor)`);
 }
 
 // TUI prebuilt: download the matching release asset (best-effort). Prebuilts
@@ -30,7 +38,7 @@ for (const v of ["vendors/genesis", "vendors/eve"]) {
   const skip = process.env.APE_SKIP_TUI_DOWNLOAD === "1";
   const plat = process.platform === "win32" ? "win-x64"
     : process.platform === "darwin" ? (process.arch === "arm64" ? "darwin-arm64" : "darwin-x64")
-    : "linux-x64";
+    : process.arch === "x64" ? "linux-x64" : `linux-${process.arch}`; // never fetch an x64 binary onto arm64
   const isWindows = process.platform === "win32";
   const exe = isWindows ? "ape-tui.exe" : "ape-tui";
   const dest = join(root, "vendors", "ape-tui", plat, exe);
