@@ -7,10 +7,11 @@
 import type { ProbeSuite } from "../probe.js";
 import { behavioralSuite } from "./behavioral.js";
 import { codeSuite } from "./code.js";
+import { codePySuite } from "./code-py.js";
 import { jsonSuite } from "./json.js";
 import { mathSuite } from "./math.js";
 export declare const SUITES: Readonly<Record<string, ProbeSuite>>;
 export declare function suiteNames(): string[];
 export declare function getSuite(name: string): ProbeSuite | undefined;
-export { codeSuite, jsonSuite, mathSuite, behavioralSuite };
+export { codeSuite, codePySuite, jsonSuite, mathSuite, behavioralSuite };
 //# sourceMappingURL=index.d.ts.map
