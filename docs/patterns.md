@@ -34,8 +34,8 @@ Strategy separated from tactics; the plan is inspectable before execution.
    one node per workstream with a `completion` done-criterion) and finishes
    with the graph ID. Cheap budget by design.
 2. Review the graph (`graph`/`status`) — edit or reject before any action runs.
-3. Executors `claim` nodes, do the work, `release` them with evidence-bearing
-   finishes; a supervisor (pattern 1) fans out one `delegate` per node and
+3. Executors `claim` nodes, do the work, report evidence-bearing receipts upward,
+   then `release` them; a supervisor (pattern 1) fans out one `delegate` per node and
    synthesizes under the grounding gate.
 
 The graph is the transaction record: which node, who claimed it, what the
