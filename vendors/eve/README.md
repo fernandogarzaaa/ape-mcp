@@ -126,6 +126,10 @@ Three principles make it a simulation rather than automation:
 
 ## Quick start
 
+> Note: the published npm package is currently at 0.3.1 while this repo is at 0.5.1.
+> For the latest build, install from git instead:
+> `npm install github:fernandogarzaaa/experience-validation-engine`
+
 ```bash
 npm install experience-validation-engine
 
@@ -169,6 +173,14 @@ await writeReports(result, ".eve-output");
 Sessions are **deterministic**: (app state, persona, seed) fully determine
 the run — so a changed path after a deploy is a real behavioral change in
 your product, and different seeds sample different plausible humans.
+
+**Declaring done:** pass `--success` (CLI) or `goalSuccessSignals` (API) with
+words that appear only once the task is complete, e.g.
+`--goal "sign up for an account" --success "welcome"`. Without explicit
+signals the operator judges completion on its own, and success states that
+appear via in-place DOM replacement (no navigation) can go unrecognized —
+the operator may keep going and eventually give up. When the outcome matters,
+name the success text.
 
 ## Beyond one operator (Phase 2)
 
