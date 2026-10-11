@@ -83,20 +83,39 @@ test("extension: agent/run + getRun + cancel lifecycle over stdio", async () => 
 });
 
 test("extension: agent/cancel halts a running run preserving partial ledger", async () => {
-  const script = Array.from({ length: 50 }, () => ({ tool: "memory.recall", args: { query: "x" } }));
-  const { out } = await stdioCall([
-    { id: 1, method: "agent/run", params: { profile: "repo-triage", objective: "cancel me", _mockScript: script } },
-  ]);
-  const runId = parseLines(out).find((m) => m.id === 1).result.run_id;
-  await new Promise((r) => setTimeout(r, 400));
-  const { out: c } = await stdioCall([{ id: 2, method: "agent/cancel", params: { run_id: runId } }]);
-  const cresp = parseLines(c).find((m) => m.id === 2).result;
-  assert.ok(["stopped", "done", "failed"].includes(cresp.status), "cancel resolved: " + cresp.status);
-  if (cresp.status === "stopped") {
-    const { out: g } = await stdioCall([{ id: 3, method: "agent/getRun", params: { run_id: runId } }]);
-    const run = parseLines(g).find((m) => m.id === 3).result;
+  // Deterministic cancel: stretch the mock run (APE_MOCK_STEP_DELAY_MS floors
+  // each mock step) so the worker is genuinely mid-run at cancel time, and
+  // cancel in this process. The worker handle lives in the process that
+  // spawned it: a fresh server process has no handle and honestly refuses to
+  // signal the bare PID (M7), so cancelling across stdioCall batches is
+  // timing-dependent and cannot test this path.
+  const prevDelay = process.env.APE_MOCK_STEP_DELAY_MS;
+  process.env.APE_MOCK_STEP_DELAY_MS = "40";
+  try {
+    const script = Array.from({ length: 50 }, () => ({ tool: "memory.recall", args: { query: "x" } }));
+    const r1 = await dispatchCall("ape_agent_run", { profile: "repo-triage", objective: "cancel me", _mockScript: script });
+    const runId = r1.structuredContent.result.run_id;
+    assert.ok(runId, "run_id returned");
+    // Wait for the first recorded step: proves the worker is mid-run, not finished.
+    let steps = 0;
+    for (let i = 0; i < 100 && steps === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const g = await dispatchCall("ape_agent_status", { run_id: runId });
+      assert.equal(g.structuredContent.result.status, "running");
+      steps = (g.structuredContent.result.steps ?? []).length;
+    }
+    assert.ok(steps > 0, "worker recorded steps before cancel");
+    const rc = await dispatchCall("ape_agent_cancel", { run_id: runId });
+    assert.equal(rc.structuredContent.result.status, "stopped");
+    const g2 = await dispatchCall("ape_agent_status", { run_id: runId });
+    const run = g2.structuredContent.result;
     assert.equal(run.status, "stopped");
     assert.equal(run.stop_reason, "cancelled");
+    assert.ok(run.steps.length >= 2, "partial ledger preserved (steps + cancel marker)");
+    assert.ok(run.steps.some((s) => s.kind === "cancel"), "cancel interruption marker recorded");
+  } finally {
+    if (prevDelay === undefined) delete process.env.APE_MOCK_STEP_DELAY_MS;
+    else process.env.APE_MOCK_STEP_DELAY_MS = prevDelay;
   }
 });
 

@@ -33,10 +33,22 @@ jobs:
           src="target/${{ matrix.target }}/release/adam-mcp${{ contains(matrix.os, 'windows') && '.exe' || '' }}"
           cp "$src" "$GITHUB_WORKSPACE/${{ matrix.asset }}"
           ls -la "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+      - name: Publish SHA256 sidecar (scripts/fetch-adam.mjs verifies <asset> against <asset>.sha256)
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          fi
+          cat "${{ matrix.asset }}.sha256"
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
   release:
     needs: [build]
     if: startsWith(github.ref, 'refs/tags/v')
