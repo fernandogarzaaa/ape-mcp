@@ -8,7 +8,18 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const TAG = process.env.APE_ADAM_TAG || "v1.0.0";
+// Default to the release matching this checkout's package version (the stale
+// "v1.0.0" default pointed at a release with no checksum sidecars, so the
+// fail-closed fetch could never succeed on Linux/macOS). APE_ADAM_TAG still
+// overrides for pins and pre-releases.
+function defaultTag() {
+  try {
+    const v = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+    if (typeof v === "string" && /^\d+\.\d+\.\d+/.test(v)) return `v${v}`;
+  } catch { /* fall through to legacy default */ }
+  return "v1.0.0";
+}
+const TAG = process.env.APE_ADAM_TAG || defaultTag();
 
 export function assetFor(platform = process.platform, arch = process.arch) {
   if (platform === "win32") return "adam-mcp-win-x64.exe";

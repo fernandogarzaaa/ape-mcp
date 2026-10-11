@@ -35,6 +35,23 @@ npm install
 node bin/ape-mcp.js doctor
 ```
 
+## ADAM memory on Linux/macOS
+
+The ADAM memory tools (`ape_remember`, `ape_recall`, `ape_beliefs`) need a
+platform binary. It ships prebuilt inside the repo for Windows only; on
+Linux/macOS run once after install:
+
+```bash
+node scripts/fetch-adam.mjs   # downloads the release binary, checksum-verified
+```
+
+The fetch targets the release matching your `package.json` version and
+refuses to install without a checksum proof (fail-closed). If it reports no
+checksum available, build from the vendored source instead:
+`cargo build --release -p adam-mcp` inside `vendors/adam`. `ape-mcp doctor`
+reports which case you are in. Until one of those succeeds, the memory tools
+answer `unavailable` with the same hint instead of failing silently.
+
 ## Add to a host
 
 Point the host at the stdio server:
