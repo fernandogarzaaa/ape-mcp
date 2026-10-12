@@ -346,3 +346,88 @@ test("agent run: a failed turn still charges billed paid attempts to the run", a
   assert.ok(res.total_cost > 0, "billed paid attempt reaches total_cost");
   assert.equal(res.receipt.spend_by_provider.anthropic, res.total_cost);
 });
+
+test("billed-but-rejected spend counts against per-provider caps for later paid picks", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed5_aaaaaaaaaaaaaaaaaa" });
+  const PAID2 = [
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  const big = { status: 200, body: { content: [{ type: "text", text: "" }], stop_reason: "end_turn", usage: { input_tokens: 100000, output_tokens: 1 } } };
+  const calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? big : okChat("")));
+  // Cap leaves room for one estimated call (~$0.02) but not after a $0.30 billed rejection.
+  const err = await costCall({ content: REASONING, paid: PAID2, budget: { usdLeft: null, spendCaps: { anthropic: 0.25 }, spentByProvider: { anthropic: 0.01, openai: 5 } } }).then(() => null, (e) => e);
+  assert.ok(err);
+  assert.equal(calls.filter((c) => c.host === "api.anthropic.com").length, 1, "second anthropic pick blocked by the per-provider cap");
+  assert.ok(err.decision.budget_blocked?.length >= 1);
+  assert.ok(err.costUsd > 0.25);
+});
+
+test("no billed paid attempt -> no costUsd on the error", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed6_aaaaaaaaaaaaaaaaaa" });
+  mockFetch(() => ({ status: 503, body: {} }));
+  const err = await costCall({ content: TRIVIAL, paid: [] }).then(() => null, (e) => e);
+  assert.ok(err);
+  assert.equal(err.costUsd, undefined);
+  assert.equal(err.billedByProvider, undefined);
+  fresh({ GROQ_API_KEY: "gsk_cost_billed6_aaaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? { status: 500, body: {} } : { status: 503, body: {} }));
+  const err2 = await costCall({ content: REASONING }).then(() => null, (e) => e);
+  assert.equal(err2.costUsd, undefined, "a paid HTTP error was not billed");
+});
+
+test("agent run: billed rejection by one provider and success on another are attributed separately", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed7_aaaaaaaaaaaaaaaaaa" });
+  const MIX = [
+    { provider: "openai", id: "gpt-4.1", key: "sk-test-openai-paidkey-0000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  const calls = mockFetch((u, init, all, c) => {
+    if (c.host === "api.anthropic.com") return { status: 200, body: { content: [{ type: "tool_use", id: "tu1", name: "finish", input: { summary: "served" } }], stop_reason: "tool_use", usage: { input_tokens: 200, output_tokens: 40 } } };
+    if (c.host === "api.openai.com") return okChat("", {}, { prompt_tokens: 1000, completion_tokens: 50 });
+    return { status: 503, body: {} };
+  });
+  const res = await runAgent({
+    profile: {
+      name: "cost-billed-mix",
+      model: { provider: "auto", id: "auto" },
+      system: "Be careful.",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 5, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer", "budget_exhausted"],
+    },
+    objective: REASONING,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: MIX } }],
+  });
+  assert.equal(res.outcome, "served");
+  assert.ok(calls.some((c) => c.host === "api.openai.com"), "openai tried first (cheaper)");
+  const billed = Number(estimateCost("gpt-4.1", { inputTokens: 1000, outputTokens: 50 }).toFixed(6));
+  const served = Number(estimateCost("claude-sonnet-4-6", { inputTokens: 200, outputTokens: 40 }).toFixed(6));
+  assert.equal(res.receipt.spend_by_provider.openai, billed, "billed rejection attributed to openai");
+  assert.equal(res.receipt.spend_by_provider.anthropic, served, "served call attributed to anthropic");
+  assert.ok(Math.abs(res.total_cost - (billed + served)) < 1e-6, "run total includes both");
+});
+
+test("agent run: a failed turn with nothing billed costs nothing", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed8_aaaaaaaaaaaaaaaaaa" });
+  mockFetch(() => ({ status: 503, body: {} }));
+  const res = await runAgent({
+    profile: {
+      name: "cost-nobill-fail",
+      model: { provider: "auto", id: "auto" },
+      system: "s",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 3, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer"],
+    },
+    objective: TRIVIAL,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: [] } }],
+  });
+  assert.equal(res.stop_reason, "model_error");
+  assert.equal(res.total_cost, 0);
+  assert.deepEqual(res.receipt.spend_by_provider ?? {}, {});
+});

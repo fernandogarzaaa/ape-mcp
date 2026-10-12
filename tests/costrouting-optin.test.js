@@ -56,3 +56,11 @@ test("defaults: no args reads process.env and treats missing profile as auto", (
     if (prev === undefined) delete process.env.APE_COST_ROUTING; else process.env.APE_COST_ROUTING = prev;
   }
 });
+
+test("tolerates a missing profile / policy / model", () => {
+  const on = { APE_COST_ROUTING: "1" };
+  assert.equal(costRoutingEnabled({ env: on }), true, "no profile = provider auto, no policy");
+  assert.equal(costRoutingEnabled({ profile: {}, env: on }), true);
+  assert.equal(costRoutingEnabled({ profile: { model: {} }, env: {} }), false);
+  assert.equal(costRoutingEnabled({ profile: { policy: {} }, env: on }), true);
+});
