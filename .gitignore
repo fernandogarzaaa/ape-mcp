@@ -29,3 +29,7 @@ vendors/adam/target/release/*
 !vendors/adam/target/release/adam-mcp
 !vendors/genesis/dist/
 !vendors/eve/dist/
+
+.env
+.env.*
+!.env.example
