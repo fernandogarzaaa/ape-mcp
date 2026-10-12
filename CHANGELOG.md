@@ -28,13 +28,23 @@
   prefixes; error text redacted.
 - Strategies `auto`, `fast`, `smart`, `cost`, plus `provider/model` pins;
   tool-requiring calls only reach tool-capable models.
-- Cost routing (`cost`) is the default for `provider: auto` when pool members
-  are available: required tier from `classifyObjective` + signals (tools,
-  context size, prior failures), ladder local → free → paid, one-tier
-  escalation on quality failures, paid escalation capped by `max_usd` and
+- Cost routing (`cost`) for `provider: auto` is **opt-in**
+  (`APE_COST_ROUTING=1` or `policy.cost_routing: true`; or
+  `provider: freepool` explicitly). Earlier revisions of this branch made it
+  the default whenever a free-tier key was present; that silently changed
+  models for users who had e.g. `GROQ_API_KEY` set for other tools. Required
+  tier from `classifyObjective` + signals (tools, context size, prior
+  failures), ladder local → free → paid, one-tier escalation on quality
+  failures, paid escalation capped by `max_usd` and
   `credential_policy.max_spend_usd`; decisions recorded per turn. Pluggable
-  `registerTierClassifier` hook for a learned router. Opt out with
-  `APE_COST_ROUTING=0` or `policy.routing: false`.
+  `registerTierClassifier` hook for a learned router.
+- Budget accounting: paid attempts that were billed upstream but rejected by
+  the pool (empty output, invalid tool-call JSON) now count toward the turn's
+  cost, the run budget and per-provider caps, including when the whole turn
+  fails.
+- `freepool-live` smoke workflow is manual (`workflow_dispatch`) only.
+- Tests: `tests/hostdetect.test.js` clears ambient provider keys so it passes
+  on developer machines that have real keys exported.
 - Self-maintained catalog `catalog/freepool.json` (+ paid rates extending
   `estimateCost`), `scripts/refresh-catalog.mjs`, and a nightly
   `refresh-catalog` workflow that opens a PR (never auto-merges). Egress

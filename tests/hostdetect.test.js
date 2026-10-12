@@ -6,6 +6,15 @@ import { tmpdir } from "node:os";
 // Isolate user config: resolveModel now reads APE_DATA_DIR/config.json, so a
 // stray repo pin would leak into these tests (same guard as scripts/test.mjs).
 process.env.APE_DATA_DIR ??= mkdtempSync(join(tmpdir(), "ape-hostdetect-"));
+// Hermetic env: a developer shell with real provider keys (or a pinned
+// provider) must not change what resolveModel/hostdetect see here. Each test
+// sets the keys it needs explicitly.
+for (const k of [
+  "APE_PROVIDER", "APE_MODEL", "APE_COST_ROUTING",
+  "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "NEBIUS_API_KEY",
+  "OPENCODE_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "CEREBRAS_API_KEY", "MISTRAL_API_KEY",
+  "HUGGINGFACE_API_KEY", "NVIDIA_API_KEY", "NIM_API_KEY", "GITHUB_TOKEN",
+]) delete process.env[k];
 import { DatabaseSync } from "node:sqlite";
 import { resolveModel, userDefaults, defaultModelFor } from "../src/agent/providers.js";
 import { opencodeActive, claudeActive, codexActive, storedCredentials, detectProviders, detectProviderSources } from "../src/agent/hostdetect.js";

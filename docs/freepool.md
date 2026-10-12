@@ -38,8 +38,10 @@ model:
 
 or per run: `ape_agent_run { provider: "freepool", model: "fast", ... }`.
 
-With **`provider: auto`** (the default) and at least one freepool member
-available, APE now uses **cost routing** automatically (see below).
+With **`provider: auto`** (the default), cost routing through the pool is
+**opt-in**: set `APE_COST_ROUTING=1` or `policy.cost_routing: true` (see
+below). A free-tier key in your environment does not, on its own, change
+which model serves `provider: auto` runs.
 
 ## Members and environment variables
 
@@ -111,7 +113,7 @@ excluded, until it actually hits a limit.
 Calls that carry tools only go to models marked tool-capable. Prompts larger
 than a model's context window skip that model.
 
-## Cost routing (`cost`, default for `provider: auto`)
+## Cost routing (`cost`, opt-in for `provider: auto`)
 
 For each model call the router sets a **required capability tier**
 (1 small · 2 medium · 3 large · 4 frontier) and takes the cheapest candidate
@@ -141,8 +143,16 @@ that meets it:
    blocks, why paid was used) lands in the run result and in
    `receipt.freepool`.
 
-Opt out with `policy.routing: false`, `APE_COST_ROUTING=0`, an explicit
-provider/model, or a pinned provider (`APE_PROVIDER` / TUI pin). A
+Enable it for `provider: auto` with `APE_COST_ROUTING=1` (also `true`/`yes`/`on`)
+or `policy.cost_routing: true` in the profile; `model: { provider: freepool, id: cost }`
+selects it explicitly. It stays off with `policy.routing: false`,
+`APE_COST_ROUTING=0`, an explicit provider/model, or a pinned provider
+(`APE_PROVIDER` / TUI pin).
+
+Paid attempts that the provider billed but the pool then rejected (empty
+output, invalid tool-call JSON) are counted: their estimated cost is added to
+the turn's cost (or to the failed turn's spend), attributed to the provider
+that billed it, and subtracted from the budget available to later paid picks. A
 `credential_policy.allow` list must include `freepool` for cost routing to
 apply, and paid providers inside the ladder are filtered by the same list.
 

@@ -1,13 +1,10 @@
 # Live freepool smoke against real free tiers, using whichever pool keys are
 # stored as repo secrets. With no pool secret configured the script prints
-# "no pool keys configured; skipping" and exits 0, so branch pushes stay green.
+# "no pool keys configured; skipping" and exits 0. Manual dispatch only.
 # (GitHub Models was retired 2026-07-30; the Actions token adds nothing.)
 name: freepool-live-smoke
 on:
   workflow_dispatch:
-  push:
-    branches: [feat/freepool]
-    paths: ['src/agent/freepool/**', 'src/agent/providers.js', 'scripts/freepool-live-smoke.mjs', '.github/workflows/freepool-live.yml']
 permissions:
   contents: read
 jobs:
@@ -15,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm ci --ignore-scripts || npm install --ignore-scripts
