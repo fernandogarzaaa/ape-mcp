@@ -266,3 +266,83 @@ test("quality failure at the top free tier escalates into paid", async () => {
   assert.equal(r.freepool.final_tier, 4);
   assert.equal(calls.filter((c) => c.host === "api.groq.com").length, 1, "one bad free answer, then straight to a tier-4 model");
 });
+
+// Audit fix (Oct 2026): paid attempts that were billed upstream but then
+// rejected by the pool (empty output / bad tool-call JSON) must still count.
+test("billed-but-rejected paid attempts are charged (call fails)", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed_aaaaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("") : okChat("")));
+  const err = await costCall({ content: REASONING }).then(() => null, (e) => e);
+  assert.ok(err, "call fails: every answer was empty");
+  const one = Number(estimateCost("claude-sonnet-4-6", { inputTokens: 100, outputTokens: 50 }));
+  assert.ok(one > 0);
+  assert.equal(err.costUsd, Number(one.toFixed(6)), "the billed paid attempt is reported");
+  assert.deepEqual(Object.keys(err.billedByProvider), ["anthropic"]);
+  assert.equal(err.billedByProvider.anthropic, Number(one.toFixed(6)));
+});
+
+test("billed-but-rejected paid attempts are added to the serving call's cost", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed2_aaaaaaaaaaaaaaaaaa" });
+  const PAID2 = [
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  let paidCalls = 0;
+  mockFetch((u, init, all, c) => {
+    if (c.host !== "api.anthropic.com") return okChat("");
+    paidCalls++;
+    return anthropicOk(paidCalls === 1 ? "" : "second paid answer");
+  });
+  const r = await costCall({ content: REASONING, paid: PAID2 });
+  assert.equal(r.content, "second paid answer");
+  assert.equal(paidCalls, 2);
+  const u = { inputTokens: 100, outputTokens: 50 };
+  const [first, second] = r.freepool.attempts.filter((a) => a.target.startsWith("anthropic/")).map((a) => a.target.split("/")[1]);
+  const want = Number((estimateCost(second, u) + estimateCost(first, u)).toFixed(6));
+  assert.equal(r.costUsd, want, "cost = served call + billed rejected call");
+  assert.equal(r.billedFailedUsd, Number(estimateCost(first, u).toFixed(6)));
+  assert.ok(r.billedByProvider.anthropic > 0);
+});
+
+test("billed-but-rejected paid attempts shrink the budget for later paid picks", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed3_aaaaaaaaaaaaaaaaaa" });
+  const PAID2 = [
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  const calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("") : okChat("")));
+  // Budget fits ONE paid call estimate but not two: after the first billed
+  // rejection the second paid candidate must be budget-blocked.
+  const probe = await costCall({ content: REASONING, paid: PAID2, budget: { usdLeft: 100 } }).then(() => null, (e) => e);
+  const estimates = probe.decision.attempts.length;
+  assert.ok(estimates >= 1);
+  fresh({ GROQ_API_KEY: "gsk_cost_billed3_aaaaaaaaaaaaaaaaaa" });
+  const calls2 = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? { status: 200, body: { content: [{ type: "text", text: "" }], stop_reason: "end_turn", usage: { input_tokens: 400000, output_tokens: 1 } } } : okChat("")));
+  const err = await costCall({ content: REASONING, paid: PAID2, budget: { usdLeft: 0.5 } }).then(() => null, (e) => e);
+  assert.ok(err);
+  assert.equal(calls2.filter((c) => c.host === "api.anthropic.com").length, 1, "second paid pick blocked by billed spend");
+  assert.ok(err.costUsd > 0.5 || err.decision.budget_blocked?.length, "overspend recorded / later pick blocked");
+  void calls;
+});
+
+test("agent run: a failed turn still charges billed paid attempts to the run", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed4_aaaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("") : okChat("")));
+  const res = await runAgent({
+    profile: {
+      name: "cost-billed-fail",
+      model: { provider: "auto", id: "auto" },
+      system: "Be careful.",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 5, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer", "budget_exhausted"],
+    },
+    objective: REASONING,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: PAID } }],
+  });
+  assert.equal(res.stop_reason, "model_error");
+  assert.ok(res.total_cost > 0, "billed paid attempt reaches total_cost");
+  assert.equal(res.receipt.spend_by_provider.anthropic, res.total_cost);
+});

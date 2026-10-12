@@ -6,6 +6,7 @@ import { loadProfile } from "./profiles.js";
 import { runAgent } from "./loop.js";
 import { resolveModel, resolveChain, applyCredentialPolicy, userDefaults } from "./providers.js";
 import { hasMembers as freepoolHasMembers } from "./freepool/index.js";
+import { costRoutingEnabled } from "./freepool/costroute.js";
 import { detectProviders } from "./hostdetect.js";
 import { classifyObjective, selectRoutedModel } from "./router.js";
 import { rankBySimilarity, buildHydrationContext } from "./similarity.js";
@@ -63,15 +64,16 @@ async function main() {
   // local spend is disallowed for this profile.
   const credAllow = profile.policy?.credential_policy?.allow;
   const routingOn = (profile.policy?.routing ?? true) && profile.model.provider === "auto" && !opts.provider && !opts.model && !opts.mockScript && (!credAllow?.length || credAllow.includes("local"));
-  // Cost-aware routing (default for provider:auto when freepool members are
-  // available): one "freepool/cost" entry that walks local -> free tiers ->
-  // paid, escalating only on need and only within budget. Opt out with
-  // policy.routing:false, APE_COST_ROUTING=0, an explicit provider/model, or
-  // a pinned provider (APE_PROVIDER / TUI pin). Credential policy applies to
-  // the paid ladder too: a disallowed paid provider never joins it.
-  const costOn = (profile.policy?.routing ?? true) && profile.model.provider === "auto" && !opts.provider && !opts.model && !opts.mockScript
-    && process.env.APE_COST_ROUTING !== "0" && !process.env.APE_PROVIDER && !userDefaults().provider
-    && (!credAllow?.length || credAllow.includes("freepool"));
+  // Cost-aware routing is OPT-IN for provider:auto: one "freepool/cost" entry
+  // that walks local -> free tiers -> paid, escalating only on need and only
+  // within budget. Having a free-tier key in the environment (GROQ_API_KEY,
+  // GEMINI_API_KEY, ...) is NOT enough on its own: those keys are often set
+  // for other tools, and silently changing which model serves a run would be
+  // a surprise. Enable with APE_COST_ROUTING=1 or policy.cost_routing: true
+  // (or use provider: freepool explicitly). An explicit provider/model or a
+  // pinned provider (APE_PROVIDER / TUI pin) always wins. Credential policy
+  // applies to the paid ladder too: a disallowed paid provider never joins it.
+  const costOn = costRoutingEnabled({ profile, opts, env: process.env, pinnedProvider: userDefaults().provider });
   let costChain = null;
   if (costOn && freepoolHasMembers()) {
     const cls = classifyObjective(req.objective);

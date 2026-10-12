@@ -173,6 +173,22 @@ export async function freepoolChat(cfg, { system, messages, tools, timeoutMs = n
     ...(budgetSkips.length ? { budget_blocked: [...new Set(budgetSkips)].slice(0, 4) } : {}),
   });
 
+  // Paid attempts that reached the provider but were then rejected here
+  // (invalid tool-call JSON, empty output) were still billed upstream. Keep
+  // that spend so it is charged to the run's budget and per-provider caps,
+  // whether a later attempt serves the turn or the whole call fails.
+  let billedUsd = 0;
+  const billedByProvider = {};
+  const effBudget = () => {
+    if (!billedUsd) return cfg.budget;
+    const b = { ...(cfg.budget ?? {}) };
+    if (b.usdLeft != null && Number.isFinite(Number(b.usdLeft))) b.usdLeft = Number(b.usdLeft) - billedUsd;
+    const sp = { ...(b.spentByProvider ?? {}) };
+    for (const [k, v] of Object.entries(billedByProvider)) sp[k] = Number(sp[k] ?? 0) + v;
+    b.spentByProvider = sp;
+    return b;
+  };
+
   let lastErr = null;
   let stopReason = "exhausted";
   while (true) {
@@ -186,7 +202,7 @@ export async function freepoolChat(cfg, { system, messages, tools, timeoutMs = n
       const paidOk = [];
       for (const p of paid) {
         if (exclude.has(p.id) || p.tier < tier) continue;
-        const left = budgetLeftFor(p.provider, cfg.budget);
+        const left = budgetLeftFor(p.provider, effBudget());
         if (p.estCostUsd > left) { budgetSkips.push(`${p.target} est $${p.estCostUsd} > left $${Number.isFinite(left) ? Number(left.toFixed(6)) : left}`); continue; }
         paidOk.push(p);
       }
@@ -204,8 +220,8 @@ export async function freepoolChat(cfg, { system, messages, tools, timeoutMs = n
     const perTimeout = Math.max(1, Math.min(remaining, attemptCap));
     let headers = null;
     const started = Date.now();
+    let resp = null;
     try {
-      let resp;
       if (pick.free) {
         resp = await deps.openaiChat(
           { provider: pick.provider, id: pick.model, key: pick.key, baseUrl: pick.baseUrl, onResponse: (res) => { headers = res.headers; } },
@@ -225,12 +241,14 @@ export async function freepoolChat(cfg, { system, messages, tools, timeoutMs = n
         L.recordSuccess(pick.provider, pick.model, pick.keyHash, latency);
         if (parsed?.exhaustedUntil) L.setCooldown(pick.provider, pick.model, pick.keyHash, parsed.exhaustedUntil, `exhausted ${parsed.exhaustedWindow}`);
       }
-      const costUsd = pick.free ? 0 : Number(deps.estimateCost(pick.model, resp.usage ?? { inputTokens: 0, outputTokens: 0 }).toFixed(6));
+      const callCost = pick.free ? 0 : Number(deps.estimateCost(pick.model, resp.usage ?? { inputTokens: 0, outputTokens: 0 }));
+      const costUsd = Number((callCost + billedUsd).toFixed(6));
       attempts.push({ target: pick.target, outcome: "ok", ms: latency });
       return {
         ...resp,
         servedBy: { provider: pick.provider, model: pick.model, ...(pick.free ? { key_slot: pick.slot } : {}), tier: pick.tier, free: pick.free, local: pick.local },
         costUsd,
+        ...(billedUsd ? { billedFailedUsd: Number(billedUsd.toFixed(6)), billedByProvider: { ...billedByProvider } } : {}),
         freepool: {
           ...decisionBase(),
           chosen: pick.target,
@@ -240,6 +258,11 @@ export async function freepoolChat(cfg, { system, messages, tools, timeoutMs = n
       };
     } catch (err) {
       lastErr = err;
+      // A paid call that returned a response (then failed validation) was billed.
+      if (!pick.free && resp && resp.usage) {
+        const c = Number(deps.estimateCost(pick.model, resp.usage)) || 0;
+        if (c > 0) { billedUsd += c; billedByProvider[pick.provider] = (billedByProvider[pick.provider] ?? 0) + c; }
+      }
       const cls = classifyFailure(err);
       exclude.add(pick.id);
       if (pick.free && cls !== "rate_limit") L.recordUsage(pick.provider, pick.model, pick.keyHash, 0);
@@ -255,6 +278,10 @@ export async function freepoolChat(cfg, { system, messages, tools, timeoutMs = n
   const summary = attempts.map((a) => `${a.target}:${a.outcome}`).join(", ") || "no eligible candidate";
   const e = new Error(redactSecrets(`freepool: no candidate served (${stopReason}; ${summary})${lastErr ? ` last: ${String(lastErr.message ?? lastErr).slice(0, 160)}` : ""}`));
   e.decision = { ...decisionBase(), stop: stopReason };
+  if (billedUsd) {
+    e.costUsd = Number(billedUsd.toFixed(6));
+    e.billedByProvider = Object.fromEntries(Object.entries(billedByProvider).map(([k, v]) => [k, Number(v.toFixed(6))]));
+  }
   throw e;
 }
 

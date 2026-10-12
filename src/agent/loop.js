@@ -346,6 +346,14 @@ export async function runAgent({ profile, objective, organism_id = "default", on
         } catch (e) {
           lastErr = e;
           if (e?.decision) noteFreepool(null, e.decision);
+          // freepool: paid attempts that were billed upstream but then failed
+          // validation still count against the run budget and provider caps.
+          if (Number(e?.costUsd) > 0) {
+            budget.spend({ tokens: 0, cost: Number(e.costUsd) });
+            for (const [k, v] of Object.entries(e.billedByProvider ?? {})) {
+              spendByProvider[k] = Number(((spendByProvider[k] ?? 0) + Number(v)).toFixed(6));
+            }
+          }
         }
       }
       const modelDur = Date.now() - modelT0;
@@ -370,7 +378,14 @@ export async function runAgent({ profile, objective, organism_id = "default", on
       const cost = resp.mockCost ?? resp.costUsd ?? estimateCost(usedModel, resp.usage);
       budget.spend({ tokens, cost });
       const spendKey = resp.servedBy?.provider ?? usedProvider;
-      spendByProvider[spendKey] = Number(((spendByProvider[spendKey] ?? 0) + cost).toFixed(6));
+      // Billed-but-rejected paid attempts inside the pool are attributed to
+      // the provider that billed them; the rest to the one that served.
+      let servedCost = cost;
+      for (const [k, v] of Object.entries(resp.mockCost == null ? (resp.billedByProvider ?? {}) : {})) {
+        spendByProvider[k] = Number(((spendByProvider[k] ?? 0) + Number(v)).toFixed(6));
+        servedCost -= Number(v);
+      }
+      spendByProvider[spendKey] = Number(((spendByProvider[spendKey] ?? 0) + Math.max(0, servedCost)).toFixed(6));
       if (resp.servedBy) noteFreepool(resp.servedBy, resp.freepool);
       record({ step: budget.steps, kind: "model", tool: null, durationMs: modelDur, tokens, cost, resultSummary: (resp.content ?? "").slice(0, 200) });
 

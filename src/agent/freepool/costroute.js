@@ -96,3 +96,24 @@ export function budgetLeftFor(provider, budget) {
   if (cap != null && Number.isFinite(Number(cap))) left = Math.min(left, Number(cap) - Number(budget?.spentByProvider?.[provider] ?? 0));
   return left;
 }
+
+// Whether provider:auto runs should be cost-routed through the pool.
+// Opt-in only (APE_COST_ROUTING=1|true|yes|on, or policy.cost_routing: true).
+// Off whenever the caller made an explicit choice (provider/model override,
+// mock script, APE_PROVIDER, a pinned provider), when policy.routing is
+// false, when APE_COST_ROUTING=0, or when a credential allow-list does not
+// include "freepool". Whether pool members exist is checked by the caller.
+export function costRoutingEnabled({ profile, opts = {}, env = process.env, pinnedProvider = null } = {}) {
+  const flag = String(env.APE_COST_ROUTING ?? "").trim().toLowerCase();
+  const envOn = ["1", "true", "yes", "on"].includes(flag);
+  const envOff = ["0", "false", "no", "off"].includes(flag);
+  const policyOn = profile?.policy?.cost_routing === true;
+  if (envOff || !(envOn || policyOn)) return false;
+  if ((profile?.policy?.routing ?? true) === false) return false;
+  if ((profile?.model?.provider ?? "auto") !== "auto") return false;
+  if (opts.provider || opts.model || opts.mockScript) return false;
+  if (env.APE_PROVIDER || pinnedProvider) return false;
+  const allow = profile?.policy?.credential_policy?.allow;
+  if (allow?.length && !allow.includes("freepool")) return false;
+  return true;
+}
