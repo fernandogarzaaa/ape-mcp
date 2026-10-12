@@ -1,0 +1,433 @@
+// Cost-aware routing ("cost" strategy): cheapest sufficient candidate,
+// escalation on need, budget caps on paid escalation, decision recorded.
+// Mocked fetch only — no network.
+import test, { after } from "node:test";
+import assert from "node:assert/strict";
+import { chat, estimateCost, costRateFor } from "../src/agent/providers.js";
+import { requiredTier, registerTierClassifier, sortForCost, budgetLeftFor, notePriorFailure, priorFailuresFor } from "../src/agent/freepool/costroute.js";
+import { runAgent } from "../src/agent/loop.js";
+import { fresh, restore, mockFetch, okChat, toolChat, anthropicOk, FINISH_TOOL, msg } from "./freepool-helpers.js";
+
+after(restore);
+
+const PAID = [{ provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" }];
+const TRIVIAL = "Format this list as CSV";
+const REASONING = "Compare the two architectures and recommend which trade-off to accept";
+const costCall = ({ content, tools = [], paid = PAID, budget = null, convKey = "cost-test" }) =>
+  chat({ provider: "freepool", id: "cost", convKey, pool: { paid }, budget }, { system: "s", messages: msg(content), tools, timeoutMs: 30000 });
+
+test("requiredTier: category baseline plus request signals", async () => {
+  fresh();
+  assert.equal((await requiredTier({ objective: TRIVIAL })).tier, 1);
+  assert.equal((await requiredTier({ objective: "Hello there" })).tier, 2, "general -> medium");
+  assert.equal((await requiredTier({ objective: "Fix the bug in this function and add a test" })).tier, 3, "coding -> large");
+  assert.equal((await requiredTier({ objective: REASONING })).tier, 3, "reasoning -> large");
+  const tools = await requiredTier({ objective: TRIVIAL, tools: FINISH_TOOL });
+  assert.equal(tools.tier, 2, "tools lift trivial to medium");
+  assert.ok(tools.reasons.includes("tools required -> tier 2"));
+  assert.equal((await requiredTier({ objective: TRIVIAL, estTokens: 40000 })).tier, 3, "long context -> large");
+  assert.equal((await requiredTier({ objective: TRIVIAL, priorFailures: 2 })).tier, 2, "prior failures in run -> +1");
+  assert.equal((await requiredTier({ objective: REASONING, priorFailures: 9, estTokens: 99999 })).tier, 4, "capped at frontier");
+  notePriorFailure("run-x"); notePriorFailure("run-x");
+  assert.equal(priorFailuresFor("run-x"), 2);
+  assert.equal(priorFailuresFor("run-y"), 0);
+});
+
+test("ladder order: local < free < paid, cheaper first, lowest sufficient tier first", () => {
+  const c = (id, o) => ({ id, tier: 2, score: 0.5, free: true, local: false, ...o });
+  const sorted = sortForCost([
+    c("paid-cheap", { free: false, estCostUsd: 0.001, tier: 4 }),
+    c("paid-dear", { free: false, estCostUsd: 0.02, tier: 4 }),
+    c("free-t3", { tier: 3, score: 0.9 }),
+    c("free-t2", { tier: 2, score: 0.1 }),
+    c("local", { local: true, tier: 2 }),
+  ]).map((x) => x.id);
+  assert.deepEqual(sorted, ["local", "free-t2", "free-t3", "paid-cheap", "paid-dear"]);
+  assert.equal(budgetLeftFor("anthropic", null), Infinity);
+  assert.equal(budgetLeftFor("anthropic", { usdLeft: 0.5, spendCaps: { anthropic: 0.2 }, spentByProvider: { anthropic: 0.15 } }).toFixed(4), "0.0500");
+});
+
+test("trivial task goes to a free tier, never to paid", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_trivial_aaaaaaaaaaaaaaaaaa" });
+  const calls = mockFetch(() => okChat("a,b,c"));
+  const r = await costCall({ content: TRIVIAL });
+  assert.equal(r.servedBy.provider, "groq");
+  assert.equal(r.servedBy.model, "llama-3.1-8b-instant", "lowest sufficient tier (1) among free models");
+  assert.equal(r.servedBy.free, true);
+  assert.equal(r.costUsd, 0);
+  assert.equal(r.freepool.strategy, "cost");
+  assert.equal(r.freepool.category, "trivial");
+  assert.equal(r.freepool.required_tier, 1);
+  assert.equal(r.freepool.est_cost_usd, 0);
+  assert.deepEqual(r.freepool.escalations, []);
+  assert.equal(calls.filter((c) => c.host === "api.anthropic.com").length, 0);
+});
+
+test("local endpoint is tried before free tiers", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_local_aaaaaaaaaaaaaaaaaaaa", APE_FREEPOOL_LOCAL_MODEL: "llama3.2:3b", APE_LOCAL_BASE_URL: "http://127.0.0.1:11434/v1" });
+  const calls = mockFetch(() => okChat("local"));
+  const r = await costCall({ content: TRIVIAL });
+  assert.equal(r.servedBy.provider, "local");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].host, "127.0.0.1:11434");
+});
+
+test("reasoning escalates to paid only when free tiers fail", async () => {
+  // Free succeeds -> paid untouched.
+  fresh({ GROQ_API_KEY: "gsk_cost_reason_aaaaaaaaaaaaaaaaaaa" });
+  let calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk() : okChat("free reasoning")));
+  let r = await costCall({ content: REASONING });
+  assert.equal(r.servedBy.free, true);
+  assert.ok(r.servedBy.tier >= 3, "reasoning needs a large model");
+  assert.equal(r.freepool.required_tier, 3);
+  assert.equal(calls.filter((c) => c.host === "api.anthropic.com").length, 0, "no paid call when free works");
+
+  // Every free tier-3+ candidate fails (5xx) -> escalate to tier 4 -> paid.
+  fresh({ GROQ_API_KEY: "gsk_cost_reason_aaaaaaaaaaaaaaaaaaa" });
+  calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("paid reasoning") : { status: 503, body: { error: "overloaded" } }));
+  r = await costCall({ content: REASONING });
+  assert.equal(r.content, "paid reasoning");
+  assert.deepEqual(r.servedBy, { provider: "anthropic", model: "claude-sonnet-4-6", tier: 4, free: false, local: false });
+  const hosts = calls.map((c) => c.host);
+  const firstPaid = hosts.indexOf("api.anthropic.com");
+  assert.equal(firstPaid, hosts.length - 1, "paid tried last, exactly once");
+  assert.ok(firstPaid >= 2, "free tier-3 models were tried first");
+  assert.ok(calls.slice(0, firstPaid).every((c) => ["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct-0905"].includes(c.body.model)), "only tier>=3 free models attempted");
+  assert.deepEqual(r.freepool.escalations, [], "tier-4 paid already satisfies tier 3: no escalation needed");
+  assert.equal(r.freepool.final_tier, 3);
+  assert.equal(r.freepool.paid_reason, `no free candidate available at tier 3 (${firstPaid} free attempts failed)`);
+  assert.equal(r.freepool.chosen, "anthropic/claude-sonnet-4-6");
+  assert.equal(r.costUsd, Number(estimateCost("claude-sonnet-4-6", { inputTokens: 100, outputTokens: 50 }).toFixed(6)));
+  assert.equal(r.costUsd, 0.00105);
+  assert.ok(r.freepool.est_cost_usd > 0);
+  // Anthropic got the Anthropic tool shape / headers via its own path.
+  assert.equal(calls[firstPaid].url, "https://api.anthropic.com/v1/messages");
+});
+
+test("budget cap blocks paid escalation (max_usd and per-provider max_spend_usd)", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_budget_aaaaaaaaaaaaaaaaaaa" });
+  let calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk() : { status: 503, body: {} }));
+  await assert.rejects(costCall({ content: REASONING, budget: { usdLeft: 0.0001 } }), (e) => {
+    assert.match(e.message, /no candidate served/);
+    assert.equal(e.decision.budget_blocked.length, 1);
+    assert.match(e.decision.budget_blocked[0], /^anthropic\/claude-sonnet-4-6 est \$[\d.]+ > left \$0\.0001$/);
+    return true;
+  });
+  assert.equal(calls.filter((c) => c.host === "api.anthropic.com").length, 0, "paid never called over budget");
+
+  fresh({ GROQ_API_KEY: "gsk_cost_budget_aaaaaaaaaaaaaaaaaaa" });
+  calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk() : { status: 503, body: {} }));
+  await assert.rejects(costCall({ content: REASONING, budget: { usdLeft: 5, spendCaps: { anthropic: 0.01 }, spentByProvider: { anthropic: 0.0099 } } }), /no candidate served/);
+  assert.equal(calls.filter((c) => c.host === "api.anthropic.com").length, 0, "per-provider cap respected");
+
+  // Same failure with room in the budget -> paid serves.
+  fresh({ GROQ_API_KEY: "gsk_cost_budget_aaaaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk() : { status: 503, body: {} }));
+  const r = await costCall({ content: REASONING, budget: { usdLeft: 1 } });
+  assert.equal(r.servedBy.provider, "anthropic");
+});
+
+test("quality failures escalate one tier (empty output, bad tool-call JSON)", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_quality_aaaaaaaaaaaaaaaaaa" });
+  let calls = mockFetch((u, init, all) => (all.length === 1 ? okChat("") : okChat("better")));
+  let r = await costCall({ content: TRIVIAL, paid: [] });
+  assert.equal(calls[0].body.model, "llama-3.1-8b-instant");
+  assert.equal(r.content, "better");
+  assert.deepEqual(r.freepool.escalations, [{ from: 1, to: 2, reason: "invalid" }]);
+  assert.equal(r.servedBy.tier, 2);
+  assert.equal(r.freepool.attempts[0].outcome, "invalid");
+
+  fresh({ GROQ_API_KEY: "gsk_cost_quality_aaaaaaaaaaaaaaaaaa" });
+  calls = mockFetch((u, init, all) => (all.length === 1 ? toolChat("finish", "{not json") : toolChat("finish", { summary: "ok" })));
+  r = await costCall({ content: TRIVIAL, tools: FINISH_TOOL, paid: [] });
+  assert.equal(r.freepool.required_tier, 2);
+  assert.deepEqual(r.freepool.escalations, [{ from: 2, to: 3, reason: "invalid" }]);
+  assert.ok(r.servedBy.tier >= 3);
+  assert.deepEqual(r.toolCalls[0].args, { summary: "ok" });
+
+  // 429s are availability, not quality: fail over at the SAME tier.
+  fresh({ GROQ_API_KEY: "gsk_cost_quality_aaaaaaaaaaaaaaaaaa", CEREBRAS_API_KEY: "csk-cost-quality-bbbbbbbbbbbbbb" });
+  calls = mockFetch((u, init, all) => (all.length === 1 ? { status: 429, body: {}, headers: { "retry-after": "5" } } : okChat("same tier")));
+  r = await costCall({ content: TRIVIAL, paid: [] });
+  assert.deepEqual(r.freepool.escalations, [], "no escalation on 429");
+  assert.equal(r.servedBy.tier, 1);
+});
+
+test("pluggable tier classifier hook (learned-router seam)", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_hook_aaaaaaaaaaaaaaaaaaaaa" });
+  registerTierClassifier(async ({ objective }) => (objective.includes("hard") ? { tier: 4, reason: "test-model says hard" } : null));
+  let calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk() : okChat("free")));
+  let r = await costCall({ content: "a hard question" });
+  assert.equal(r.freepool.tier_source, "hook");
+  assert.equal(r.freepool.required_tier, 4);
+  assert.equal(r.servedBy.provider, "anthropic", "no free tier-4 groq model -> paid");
+  assert.equal(calls.length, 1, "free tier-1..3 models skipped entirely");
+  r = await costCall({ content: TRIVIAL });
+  assert.equal(r.freepool.tier_source, "rules", "null from hook defers to rules");
+  registerTierClassifier(() => { throw new Error("broken plug-in"); });
+  calls = mockFetch(() => okChat("free"));
+  r = await costCall({ content: TRIVIAL });
+  assert.equal(r.freepool.tier_source, "rules", "throwing hook never breaks routing");
+  assert.equal(r.servedBy.free, true);
+  registerTierClassifier(null);
+});
+
+test("free-tier models auto-detected as 'paid' entries stay free", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_dup_aaaaaaaaaaaaaaaaaaaaaa" });
+  const calls = mockFetch(() => ({ status: 503, body: {} }));
+  await assert.rejects(costCall({ content: REASONING, paid: [{ provider: "groq", id: "llama-3.3-70b-versatile", key: "gsk_cost_dup_aaaaaaaaaaaaaaaaaaaaaa" }] }));
+  assert.ok(calls.every((c) => c.host === "api.groq.com"));
+  assert.ok(!calls.some((c) => c.body.model === "llama-3.3-70b-versatile"), "tier-2 free model not smuggled in as a paid tier-3 candidate");
+});
+
+test("catalog paid rates extend estimateCost; built-in table wins", () => {
+  assert.deepEqual(costRateFor("gpt-4.1"), { in: 2, out: 8 });
+  assert.equal(costRateFor("deepseek-ai/DeepSeek-V4-Flash-0731").in, 0.3);
+  assert.equal(costRateFor("claude-sonnet-4-6-20260101").out, 15, "prefix match on dated ids");
+  assert.deepEqual(costRateFor("totally-unknown-model"), { in: 2, out: 8 }, "conservative default");
+});
+
+test("agent run: routing decision + served-by recorded in the receipt, free spend is $0", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_receipt_aaaaaaaaaaaaaaaaaa" });
+  const calls = mockFetch(() => toolChat("finish", { summary: "listed" }));
+  const res = await runAgent({
+    profile: {
+      name: "cost-receipt",
+      model: { provider: "auto", id: "auto" },
+      system: "Be careful.",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 5, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer", "budget_exhausted"],
+    },
+    objective: TRIVIAL,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: [] } }],
+  });
+  assert.equal(res.stop_reason, "explicit_final_answer");
+  assert.equal(res.outcome, "listed");
+  assert.equal(res.model_provider, "freepool");
+  assert.match(res.served_by, /^groq\//);
+  assert.equal(res.total_cost, 0, "free tier costs nothing (no phantom DEFAULT_RATE spend)");
+  const fp = res.receipt.freepool;
+  assert.equal(fp.served_by, res.served_by);
+  assert.equal(fp.turns, 1);
+  assert.equal(fp.paid_turns, 0);
+  assert.equal(fp.served[res.served_by], 1);
+  assert.equal(fp.decisions.length, 1);
+  assert.equal(fp.decisions[0].strategy, "cost");
+  assert.equal(fp.decisions[0].tier, 2, "trivial + tools -> tier 2");
+  assert.equal(fp.decisions[0].category, "trivial");
+  assert.equal(fp.decisions[0].chosen, res.served_by);
+  assert.equal(fp.decisions[0].est_cost_usd, 0);
+  assert.deepEqual(fp.decisions[0].escalations, []);
+  assert.equal(res.receipt.spend_by_provider.groq, 0, "spend attributed to the serving upstream");
+  assert.equal(calls[0].body.tools[0].function.name, "finish");
+  // Receipt survives the worker's 2000-char persistence slice as valid JSON prefix-wise.
+  assert.ok(JSON.stringify({ freepool: fp }).length < 800, "freepool receipt block stays compact");
+});
+
+test("agent run: paid escalation is billed and attributed to the paid provider", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_receipt2_aaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com"
+    ? { status: 200, body: { content: [{ type: "tool_use", id: "tu1", name: "finish", input: { summary: "paid done" } }], stop_reason: "tool_use", usage: { input_tokens: 200, output_tokens: 40 } } }
+    : { status: 503, body: {} }));
+  const res = await runAgent({
+    profile: {
+      name: "cost-receipt-paid",
+      model: { provider: "auto", id: "auto" },
+      system: "Be careful.",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 5, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer", "budget_exhausted"],
+    },
+    objective: REASONING,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: PAID } }],
+  });
+  assert.equal(res.outcome, "paid done");
+  assert.equal(res.served_by, "anthropic/claude-sonnet-4-6");
+  const expected = Number(estimateCost("claude-sonnet-4-6", { inputTokens: 200, outputTokens: 40 }).toFixed(6));
+  assert.equal(res.total_cost, expected);
+  assert.equal(res.receipt.spend_by_provider.anthropic, expected);
+  assert.equal(res.receipt.freepool.paid_turns, 1);
+  assert.match(res.receipt.freepool.decisions[0].paid_reason, /^no free candidate available at tier 3 \(\d+ free attempts failed\)$/);
+  assert.equal(res.receipt.freepool.decisions[0].tier, 3);
+});
+
+test("quality failure at the top free tier escalates into paid", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_q2paid_aaaaaaaaaaaaaaaaaaa" });
+  const calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("paid fixes it") : okChat("")));
+  const r = await costCall({ content: REASONING });
+  assert.equal(calls[0].host, "api.groq.com");
+  assert.equal(r.servedBy.provider, "anthropic");
+  assert.deepEqual(r.freepool.escalations, [{ from: 3, to: 4, reason: "invalid" }]);
+  assert.equal(r.freepool.final_tier, 4);
+  assert.equal(calls.filter((c) => c.host === "api.groq.com").length, 1, "one bad free answer, then straight to a tier-4 model");
+});
+
+// Audit fix (Oct 2026): paid attempts that were billed upstream but then
+// rejected by the pool (empty output / bad tool-call JSON) must still count.
+test("billed-but-rejected paid attempts are charged (call fails)", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed_aaaaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("") : okChat("")));
+  const err = await costCall({ content: REASONING }).then(() => null, (e) => e);
+  assert.ok(err, "call fails: every answer was empty");
+  const one = Number(estimateCost("claude-sonnet-4-6", { inputTokens: 100, outputTokens: 50 }));
+  assert.ok(one > 0);
+  assert.equal(err.costUsd, Number(one.toFixed(6)), "the billed paid attempt is reported");
+  assert.deepEqual(Object.keys(err.billedByProvider), ["anthropic"]);
+  assert.equal(err.billedByProvider.anthropic, Number(one.toFixed(6)));
+});
+
+test("billed-but-rejected paid attempts are added to the serving call's cost", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed2_aaaaaaaaaaaaaaaaaa" });
+  const PAID2 = [
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  let paidCalls = 0;
+  mockFetch((u, init, all, c) => {
+    if (c.host !== "api.anthropic.com") return okChat("");
+    paidCalls++;
+    return anthropicOk(paidCalls === 1 ? "" : "second paid answer");
+  });
+  const r = await costCall({ content: REASONING, paid: PAID2 });
+  assert.equal(r.content, "second paid answer");
+  assert.equal(paidCalls, 2);
+  const u = { inputTokens: 100, outputTokens: 50 };
+  const [first, second] = r.freepool.attempts.filter((a) => a.target.startsWith("anthropic/")).map((a) => a.target.split("/")[1]);
+  const want = Number((estimateCost(second, u) + estimateCost(first, u)).toFixed(6));
+  assert.equal(r.costUsd, want, "cost = served call + billed rejected call");
+  assert.equal(r.billedFailedUsd, Number(estimateCost(first, u).toFixed(6)));
+  assert.ok(r.billedByProvider.anthropic > 0);
+});
+
+test("billed-but-rejected paid attempts shrink the budget for later paid picks", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed3_aaaaaaaaaaaaaaaaaa" });
+  const PAID2 = [
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  const calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("") : okChat("")));
+  // Budget fits ONE paid call estimate but not two: after the first billed
+  // rejection the second paid candidate must be budget-blocked.
+  const probe = await costCall({ content: REASONING, paid: PAID2, budget: { usdLeft: 100 } }).then(() => null, (e) => e);
+  const estimates = probe.decision.attempts.length;
+  assert.ok(estimates >= 1);
+  fresh({ GROQ_API_KEY: "gsk_cost_billed3_aaaaaaaaaaaaaaaaaa" });
+  const calls2 = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? { status: 200, body: { content: [{ type: "text", text: "" }], stop_reason: "end_turn", usage: { input_tokens: 400000, output_tokens: 1 } } } : okChat("")));
+  const err = await costCall({ content: REASONING, paid: PAID2, budget: { usdLeft: 0.5 } }).then(() => null, (e) => e);
+  assert.ok(err);
+  assert.equal(calls2.filter((c) => c.host === "api.anthropic.com").length, 1, "second paid pick blocked by billed spend");
+  assert.ok(err.costUsd > 0.5 || err.decision.budget_blocked?.length, "overspend recorded / later pick blocked");
+  void calls;
+});
+
+test("agent run: a failed turn still charges billed paid attempts to the run", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed4_aaaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? anthropicOk("") : okChat("")));
+  const res = await runAgent({
+    profile: {
+      name: "cost-billed-fail",
+      model: { provider: "auto", id: "auto" },
+      system: "Be careful.",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 5, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer", "budget_exhausted"],
+    },
+    objective: REASONING,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: PAID } }],
+  });
+  assert.equal(res.stop_reason, "model_error");
+  assert.ok(res.total_cost > 0, "billed paid attempt reaches total_cost");
+  assert.equal(res.receipt.spend_by_provider.anthropic, res.total_cost);
+});
+
+test("billed-but-rejected spend counts against per-provider caps for later paid picks", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed5_aaaaaaaaaaaaaaaaaa" });
+  const PAID2 = [
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  const big = { status: 200, body: { content: [{ type: "text", text: "" }], stop_reason: "end_turn", usage: { input_tokens: 100000, output_tokens: 1 } } };
+  const calls = mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? big : okChat("")));
+  // Cap leaves room for one estimated call (~$0.02) but not after a $0.30 billed rejection.
+  const err = await costCall({ content: REASONING, paid: PAID2, budget: { usdLeft: null, spendCaps: { anthropic: 0.25 }, spentByProvider: { anthropic: 0.01, openai: 5 } } }).then(() => null, (e) => e);
+  assert.ok(err);
+  assert.equal(calls.filter((c) => c.host === "api.anthropic.com").length, 1, "second anthropic pick blocked by the per-provider cap");
+  assert.ok(err.decision.budget_blocked?.length >= 1);
+  assert.ok(err.costUsd > 0.25);
+});
+
+test("no billed paid attempt -> no costUsd on the error", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed6_aaaaaaaaaaaaaaaaaa" });
+  mockFetch(() => ({ status: 503, body: {} }));
+  const err = await costCall({ content: TRIVIAL, paid: [] }).then(() => null, (e) => e);
+  assert.ok(err);
+  assert.equal(err.costUsd, undefined);
+  assert.equal(err.billedByProvider, undefined);
+  fresh({ GROQ_API_KEY: "gsk_cost_billed6_aaaaaaaaaaaaaaaaaa" });
+  mockFetch((u, init, all, c) => (c.host === "api.anthropic.com" ? { status: 500, body: {} } : { status: 503, body: {} }));
+  const err2 = await costCall({ content: REASONING }).then(() => null, (e) => e);
+  assert.equal(err2.costUsd, undefined, "a paid HTTP error was not billed");
+});
+
+test("agent run: billed rejection by one provider and success on another are attributed separately", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed7_aaaaaaaaaaaaaaaaaa" });
+  const MIX = [
+    { provider: "openai", id: "gpt-4.1", key: "sk-test-openai-paidkey-0000000000" },
+    { provider: "anthropic", id: "claude-sonnet-4-6", key: "sk-ant-test-paidkey-000000000000" },
+  ];
+  const calls = mockFetch((u, init, all, c) => {
+    if (c.host === "api.anthropic.com") return { status: 200, body: { content: [{ type: "tool_use", id: "tu1", name: "finish", input: { summary: "served" } }], stop_reason: "tool_use", usage: { input_tokens: 200, output_tokens: 40 } } };
+    if (c.host === "api.openai.com") return okChat("", {}, { prompt_tokens: 1000, completion_tokens: 50 });
+    return { status: 503, body: {} };
+  });
+  const res = await runAgent({
+    profile: {
+      name: "cost-billed-mix",
+      model: { provider: "auto", id: "auto" },
+      system: "Be careful.",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 5, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer", "budget_exhausted"],
+    },
+    objective: REASONING,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: MIX } }],
+  });
+  assert.equal(res.outcome, "served");
+  assert.ok(calls.some((c) => c.host === "api.openai.com"), "openai tried first (cheaper)");
+  const billed = Number(estimateCost("gpt-4.1", { inputTokens: 1000, outputTokens: 50 }).toFixed(6));
+  const served = Number(estimateCost("claude-sonnet-4-6", { inputTokens: 200, outputTokens: 40 }).toFixed(6));
+  assert.equal(res.receipt.spend_by_provider.openai, billed, "billed rejection attributed to openai");
+  assert.equal(res.receipt.spend_by_provider.anthropic, served, "served call attributed to anthropic");
+  assert.ok(Math.abs(res.total_cost - (billed + served)) < 1e-6, "run total includes both");
+});
+
+test("agent run: a failed turn with nothing billed costs nothing", async () => {
+  fresh({ GROQ_API_KEY: "gsk_cost_billed8_aaaaaaaaaaaaaaaaaa" });
+  mockFetch(() => ({ status: 503, body: {} }));
+  const res = await runAgent({
+    profile: {
+      name: "cost-nobill-fail",
+      model: { provider: "auto", id: "auto" },
+      system: "s",
+      tools: [{ builtin: "finish" }],
+      limits: { max_steps: 3, max_tokens: 100000, max_wall_seconds: 60, max_usd: 0.5 },
+      policy: { verify_before_finish: "off" },
+      stop_conditions: ["explicit_final_answer"],
+    },
+    objective: TRIVIAL,
+    resolvedModel: { provider: "freepool", id: "cost", resolution: "cost-routed" },
+    resolvedChain: [{ provider: "freepool", id: "cost", resolution: "cost-routed", pool: { paid: [] } }],
+  });
+  assert.equal(res.stop_reason, "model_error");
+  assert.equal(res.total_cost, 0);
+  assert.deepEqual(res.receipt.spend_by_provider ?? {}, {});
+});
