@@ -12,5 +12,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 export declare function createServer(): McpServer;
 /** Start the server over stdio. */
+/**
+ * Usage text for `eve-mcp --help`. The server itself speaks only MCP over
+ * stdio, so a bare `--help`/`-h` must be answered here instead of starting
+ * the transport (which would wait on stdin forever).
+ */
+export declare function mcpHelpText(): string;
 export declare function main(): Promise<void>;
 //# sourceMappingURL=server.d.ts.map
