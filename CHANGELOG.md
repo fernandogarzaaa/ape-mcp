@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased (freepool provider + cost-aware routing)
+## 1.2.0 (2026-10-13)
+
+### CLI fixes
+
+- `ape-mcp run`: invalid JSON args (`'{bad'`), non-object JSON (`'[1]'`) and stray tokens that are not `key=value` now fail with exit 2 and a message on stderr; previously they were silently dropped and the tool ran with `{}`.
+- `ape-mcp run`: exits 1 when the tool reports an error (`structuredContent.ok === false`) or still needs confirmation, so scripts/CI can detect failures; the JSON result is still printed. Unknown tools already exited 1.
+- Unknown subcommands (e.g. `ape-mcp doctr`) print usage and exit 2 instead of falling through to the stdio MCP server and waiting silently on stdin.
+
+### Freepool provider + cost-aware routing
 
 - Catalog refreshed live against Groq (2026-10-10): retired `llama-3.1-8b-instant`,
   `llama-3.3-70b-versatile`, `qwen/qwen3-32b`, `kimi-k2-instruct-0905`; added
@@ -55,7 +63,7 @@
   attaches `status` to upstream errors (Anthropic too).
 - Docs: `docs/freepool.md`. Credits FreeLLMAPI (MIT) for the design ideas.
 
-## Unreleased (security hardening + integrity pass, toward 1.1.3)
+### Security hardening + integrity pass
 
 - Ledger redaction at every persistence boundary (step summaries live +
   imported, run outcomes, evidence excerpts, ADAM outcome memory) with

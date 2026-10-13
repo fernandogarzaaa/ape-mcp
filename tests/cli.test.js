@@ -136,3 +136,26 @@ test("cli: every tool property is documented; import bundle is typed", () => {
   const imp = tools.find((t) => t.name === "ape_agent_import");
   assert.deepEqual(imp.inputSchema.properties.bundle.type, ["object", "string"]);
 });
+
+test("cli: run rejects bad JSON, non-object JSON and stray tokens with exit 2", () => {
+  const bad = spawnSync("node", [bin, "run", "ape_status", "{bad"], { encoding: "utf8", timeout: 15000 });
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /invalid JSON args/);
+  assert.equal(spawnSync("node", [bin, "run", "ape_status", "[1]"], { encoding: "utf8", timeout: 15000 }).status, 2);
+  const stray = spawnSync("node", [bin, "run", "ape_status", "notjson"], { encoding: "utf8", timeout: 15000 });
+  assert.equal(stray.status, 2);
+  assert.match(stray.stderr, /unexpected argument 'notjson'/);
+  assert.equal(spawnSync("node", [bin, "run", "ape_status", "{}"], { encoding: "utf8", timeout: 15000 }).status, 0);
+});
+
+test("cli: run exits 1 when the tool reports an error, JSON still printed", () => {
+  const r = spawnSync("node", [bin, "run", "ape_report", "ref=/etc"], { encoding: "utf8", timeout: 15000 });
+  assert.equal(r.status, 1);
+  assert.equal(JSON.parse(r.stdout).structuredContent.ok, false);
+});
+
+test("cli: unknown subcommand fails fast with exit 2 (no stdio fallthrough)", () => {
+  const r = spawnSync("node", [bin, "doctr"], { encoding: "utf8", timeout: 15000, input: "" });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /unknown command: doctr/);
+});
