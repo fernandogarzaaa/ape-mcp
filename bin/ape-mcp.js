@@ -59,6 +59,17 @@ if (cmd && cmd.startsWith("-") && cmd !== "--http" && cmd !== "--claim-as") {
   console.error(`unknown flag: ${cmd}\n\n${USAGE}`);
   process.exit(2);
 }
+// Unknown subcommands (typos like `ape-mcp doctr`) used to fall through to the
+// stdio server and sit silently waiting on stdin; fail fast instead.
+const COMMANDS = new Set(["console", "tui", "serve", "run", "doctor", "mods", "trace", "templates", "prune"]);
+if (cmd && !cmd.startsWith("-") && !COMMANDS.has(cmd) && !args.includes("--http")) {
+  console.error(`unknown command: ${cmd}\n\n${USAGE}`);
+  process.exit(2);
+}
+function runUsageError(msg) {
+  console.error(`error: ${msg}\nusage: ape-mcp run <tool> '<json-args>' | ape-mcp run <tool> k=v [...]`);
+  process.exit(2);
+}
 // stdio is one client per process: remember its clientInfo from initialize so
 // tool calls can resolve the automatic claim identity fallback.
 let stdioClientInfo = null;
@@ -118,9 +129,12 @@ if (args.includes("--http")) {
 } else if (cmd === "run") {
   const tool = rest[0] ?? "ape_status";
   let a = {};
-  const toks = rest.slice(1);
+  const toks = rest.slice(1).filter((t) => t !== "--yes");
+  if (tool.startsWith("-")) runUsageError(`expected a tool name, got '${tool}'`);
   if (toks.length === 1 && toks[0].trim().startsWith("{")) {
-    try { a = JSON.parse(toks[0]); } catch { a = {}; }
+    // Bad JSON used to become {} silently and run the tool with no arguments.
+    try { a = JSON.parse(toks[0]); } catch (e) { runUsageError(`invalid JSON args: ${e.message}`); }
+    if (a === null || typeof a !== "object" || Array.isArray(a)) runUsageError("JSON args must be an object");
   } else if (toks.length) {
     let cur = null;
     for (const t of toks) {
@@ -131,6 +145,8 @@ if (args.includes("--http")) {
         a[cur] = t.slice(eq + 1);
       } else if (cur) {
         a[cur] += " " + t;
+      } else {
+        runUsageError(`unexpected argument '${t}' (pass a JSON object or key=value pairs)`);
       }
     }
     for (const k of Object.keys(a)) {
@@ -149,6 +165,9 @@ if (args.includes("--http")) {
     process.exit(1);
   }
   console.log(JSON.stringify(out, null, 2));
+  // A tool that reports an error (structuredContent.ok === false) or still
+  // needs confirmation is a failed command for scripts/CI: exit 1, JSON kept.
+  if (out?.resultType !== "complete" || out?.structuredContent?.ok === false) process.exitCode = 1;
 } else if (cmd === "doctor") {
   const { egressHosts } = await import("../src/agent/providers.js");
   const { connectorHosts } = await import("../src/connectors.js");
