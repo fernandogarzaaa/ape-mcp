@@ -26,7 +26,7 @@ import { computeEnvDigest } from "../evidence/runner.js";
 import type { ExperimentResult } from "./runner.js";
 import type { EvalSpec } from "./spec.js";
 
-export const GENESIS_VERSION = "0.3.0";
+export const GENESIS_VERSION = "0.4.0";
 export const BUNDLE_DIGEST_VERSION = 2;
 
 export interface Manifest {
@@ -186,6 +186,11 @@ function collectBundleTree(dir: string): Record<string, string> {
       for (const e of readdirSync(full).sort()) walk(rel ? `${rel}/${e}` : e);
     } else if (st.isFile()) {
       if (rel === "DIGEST" || rel === "DIGEST.legacy") return;
+      // Attestations are third-party endorsements appended after the bundle
+      // was sealed; they are covered by their own signed bundle_digest
+      // (attest.ts digestBundle excludes this directory too). Counting them
+      // here would make every attested bundle fail its own tree check.
+      if (rel === "attestations" || rel.startsWith("attestations/")) return;
       out[rel] = `sha256:${createHash("sha256").update(readFileSync(full)).digest("hex")}`;
     }
   };
