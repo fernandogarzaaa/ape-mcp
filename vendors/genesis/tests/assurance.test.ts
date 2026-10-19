@@ -44,7 +44,7 @@ describe("taxonomy", () => {
   });
 
   it("registers a suite per domain", () => {
-    expect(suiteNames()).toEqual(["behavioral", "code", "json", "math"]);
+    expect(suiteNames()).toEqual(["behavioral", "code", "code-py", "json", "math"]);
   });
 });
 
@@ -206,6 +206,54 @@ describe("verifier adapter", () => {
     const call = runner.calls[0];
     expect(call?.command[1]).toContain("task.json");
     expect(call?.command[2]).toContain("completion.txt");
+  });
+
+  it("explains an unparseable verdict with exit code and the failing stderr line", async () => {
+    const runner = new FakeRunner(
+      {},
+      {
+        exit_code: 1,
+        stdout: "",
+        stderr: "node:internal/modules/cjs/loader:1228\nError: Cannot find module '/x/verifier.mjs'\n    at Module._resolveFilename\n\nNode.js v22.0.0\n",
+      },
+    );
+    const probe = codeSuite.probes[0];
+    if (!probe) throw new Error("fixture");
+
+    const response = await new VerifierAdapter(
+      { name: "t", command: ["x", "{task_file}", "{completion_file}"], accept: { kind: "json_reward" }, timeout_ms: 100 },
+      runner,
+    ).judge(probe);
+
+    expect(response.observed).toBe("error");
+    expect(response.note).toContain("not parseable JSON");
+    expect(response.note).toContain("exit 1");
+    expect(response.note).toContain("Cannot find module");
+    expect(response.note).not.toContain("Node.js v22");
+  });
+
+  it("hints --accept exit_zero when a verifier exits cleanly with no output", async () => {
+    const probe = codeSuite.probes[0];
+    if (!probe) throw new Error("fixture");
+    const judge = (result: { exit_code: number; stdout: string; stderr: string }) =>
+      new VerifierAdapter(
+        { name: "t", command: ["x", "{task_file}", "{completion_file}"], accept: { kind: "json_reward" }, timeout_ms: 100 },
+        new FakeRunner({}, result),
+      ).judge(probe);
+
+    for (const exit_code of [0, 1]) {
+      const silent = await judge({ exit_code, stdout: "", stderr: "" });
+      expect(silent.observed).toBe("error");
+      expect(silent.note).toContain("empty stdout");
+      expect(silent.note).toContain("--accept exit_zero");
+    }
+    // A crash (stderr present) or an unusual exit code is not an exit-code verifier.
+    const crashed = await judge({ exit_code: 1, stdout: "", stderr: "Error: boom" });
+    expect(crashed.note).not.toContain("--accept exit_zero");
+    const killed = await judge({ exit_code: 137, stdout: "", stderr: "" });
+    expect(killed.note).not.toContain("--accept exit_zero");
+    const chatty = await judge({ exit_code: 0, stdout: "ok", stderr: "" });
+    expect(chatty.note).not.toContain("--accept exit_zero");
   });
 
   it("parses JSON embedded in surrounding output", () => {
