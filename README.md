@@ -17,6 +17,8 @@ npm i -g ape-mcp
 ape               # ASCII banner → guided onboarding → menu (needs a terminal)
 ```
 
+> npm note (2026-10-25): `npm i -g ape-mcp` currently installs 1.1.2, the latest published release. Version 1.2.0 is tagged in this repo, but its npm publish is still waiting on owner approval, so it is not on npm yet. For 1.2.0, install from source (see [Install](docs/install.md)) until the publish lands.
+
 Prefer scripted commands? `ape-mcp doctor`, `ape-mcp run …`, and `ape-mcp --http` work as before — `ape` with arguments behaves exactly like `ape-mcp`. `ape-mcp tui` opens the same terminal UI as `ape` from inside scripts and menus.
 
 

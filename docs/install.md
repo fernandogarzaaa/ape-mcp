@@ -22,6 +22,8 @@ ape                   # terminal UI (needs a terminal; same as `ape-mcp tui`)
 ape-mcp tui           # terminal UI via the operator CLI
 ```
 
+> npm note (2026-10-25): `npm i -g ape-mcp` currently installs 1.1.2, the latest published release. Version 1.2.0 is tagged in this repo, but its npm publish is still waiting on owner approval, so it is not on npm yet. For 1.2.0, install from source below until the publish lands.
+
 The TUI ships as a prebuilt binary for win-x64 (`vendors/ape-tui/win-x64/`);
 on macOS/Linux it builds once from source on first launch (needs a Rust
 toolchain), and CI prebuilts per platform are still open (M5 packaging).
