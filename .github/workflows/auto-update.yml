@@ -85,14 +85,7 @@ jobs:
         env:
           CHANGED: ${{ needs.resolve.outputs.changed }}
           SHAS: ${{ needs.resolve.outputs.shas }}
-        run: |
-          node -e "
-          const fs = require('fs');
-          const changed = JSON.parse(process.env.CHANGED), shas = JSON.parse(process.env.SHAS);
-          let txt = fs.readFileSync('vendors/manifest.yaml','utf8');
-          for (const n of changed) txt = txt.replace(new RegExp('(  '+n+':\\n(?:.*\\n)*?    pin: )\\S+'), '\$1'+shas[n]);
-          fs.writeFileSync('vendors/manifest.yaml', txt);
-          "
+        run: node scripts/update-manifest-pins.mjs
       - name: Rebuild dists
         run: |
           npm --prefix vendors/genesis install --ignore-scripts --no-audit --no-fund
@@ -106,7 +99,7 @@ jobs:
           npm install --omit=dev --no-audit --no-fund
           node bin/ape-mcp.js doctor
           node scripts/smoke.mjs
-          node --test tests/ape.test.js
+          npm test
           node scripts/fetch-adam.mjs --check || true
       - name: Close superseded auto-update PRs
         # One open auto-update PR at a time: pins on main stay stale until a
