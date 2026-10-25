@@ -19,6 +19,10 @@ export declare function contrastRatio(l1: number, l2: number): number;
 export declare function parseHexColor(hex: string): [number, number, number] | null;
 /**
  * Sample luminances within a box (subsampled grid). Returns sorted values.
+ *
+ * The grid scales with the box: a fixed grid misses thin glyph strokes when
+ * a large box holds small text (e.g. a table cell), and the fg/bg percentile
+ * estimate below then reads background-vs-background as "unreadable".
  */
 export declare function sampleLuminances(img: DecodedImage, box: BoundingBox, gridSize?: number): number[];
 /**
