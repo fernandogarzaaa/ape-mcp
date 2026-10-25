@@ -44,3 +44,18 @@ secrets (never share bearer tokens or API keys in a report; rotate any
 that were exposed), and vulnerabilities in upstream dependencies without
 a demonstrable path through APE (report those upstream; dependency bumps
 are still welcome as PRs).
+
+## Accepted risks
+
+- `lru` 0.12.5, transitive via `ratatui` 0.29.0 in `tui/Cargo.lock`
+  (audit finding ape-mcp-003, 2026-10-25; Dependabot alert 1, low).
+  Advisory RUSTSEC-2026-0002: `IterMut` violates Stacked Borrows,
+  patched in `lru` >= 0.16.3 per RustSec. No `ape-tui` code in `tui/src`
+  references `lru` directly or calls its `IterMut`, and the TUI is a
+  local frontend only, so no untrusted input reaches the affected
+  iterator through APE. Not bumped yet because `ratatui` 0.29 pins
+  `lru` 0.12: a direct `lru` bump cannot displace the transitive
+  0.12.5, and moving off `ratatui` 0.29 is a breaking migration that
+  needs its own PR with `cargo test` verification. The Dependabot
+  alert stays open until that migration lands; this note records the
+  acceptance, it does not clear the alert.
