@@ -5,7 +5,7 @@
 sources:
   genesis:
     repo: https://github.com/fernandogarzaaa/genesis
-    pin: d85012a21aa9a6b0ce2637cddb473165fc741efe
+    pin: 21fecc21e62629f37a721a5bc30a4787561df38e
     local: C:\Users\garza\genesis_repo
     dest: vendors/genesis
     license: MIT
@@ -18,7 +18,7 @@ sources:
       - adapters/{PROTOCOL.md,node,python} + tools/hub-audit + benchmarks/* + templates/ci + fixtures + examples + tests + docs + plugins/* (4-host)
   eve:
     repo: https://github.com/fernandogarzaaa/experience-validation-engine
-    pin: 1802917982158dd2b6653e16c8cf23590f92d9fc
+    pin: a41458e12382b8bcfba2498518380e3a80a29433
     local: E:\workspace\experience-validation-engine
     dest: vendors/eve
     license: MIT
@@ -29,7 +29,7 @@ sources:
       - protocol/cp1 (SPEC 1.1.0 + schema + fixtures + MANIFEST) + 33 docs guides
   adam:
     repo: https://github.com/fernandogarzaaa/ADAM
-    pin: d2f09a2e159e221527d28862c398ab57515e10bd
+    pin: 6e7b0cf0f3400f27c23af1bd3dd491abd9b3ac65
     local: C:\Users\garza\ADAM
     dest: vendors/adam
     license: MIT
@@ -42,7 +42,7 @@ sources:
       - .claude-plugin/* + .mcp.json + protocol/cp1 (12 types + 15 events) + ARCHITECTURE.md + DESIGN.md + ROADMAP.md
   skein:
     repo: https://github.com/fernandogarzaaa/skein
-    pin: 21a2a26a2ad2c88e8fdf9f175e2752a85e8ff0cc
+    pin: d9d233187c7a202fdb09f33719b0e9cfeaf40d87
     local: E:\skein
     dest: vendors/skein
     license: MIT
