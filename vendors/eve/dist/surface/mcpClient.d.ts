@@ -16,8 +16,8 @@
  * substitute an in-process fixture server over `InMemoryTransport` without
  * spawning anything.
  */
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { type Implementation, type ServerCapabilities, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import { type Implementation, type ServerCapabilities, type Tool } from "@modelcontextprotocol/client";
+import type { Server } from "@modelcontextprotocol/server";
 /** How a tool call ended, flattened to what an operator could perceive. */
 export interface McpCallOutcome {
     /** The server answered with a tool-level error result (`isError: true`). */
@@ -79,7 +79,7 @@ export declare function connectMcpServer(target: string): Promise<McpConnection>
  */
 export declare function connectMcpInProcess(server: Server, target?: string): Promise<McpConnection>;
 /** JSON-RPC error codes the evaluators classify on. */
-export { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+export { SdkError as McpError, SdkErrorCode as ErrorCode } from "@modelcontextprotocol/client";
 /** Is this error the transport dying underneath a call (a server crash)? */
 export declare function isConnectionClosedError(error: unknown): boolean;
 /** Is this error the client giving up on an unanswered request (a hang)? */
