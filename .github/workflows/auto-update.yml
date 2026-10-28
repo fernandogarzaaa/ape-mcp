@@ -1,11 +1,11 @@
 name: auto-update
-# Keeps vendors/ in sync with the 4 source repos. Triggers:
-#  - schedule (6h backstop): compares HEAD SHAs vs vendors/manifest.yaml pins
+# Keeps vendors/ in sync with the 4 source repos. Triggers (event-only):
+#  No schedule backstop: a sync runs only when a source push dispatches it,
+#  or when a human runs it manually.
 #  - repository_dispatch (instant): source repos fire `source-updated` on push to main
 #  - workflow_dispatch (manual): optional `repos` csv filter, `force` to re-sync anyway
 # Always ends in ONE batched PR for human review â€” never auto-merges.
 on:
-  schedule: [{ cron: "0 */6 * * *" }]
   workflow_dispatch:
     inputs:
       repos: { description: "csv subset (default: all)", required: false, default: "" }
