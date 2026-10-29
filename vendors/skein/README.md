@@ -1,4 +1,4 @@
-# Skein v0.2 — parallel task-graph orchestration for coding agents
+# Skein v0.3.1 — parallel task-graph orchestration for coding agents
 
 Skein lets multiple coding agents claim and work nodes of a shared task
 graph in parallel without stepping on each other, using git worktrees for
@@ -32,16 +32,29 @@ How it works:
   **bounds** context growth across a chain of nodes; it does not eliminate
   context degradation.
 
-v0.1 ships exactly one backend adapter: **Claude Code**, invoked headlessly
+v0.1 shipped exactly one backend adapter: **Claude Code**, invoked headlessly
 (`claude --print`) against the node's worktree.
 
 ## Install
 
 ```bash
+python3 --version  # must be 3.11 or newer
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-This installs the `skein` entrypoint (requires Python ≥ 3.9 and git).
+Use a virtual environment: on Debian/Ubuntu, installing into the system
+Python is blocked (`externally-managed-environment`). The package has zero
+runtime dependencies, so the install itself is tiny. If `python3 -m venv`
+fails with `ensurepip` errors, install the venv module first:
+`sudo apt install python3-venv` (Debian/Ubuntu).
+
+Windows: use `py -m venv .venv` (or `python -m venv .venv`) and activate
+with `.venv\Scripts\activate`; the `python3` command used in examples below
+becomes `py` (or `python`) on Windows.
+
+This installs the `skein` entrypoint (requires Python ≥ 3.11 and git).
 
 ## Usage walkthrough
 
@@ -55,14 +68,14 @@ skein node add auth-3 --title "Add session login" \
   --goal "Users can log in with email+password and get a session." \
   --context "Python project, follow existing patterns in src/." \
   --constraints "No new dependencies." \
-  --completion "python -c \"print('login check ok')\"" \
+  --completion "python3 -c \"print('login check ok')\"" \
   --blast-radius "src/auth/**"
 
 skein node add profile-1 --title "Profile page" \
   --goal "Logged-in users see their profile." \
   --context "Python project." \
   --constraints "No new dependencies." \
-  --completion "python -c \"print('profile check ok')\"" \
+  --completion "python3 -c \"print('profile check ok')\"" \
   --depends-on auth-3 --blast-radius "src/profile/**"
 
 skein graph
@@ -70,7 +83,12 @@ skein status
 
 # claim a node (fails cleanly if dependencies aren't done or a
 # blast-radius overlap exists with another claimed node)
+# NOTE: many systems only ship `python3` (no `python`), hence python3 above.
 skein claim auth-3 --agent-id agent-1
+# Actor identity: commands that act on a claim (release, run, ship) check
+# SKEIN_ACTOR against the claim holder. When you claim with --agent-id,
+# export the same id so later commands recognize you:
+export SKEIN_ACTOR=agent-1
 skein release auth-3   # release a claim (only claimed/in-progress nodes)
 
 # full supervised path: claim (if needed) + worktree + backend adapter +
@@ -96,6 +114,29 @@ skein ship auth-3
 skein ship --all            # every done node with a result, in order
 skein release v0.1.0        # annotated tag + release event in the log
 ```
+
+Notes on authoring nodes:
+
+- `--depends-on` and `--blast-radius` accept comma-separated values and
+  can be repeated (`--depends-on a --depends-on b` == `--depends-on a,b`).
+- **Hardening the completion gate with `@nonce`.** An exit code of 0 is
+  forgeable: agent code that calls `sys.exit(0)` / `process.exit(0)` on
+  import ends your test process "successfully" before any assertion
+  runs. Prefix a completion line with `@nonce` and Skein exports a fresh
+  random `SKEIN_GATE_NONCE` for that command and requires it on its own
+  stdout line; print it as the *last* step of your harness, after all
+  assertions:
+
+  ```bash
+  skein node add solve-1 ... --completion "@nonce python check.py"
+  # check.py ends with: print(os.environ["SKEIN_GATE_NONCE"])
+  # (pytest: print it from pytest_sessionfinish when exitstatus == 0)
+  ```
+
+  The nonce is never written to evidence (shown as `<nonce>`); evidence
+  records `nonce_ok`. Code that deliberately reads `SKEIN_GATE_NONCE`
+  can still forge it, so for adversarial agents also keep held-out tests
+  outside the worktree.
 
 While an agent runs, a human editing (or deleting) its node appends a
 `human_interrupt` event and the supervisor terminates the agent process
@@ -184,6 +225,12 @@ skein sync
   profiles + registry), `engine.py` (generic profile-driven adapter),
   per-backend profile entries
 - `src/skein/cli.py` — the CLI
+- `src/skein/ids.py` — strict node-ID validation, filesystem-safe path resolution
+- `src/skein/locks.py` — cross-process file locking for the control plane
+- `src/skein/planner.py` — goal description to reviewable DAG draft (heuristic or LLM)
+- `src/skein/redact.py` — secret redaction at event/evidence write boundaries
+- `src/skein/runtime.py` — bounded, killable subprocess execution for backends
+- `src/skein/shipping.py` — ship done nodes' result commits, tag releases
 
 ## Backend support matrix
 
@@ -251,6 +298,40 @@ warning, never a crash. Custom profiles are unverified by default —
 marking one verified is the owner's claim about their own binary,
 stated in its source note.
 
+### Backend network egress under the scrubbed environment
+
+Backends run with a scrubbed environment: `PATH`, `HOME`, `LANG`, and
+`SKEIN_*` variables only. Ambient secrets and proxy settings are
+deliberately not inherited, so on hosts where egress requires a proxy
+a backend that makes HTTPS calls will fail without extra setup.
+
+The supported pattern is the `SKEIN_*` passthrough contract: export the
+values the backend needs with a `SKEIN_` prefix, and map them onto the
+standard names inside your backend wrapper:
+
+```bash
+export SKEIN_HTTPS_PROXY="$https_proxy" SKEIN_HTTP_PROXY="$http_proxy" \
+       SKEIN_NO_PROXY="$no_proxy" SKEIN_ALL_PROXY="$all_proxy"
+export SKEIN_ACTOR=agent-1
+skein run my-node --agent-id agent-1
+```
+
+```python
+# inside the backend wrapper, before any network call:
+for std, sk in (("https_proxy", "SKEIN_HTTPS_PROXY"),
+                ("http_proxy", "SKEIN_HTTP_PROXY"),
+                ("no_proxy", "SKEIN_NO_PROXY"),
+                ("all_proxy", "SKEIN_ALL_PROXY")):
+    if os.environ.get(sk):
+        os.environ[std] = os.environ[sk]
+```
+
+This is proven, not hypothetical: the production-readiness dogfood ran
+a real `pr_auditor` backend (a script calling the GitHub API live for
+PR merge state and check runs) across 5 nodes with exactly this
+mapping. Without the mapping the API calls fail; with it, all 5 nodes
+completed and their evidence verified independently against the API.
+
 ## Backend note (proven against the real CLI)
 
 - Proven with the real `claude` CLI binary (2.1.248) driving a real
@@ -296,6 +377,8 @@ decide — and `blast_radius` overlap itself is checked heuristically.
 ## Development
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[test]"
 python -m pytest
 ```
