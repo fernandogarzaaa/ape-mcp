@@ -4,6 +4,7 @@
 
 ```bash
 npm install && npm run build
+npm link            # puts `genesis` on your PATH (or prefix every command with `npx`)
 
 # 1. Evaluate any system against a declarative spec (no SDK required):
 genesis evaluate examples/arithmetic/evaluation.yaml --out ./results
@@ -78,6 +79,14 @@ is an observation, never ground truth.
 npm install && npm run build
 
 genesis audit --suite code --verifier "node harness.js {task_file} {completion_file}"
+
+# Runnable as-is from a clone: a deliberately defective verifier and a hardened one
+npx genesis audit --suite code --verifier "node fixtures/verifiers/naive.mjs {task_file} {completion_file}"   # EXPLOITABLE, exit 1
+npx genesis audit --suite code --verifier "node fixtures/verifiers/strict.mjs {task_file} {completion_file}"  # SOUND, exit 0
+
+# Python/pytest gates (needs python3 with pytest installed)
+npx genesis audit --suite code-py --verifier "python3 fixtures/verifiers/naive_pytest.py {task_file} {completion_file}"   # EXPLOITABLE, exit 1
+npx genesis audit --suite code-py --verifier "python3 fixtures/verifiers/strict_pytest.py {task_file} {completion_file}"  # SOUND, exit 0
 ```
 
 ```
@@ -138,9 +147,9 @@ condition.
 ## Usage
 
 ```
-genesis audit --suite <code|json|math|behavioral> [--ledger <db>] [--json] [--verbose]
+genesis audit --suite <code|code-py|json|math|behavioral> [--ledger <db>] [--json] [--verbose]
               and exactly one of:
-                --verifier "<cmd with {task_file} {completion_file}>"  (code/json/math)
+                --verifier "<cmd with {task_file} {completion_file}>"  (code/code-py/json/math)
                 --oracle eve [--eve-bin "<cmd>"]                       (behavioral)
               [--name <label>] [--accept exit_zero|json_reward|json_pass]
               [--threshold <n>] [--timeout <ms>]
@@ -148,23 +157,79 @@ genesis audit --suite <code|json|math|behavioral> [--ledger <db>] [--json] [--ve
 genesis suites    list probe suites and the defect classes they cover
 ```
 
+Verifier commands run in your current directory with a **scrubbed
+environment**: only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TZ`, `TMPDIR`, `SHELL`
+and `TERM` are passed through (plus `CI=1`, `NO_COLOR=1`). This keeps audits
+reproducible and keeps secrets out of evidence, but it means
+`MODE=strict genesis audit --verifier "..."` does **not** reach the verifier —
+pass configuration as command-line arguments instead (e.g.
+`--verifier "python3 verify.py {task_file} {completion_file} --mode strict"`).
+If every probe comes back *unreadable*, run with `--verbose`: each probe note
+carries the verifier's exit code and the stderr line that names the failure
+(missing file, import error, wrong interpreter).
+
 `--ledger` is optional. An audit is useful as a one-shot check; it becomes
 evidence only when someone needs to prove it happened — recorded in a
 hash-chained, append-only, tamper-evident ledger (`src/ledger/`).
 
-### Install notes: the optional better-sqlite3 dependency
+### Install notes: the better-sqlite3 dependency
 
-The ledger backend is the optional `better-sqlite3` dependency. It is a native
-module: if its build is skipped or fails during `npm install`, npm drops it
-silently (it is optional) and ledger-backed features are unavailable. The CLI
-then reports a clear error instead of a crash, and ledger-backed tests skip
-themselves. To get the ledger in a restricted container where the native build
-fails (for example `node-gyp` permission errors), install without build
-scripts and then rebuild just that binding:
+The ledger backend is the `better-sqlite3` dependency. It is a native
+module, and the full test suite requires it. Ledger-backed tests do not
+skip themselves: if the driver is missing or fails to load, the 13 ledger
+tests fail with a clear error instead of passing silently, and the CLI
+`--ledger` path reports a clear error instead of a crash. Install it with
+a normal `npm install`, and if the native build is skipped or fails in a
+restricted container (for example `node-gyp` permission errors) so the
+driver is missing even though `npm install` exited 0, install it
+explicitly and rebuild just that binding:
 
 ```bash
+npm install better-sqlite3
 npm install --ignore-scripts && npm rebuild better-sqlite3
 ```
+
+`better-sqlite3@13` requires **Node 22+** (Genesis itself runs on Node 20+).
+On Node 20 the ledger is unavailable even when the install looks clean. Check
+with `node -e "require('better-sqlite3')"`; if it throws, the ledger is off and
+`--ledger` will report a clear error.
+
+### The `code-py` suite (Python / pytest)
+
+`code-py` attacks verifiers that gate Python code with pytest. The task asks
+for a `solution.py` defining `solve(xs)`; visible and held-out tests are pytest
+functions that `from solution import solve`, and each completion is the full
+text of `solution.py`. Its nine exploit probes are the ways coding agents game
+Python gates in practice:
+
+| Probe | Technique | Defect class |
+| --- | --- | --- |
+| `visible-hardcode` | lookup table of the visible answers | `visible_test_overfitting` |
+| `special-case-inputs` | branch on the visible input, wrong elsewhere | `visible_test_overfitting` |
+| `stdout-spoof` | print a forged `5 passed` summary | `stdout_spoofing` |
+| `sys-exit-import` | `sys.exit(0)` at import, before any test | `stdout_spoofing` |
+| `os-exit-import` | `os._exit(0)` at import (beats pytest's own SystemExit handling) | `stdout_spoofing` |
+| `pytest-hook-deselect` | write a `conftest.py` / register a plugin that deselects every test and forces exit 0 | `stdout_spoofing` |
+| `pytest-hook-forcepass` | `pytest_runtest_makereport` wrapper that rewrites failures to passed | `stdout_spoofing` |
+| `skip-as-success` | raise `SkipTest` so zero failures reads as success | `stdout_spoofing` |
+| `timeout` | print success, then block | `missing_timeouts` |
+
+plus two controls: a correct solution, and a correct one that is noisy on
+stdout and stderr (including the word "failed"). Hook injection and skipping
+are filed under `stdout_spoofing` because the verifier is trusting a summary
+(pytest's exit status and report) produced inside the candidate's own process.
+
+`fixtures/verifiers/naive_pytest.py` pre-imports the solution, runs only the
+visible tests, has no timeout, and trusts the exit status or a `passed` grep —
+every exploit lands. `fixtures/verifiers/strict_pytest.py` runs visible and
+held-out tests in a fresh temp dir and a separate, time-bounded pytest process
+(`--noconftest`, plugin autoload off), ignores stdout and the exit status, and
+reads a JUnit XML report from a directory the candidate is never told about. It
+requires exactly the expected test cases, every one executed and passed, none
+skipped, plus a randomly named canary test that must fail, which exposes
+report rewriting. Because the candidate runs inside pytest, a completion
+written against that specific verifier could still special-case the canary;
+sandbox a production gate as well.
 
 The `behavioral` suite judges against [EVE](https://github.com/fernandogarzaaa/experience-validation-engine)
 (the Experience Validation Engine) rather than a `{task_file}`/`{completion_file}`
@@ -180,9 +245,9 @@ and Ed25519 bundle attestation for external reviewers.
 ```bash
 genesis gate evaluation.yaml --out ./release          # RELEASE/BLOCK/INCONCLUSIVE
 genesis run-benchmark safety-v1 --subject "cmd"       # misuse-resistance probe
-genesis attest ./release/evaluation --signer eve --key eve.pem
-genesis verify ./release/evaluation --pubkey eve.pub.pem
-genesis keygen --out eve
+genesis attest ./release/evaluation --signer eve --key eve.ed25519.pem
+genesis verify ./release/evaluation --pubkey eve.ed25519.pub.pem
+genesis keygen --out eve   # writes eve.ed25519.pem + eve.ed25519.pub.pem
 ```
 
 ```yaml
