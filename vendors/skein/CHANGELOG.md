@@ -1,6 +1,163 @@
 # Changelog
 
-## Unreleased (Phase 8: planner and automatic DAG generation)
+## Unreleased
+
+### Added
+- **Claude Code plugin** (`plugin/`, marketplace manifest in
+  `.claude-plugin/`): `/skein:status`, `/skein:run`, `/skein:ship` and
+  `/skein:dashboard` commands plus a model-invoked `orchestrate` skill
+  that maps a work-units table onto `skein node add`. Install with
+  `/plugin marketplace add fernandogarzaaa/skein` then
+  `/plugin install skein@skein`. `tests/test_plugin.py` checks that every
+  `skein` invocation in the plugin markdown matches the real parser.
+- **Skills** (`skein skills`): agents and humans save reusable procedures
+  as executable scripts under `.skein/skills/` and later agents run them
+  instead of re-deriving the steps. Prompts carry one line per skill
+  (name, stage, description, usage), never the script bodies, so the
+  token cost stays flat as the library grows; `skein skills show` prints
+  a body on demand and `skein skills list` reports index-vs-body token
+  estimates. Trust follows an evidence-gated lifecycle borrowed from
+  ADAM's skill engine: `proposed` on `add` -> `tested` after the script's
+  self-test passes (evidence file kept) -> `promoted` only by an explicit
+  `promote` once the pass rate meets `skill_promote_threshold`. Every
+  transition is a `skill` event carrying the script's sha256; editing a
+  promoted script demotes it to `modified` until re-added and re-tested,
+  and a failing self-test on trusted content revokes the promotion.
+  `run` goes through the bounded runtime (capped output, whole-tree kill
+  on timeout) in the caller's directory; from inside an agent worktree,
+  skills commands resolve the main repository's control plane so a skill
+  proposed mid-run never rides into a result commit. Also `retire` /
+  `--reject`, `GET /api/skills`, and `skein skills install`, which
+  writes a lean `.claude/skills/skein/SKILL.md` (or codex/agents/
+  gemini/opencode) in the style of graphify's installer so the assistant
+  knows to consult the index first. New config keys:
+  `skill_promote_threshold`, `skill_test_timeout_seconds`,
+  `skill_run_timeout_seconds`, `skills_in_prompt`,
+  `skills_index_max_lines`.
+
+Fixes from an end-to-end audit in a fresh repository.
+
+### Fixed
+- `skein init` did not ignore `.skein/worktrees/` or `.skein/evidence/`,
+  so every event commit recorded each agent worktree as a gitlink and
+  committed every evidence log. `init` now appends both rules to
+  `.gitignore` (preserving existing content), every skein-authored commit
+  excludes them by pathspec even in repos initialized before this fix,
+  and `skein doctor` reports a repo that still tracks them with the
+  `git rm -r --cached` command to run.
+- The post-commit hook written by `init` had no exec bit, so git printed
+  "hook was ignored because it's not set as executable" on every user
+  commit.
+- `skein release <node>` on a failed / blocked / needs_human node without
+  `--force` crashed with an uncaught `ValueError` from the write-time state
+  machine. It is now a clean error explaining `--force` (or `node edit
+  --status unclaimed`); `skein run` on such a node says the same instead
+  of "held by 'None'".
+- A non-numeric, zero, negative or fractional `ttl_seconds` (reachable
+  through `POST /api/nodes/<id>/claim`) was stored on the claim and made
+  every later `skein status`, `claim`, `reap` and `run` raise. The claim
+  now rejects it up front (400 from the API), and readers tolerate a bad
+  TTL already in a synced log instead of crashing.
+- `skein plan` wrote the task description into `completion`, which the
+  gate executes as a shell command, so every planned node failed
+  verification with "command not found". The prose now goes to `context`;
+  `completion` is left empty and the draft warns which nodes need one.
+- The canvas "save" button re-sent the node's current status, which the
+  server refuses for done/failed/claimed nodes (manual statuses only), so
+  editing a finished node's title failed. The form now sends only changed
+  fields and offers only settable statuses; the server also ignores an
+  unchanged status.
+- `/node/<id>` rendered empty evidence rows (it read keys the evidence
+  never had); it now shows command, exit code, output file and nonce/abort
+  notes.
+- `skein run --all` looped forever (appending a `rejected` event each
+  pass) when a node passed eligibility but its claim or worktree setup
+  kept failing, e.g. a dependency's result commit was pruned. Such nodes
+  are run once per scheduler invocation and listed under "not run".
+- `skein run` surfaced worktree errors (`WorktreeError`,
+  `BaseCommitUnavailable`) as tracebacks; they are now reported like other
+  run failures, and a claim taken for that run is released with the
+  reason instead of sitting until the lease expires.
+- A git failure while creating the result commit left the node claimed
+  (heartbeats stopped) until reaped; it now records a failed attempt with
+  the git error, so the retry policy applies.
+- `skein claim` then `skein run` later could build the worktree on a
+  dependency result commit that had since been superseded by a re-run;
+  the pinned base is re-checked and the run refuses with a message.
+- Web API edits now validate payload shapes (`depends_on`/`blast_radius`
+  must be lists, `backend_config` an object, `intent` an object of
+  strings); a bare string was previously iterated character by character.
+- `skein ship` reported "conflicted on: (unknown files)" when git refused
+  the merge for a non-conflict reason (dirty checkout, unrelated
+  histories); git's own reason is now passed through.
+- `skein sync` no longer raises `KeyError` on hand-written log lines
+  without an `event_id`.
+- Windows: the derived `graph.json` snapshot was written in text mode, so
+  CRLF translation made its on-disk bytes never match the digest recorded
+  in `graph.meta.json`; every read rebuilt the graph from the log and
+  rewrote `graph.meta.json` (always dirty, O(log) per command). The
+  snapshot is now written as bytes on every platform.
+- The supervisor now waits for an in-flight heartbeat before the final
+  completed/failed transition; a heartbeat racing the completion used to
+  land a spurious `rejected` event after the commit.
+
+## 0.3.1 - 2026-10-13
+
+### Security
+- `skein serve` without `--auth-token` accepted cross-site requests: any web
+  page open in the same browser could POST a text/plain body to
+  `http://127.0.0.1:<port>/api/nodes` (no CORS preflight needed) and add or
+  edit nodes, including `completion` lines that `skein run` later executes.
+  A DNS-rebinding page could also read the graph. Mutations now require
+  `Content-Type: application/json` and a same-origin (or absent) `Origin`
+  header, and a loopback-bound server answers only `Host: localhost /
+  127.0.0.1 / [::1]`. The canvas already sends JSON from its own origin, so
+  nothing changes for normal use.
+
+## 0.3.0 - 2026-10-13
+
+First tagged release since 0.2.0. Rolls up Phases 1-8 and the usability
+fixes below (each listed in its own subsection).
+
+### Canvas (`skein serve`) fixes
+- The 2 s background poll no longer rebuilds the side panel while you
+  are typing in it or while the "+ node" form is open (edits and the
+  add form used to be wiped every two seconds). The graph only
+  re-renders when the event log actually changed.
+- The canvas works with `skein serve --auth-token`: on the first 401 it
+  asks for the token once and keeps it for the tab (sessionStorage), so
+  save/claim/release/delete no longer fail silently on authenticated
+  servers.
+- "saved." / "removed." status messages are shown after the refresh
+  instead of being erased by it.
+- Empty-graph and server-unreachable states; nodes are keyboard
+  focusable (Tab, Enter/Space) with accessible labels; viewport meta
+  and a stacked layout on narrow screens.
+
+### Packaging
+- `requires-python` is now `>=3.10` (CI only tests 3.10-3.12, and the
+  security-patched pytest 9.0.3+ needs 3.10). Test extra pins
+  `pytest>=9.0.3`; uv.lock refreshed. This also unblocks the failing
+  Dependabot uv security update.
+
+### usability + gate hardening
+
+- Fix: repeating `--depends-on` / `--blast-radius` on `skein node add|edit`
+  silently kept only the last value (dropping dependencies). Both flags
+  are now repeatable and comma-separated.
+- Fix: change-policy checks saw a newly created directory as `dir/`
+  (`git status` collapses untracked dirs), so any node creating a new
+  directory was flagged out of blast radius and rejected under
+  `--change-policy strict`. Untracked files are now listed individually.
+- Fix: Python completion checks no longer leave `__pycache__/` in the
+  worktree (it was committed into result commits and shipped).
+- New: `@nonce` completion directive. The gate exports a random
+  `SKEIN_GATE_NONCE` and requires it on stdout, so solutions that exit 0
+  before any assertion runs are rejected.
+- Tests: loopback HTTP in the serve tests now bypasses `HTTP(S)_PROXY`
+  (19 tests failed on hosts with a proxy configured).
+
+### Phase 8: planner and automatic DAG generation
 
 - `skein plan` turns a goal description into a reviewable DAG draft
   (`src/skein/planner.py`). Planning is read-only: nothing touches the
@@ -38,7 +195,7 @@
   task text and the goal; node ids are slugified from titles with
   `-2`/`-3` disambiguation and always pass id validation.
 
-## Unreleased (Phase 7: UI and observability)
+### Phase 7: UI and observability
 
 - Lifecycle rejections are now visible: fenced mutations that raise
   (`claim`, `heartbeat`, `release`, `complete`, `fail`) record an
@@ -63,7 +220,7 @@
 - `gc_worktrees()` was refactored to share its scan with doctor
   through `find_orphaned_worktrees()`; removal behavior unchanged.
 
-## Unreleased (Phase 6: security and sandboxing)
+### Phase 6: security and sandboxing
 
 - Secret redaction at write boundaries (`src/skein/redact.py`):
   `redact_secrets()` masks AWS keys (`AKIA...`), GitHub tokens
@@ -106,7 +263,7 @@
   redacted at the write boundary, so backend auth belongs in the
   environment, not in node intent.
 
-## Unreleased (Phase 5: integration and shipping lifecycle)
+### Phase 5: integration and shipping lifecycle
 
 - `skein ship <node-id> [--to <branch>] [--ff-only] [--force]`: merges a
   done node's recorded result commit into the target branch (default:
@@ -158,7 +315,7 @@
   the same functions: `POST /api/nodes/<id>/ship`,
   `POST /api/release`, and read-only shipped state in `/api/graph`.
 
-## Unreleased (Phase 4: scheduler and retries)
+### Phase 4: scheduler and retries
 
 - Per-node retry policy: `skein node add --max-retries N
   --retry-backoff-seconds S` stores the policy on the node
@@ -195,7 +352,7 @@
   fields (`max_retries`, `retry_backoff_seconds`, `retry_at`,
   `attempts_used`, `attempts`).
 
-## Unreleased (Phase 3: worktree and result-commit model)
+### Phase 3: worktree and result-commit model
 
 - Node deletion owns the worktree lifecycle: `skein node delete <id>`
   removes the node's registered worktree through the same `edit_node`
@@ -227,7 +384,7 @@
   the recorded diff stats match a recomputed numstat. A missing result
   record is an error, not an empty pass.
 
-## Unreleased (Phase 2: canonical execution runtime)
+### Phase 2: canonical execution runtime
 
 - One execution path: `runtime.execute()` is now the single
   spawn/drain/kill implementation used by the supervisor, the verifier,
@@ -249,7 +406,7 @@
   forward-slash pidfile paths (the old `r'C:\...'` embedding was a
   `SyntaxError` on Windows via the `\U` escape).
 
-## Unreleased (Phase 1: correctness and state-machine invariants)
+### Phase 1: correctness and state-machine invariants
 
 - Fenced claims: every claim mints an immutable `attempt_id` and
   `claim_token`; heartbeat, release, complete, and fail must present the
@@ -291,7 +448,7 @@
   lifecycle, graph integrity) and `tests/test_runtime.py` (deadlock,
   output caps, tree kill). 99 tests green.
 
-## Unreleased (Stage 8: multi-backend adapter engine)
+### Stage 8: multi-backend adapter engine
 
 - New profile-driven backend engine: `BackendProfile` data schema +
   generic `ProfileAdapter`; adding a backend is now a profile entry,
