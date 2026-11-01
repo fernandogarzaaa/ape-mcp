@@ -207,7 +207,11 @@ export function predictInteraction(element, verb, baseConfidence) {
 export function comparePrediction(prediction, before, after, perceivedLatencyMs, modality = "visual") {
     // Outcome interpretation uses the SENSITIVE state: a validation error or
     // dialog appearing IS a changed state even when the stable layout matches.
-    const screenChanged = sensitiveStateKey(before) !== sensitiveStateKey(after) || significantTextChange(before, after);
+    // The ordered signature catches pure reorderings (e.g. a column sort that
+    // shuffles rows): no token set changes, but a human sees the change.
+    const screenChanged = sensitiveStateKey(before) !== sensitiveStateKey(after) ||
+        significantTextChange(before, after) ||
+        orderedTextSignature(before) !== orderedTextSignature(after);
     const afterText = visibleText(after).toLowerCase();
     const matched = [];
     const missed = [];
@@ -254,6 +258,15 @@ function significantTextChange(before, after) {
     const union = a.size + b.size - intersection;
     const similarity = union === 0 ? 1 : intersection / union;
     return similarity < 0.75;
+}
+/**
+ * Order-sensitive text signature. A sort that reorders table rows changes
+ * no token set — Jaccard sees nothing — but a human plainly sees the screen
+ * change. Without this, "click a sortable column header" reads as
+ * "the control did nothing".
+ */
+function orderedTextSignature(percept) {
+    return tokenize(visibleText(percept)).join("\x1f");
 }
 /**
  * The operator's running one-sentence theory of what the application is.

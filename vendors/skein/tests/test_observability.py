@@ -134,7 +134,7 @@ def test_health_endpoint(server):
     assert data["git"] is True
     assert data["log_writable"] is True
     assert data["worktree_root_writable"] is True
-    assert data["version"] == "0.2.0"
+    assert data["version"] == "0.3.1"
     assert data["repo"]
 
 
@@ -281,7 +281,7 @@ def test_doctor_healthy(repo, capsys):
     assert skein_main(["doctor"]) == 0
     out = capsys.readouterr().out
     assert "FAIL" not in out
-    assert out.count("ok  ") == 6
+    assert out.count("ok  ") == 7
 
 
 def test_doctor_bad_config(repo, capsys):
