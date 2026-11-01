@@ -190,9 +190,25 @@ def _node_html(root: str, node_id: str) -> Optional[bytes]:
         "</td><td>" + html.escape(str(a.get("outcome") or "")) +
         "</td><td>" + html.escape(str(a.get("error") or "")[:200]) + "</td></tr>"
         for a in attempts)
+    # Evidence entries are {command, exit_code, output_ref[, nonce_ok,
+    # aborted, duration_ms]} as written by verify.run_completion and the
+    # supervisor's adapter capture.
+    def _ev_note(e: Dict[str, Any]) -> str:
+        bits = []
+        if e.get("aborted"):
+            bits.append("aborted")
+        if "nonce_ok" in e:
+            bits.append("nonce ok" if e.get("nonce_ok") else "nonce MISSING")
+        if e.get("duration_ms") is not None:
+            bits.append(f"{e.get('duration_ms')} ms")
+        if e.get("error"):
+            bits.append(str(e.get("error"))[:120])
+        return ", ".join(bits)
     ev_rows = "".join(
-        "<tr><td class=\"mono\">" + html.escape(str(e.get("path") or e.get("kind") or "")) +
-        "</td><td>" + html.escape(str(e.get("summary") or "")[:200]) + "</td></tr>"
+        "<tr><td class=\"mono\">" + html.escape(str(e.get("command") or "")[:200]) +
+        "</td><td class=\"mono\">" + html.escape(str(e.get("exit_code", ""))) +
+        "</td><td class=\"mono\">" + html.escape(str(e.get("output_ref") or "-")) +
+        "</td><td>" + html.escape(_ev_note(e)) + "</td></tr>"
         for e in evidence)
     diff_rows = "".join(
         f"<tr><td class=\"mono\">{html.escape(str(path))}</td>"
@@ -205,7 +221,8 @@ def _node_html(root: str, node_id: str) -> Optional[bytes]:
             "<th>ended</th><th>outcome</th><th>error</th></tr>" +
             att_rows + "</table>"
             f"<h2>Evidence ({len(evidence)})</h2>"
-            "<table><tr><th>path</th><th>summary</th></tr>" +
+            "<table><tr><th>command</th><th>exit</th><th>output</th>"
+            "<th>notes</th></tr>" +
             ev_rows + "</table>"
             f"<h2>Diff stats ({len(diff_stats)} files)</h2>"
             "<table><tr><th>file</th><th>added/deleted</th></tr>" +
@@ -306,6 +323,17 @@ def _health_dict(root: str) -> Dict[str, Any]:
             "worktree_root_writable": wt_ok, "version": SKEIN_VERSION}
 
 
+_LOOPBACK_NAMES = ("127.0.0.1", "::1", "localhost")
+
+
+def _host_name(host_header: str) -> str:
+    """Hostname part of a Host header, without port or IPv6 brackets."""
+    h = (host_header or "").strip().lower()
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else h[1:]
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "SkeinCanvas/1.0"
 
@@ -388,9 +416,42 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(401, {"error": "missing or invalid Authorization Bearer token"})
         return False
 
+    def _host_allowed(self) -> bool:
+        """DNS-rebinding guard. A server bound to loopback only answers
+        requests whose Host header names loopback; a page on an attacker
+        domain that re-resolves to 127.0.0.1 is refused (403)."""
+        bound = str(self.server.server_address[0])
+        if bound not in _LOOPBACK_NAMES:
+            return True  # deliberate LAN bind (token-gated); Host varies
+        host = _host_name(self.headers.get("Host", ""))
+        if host in _LOOPBACK_NAMES:
+            return True
+        self._send(403, {"error": "forbidden Host header"})
+        return False
+
+    def _same_origin_json(self) -> bool:
+        """CSRF guard for mutations. A page on another origin can send a
+        "simple" cross-site POST (text/plain or form body) without a CORS
+        preflight; requiring application/json forces a preflight this
+        server never approves, and a foreign Origin is refused outright."""
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            netloc = urlparse(origin).netloc.lower()
+            if not netloc or netloc != (self.headers.get("Host") or "").lower():
+                self._send(403, {"error": "cross-origin request refused"})
+                return False
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0]
+        if ctype.strip().lower() != "application/json":
+            self._send(415, {"error": "Content-Type must be application/json"})
+            return False
+        return True
+
     def _mutation_preamble(self) -> bool:
-        """Shared gate for POST/PUT/DELETE: rate limit, body cap, auth."""
+        """Shared gate for POST/PUT/DELETE: rate limit, Host/Origin and
+        content-type checks, body cap, auth."""
         if not self._check_rate_limit():
+            return False
+        if not self._host_allowed() or not self._same_origin_json():
             return False
         if self._content_length() > _MAX_BODY_BYTES:
             self._send(413, {"error": "request body too large (limit 1 MB)"})
@@ -399,6 +460,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self._check_rate_limit():
+            return
+        if not self._host_allowed():
             return
         from . import graph as g
         parsed = urlparse(self.path)
@@ -423,6 +486,18 @@ class _Handler(BaseHTTPRequestHandler):
                 for p in list_profiles(self._root)]})
         if parsed.path == "/api/health":
             return self._send(200, _health_dict(self._root))
+        if parsed.path == "/api/skills":
+            from . import skills as sk
+            recs = sk.registry(self._root)
+            return self._send(200, {
+                "skills": [
+                    {"name": r["name"], "stage": r["stage"],
+                     "description": r["description"], "usage": r["usage"],
+                     "triggers": r["triggers"], "fitness": r.get("fitness"),
+                     "tests": len(r["tests"]), "runs": r["runs"],
+                     "run_failures": r["run_failures"], "file": r.get("path")}
+                    for r in recs.values()],
+                "index": sk.index_lines(self._root, max_lines=10 ** 6)})
         if parsed.path == "/api/metrics":
             uptime = time.time() - getattr(self.server, "started_at",
                                            time.time())
@@ -493,7 +568,10 @@ class _Handler(BaseHTTPRequestHandler):
                         self._root, node_id, str(body.get("holder") or actor),
                         ttl_seconds=body.get("ttl_seconds"), actor=actor)
                 except c.ClaimError as e:
-                    return self._send(409, {"error": str(e)})
+                    code = 400 if "invalid ttl_seconds" in str(e) else 409
+                    return self._send(code, {"error": str(e)})
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
                 return self._send(200, {"node": node})
             if len(parts) == 4 and parts[3] == "release":
                 token = None
@@ -508,7 +586,7 @@ class _Handler(BaseHTTPRequestHandler):
                     node = c.release_node(self._root, node_id, actor=actor,
                                           force=bool(body.get("force", False)),
                                           claim_token=token)
-                except c.ClaimError as e:
+                except (c.ClaimError, ValueError) as e:
                     return self._send(409, {"error": str(e)})
                 return self._send(200, {"node": node})
             if len(parts) == 4 and parts[3] == "ship":

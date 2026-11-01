@@ -16,11 +16,8 @@
  * substitute an in-process fixture server over `InMemoryTransport` without
  * spawning anything.
  */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CallToolResultSchema, McpError, ToolListChangedNotificationSchema, } from "@modelcontextprotocol/sdk/types.js";
+import { Client, InMemoryTransport, SdkError, StreamableHTTPClientTransport, } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { tokenizeCommand } from "./cli.js";
 const CLIENT_INFO = { name: "eve-mcp-evaluator", version: "0.1.0" };
 const DEFAULT_CALL_TIMEOUT_MS = 10_000;
@@ -60,13 +57,13 @@ class SdkMcpConnection {
         return result.tools;
     }
     async callTool(name, args, timeoutMs = DEFAULT_CALL_TIMEOUT_MS) {
-        const result = await this.client.callTool({ name, arguments: args }, CallToolResultSchema, {
+        const result = await this.client.callTool({ name, arguments: args }, {
             timeout: timeoutMs,
         });
         return flattenResult(result);
     }
     onToolsChanged(handler) {
-        this.client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+        this.client.setNotificationHandler("notifications/tools/list_changed", () => {
             handler();
         });
     }
@@ -140,13 +137,13 @@ export async function connectMcpInProcess(server, target = "in-process") {
     return SdkMcpConnection.open(target, clientTransport);
 }
 /** JSON-RPC error codes the evaluators classify on. */
-export { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+export { SdkError as McpError, SdkErrorCode as ErrorCode } from "@modelcontextprotocol/client";
 /** Is this error the transport dying underneath a call (a server crash)? */
 export function isConnectionClosedError(error) {
-    return error instanceof McpError && error.message.includes("Connection closed");
+    return error instanceof SdkError && error.message.includes("Connection closed");
 }
 /** Is this error the client giving up on an unanswered request (a hang)? */
 export function isTimeoutError(error) {
-    return error instanceof McpError && error.message.includes("timed out");
+    return error instanceof SdkError && error.message.includes("timed out");
 }
 //# sourceMappingURL=mcpClient.js.map
