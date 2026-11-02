@@ -16,6 +16,8 @@ from skein import redact
 from skein import runtime as rt
 
 PY = sys.executable
+# Completions run through a shell; quote the interpreter so a path with spaces stays one word.
+PY_SH = f'"{PY}"'
 
 
 @pytest.fixture
@@ -223,7 +225,7 @@ def test_run_completion_redacts_evidence_files(tmp_path):
     from skein import verify as v
     tok = "ghp_" + "d" * 36
     ok, evidence, hits = v.run_completion(
-        tmp_path, f"{PY} -c \"print('{tok}')\"", tmp_path / "ev", "n9")
+        tmp_path, f"{PY_SH} -c \"print('{tok}')\"", tmp_path / "ev", "n9")
     assert ok is True
     assert hits >= 2  # the $ cmd line and the printed output
     content = open(evidence[0]["output_ref"], encoding="utf-8").read()
@@ -252,6 +254,16 @@ def test_minimal_environ_allowlist(monkeypatch):
     assert "PHASE6_JUNK" not in env
     assert env.get("SKEIN_PHASE6_OK") == "should-pass"
     assert "PATH" in env
+
+
+def test_minimal_environ_keeps_login_identity(monkeypatch):
+    # claude on macOS finds its keychain login through USER; without it
+    # the claude_code backend reports "Not logged in"
+    monkeypatch.setenv("USER", "alice")
+    monkeypatch.setenv("LOGNAME", "alice")
+    env = rt.minimal_environ()
+    assert env.get("USER") == "alice"
+    assert env.get("LOGNAME") == "alice"
 
 
 def test_execute_env_scrubbed(tmp_path, monkeypatch):
@@ -324,7 +336,7 @@ def test_run_node_sandbox_fallback_audited(repo, monkeypatch):
             return "fake"
 
     assert skein_main(["node", "add", "sb1", "--title", "T", "--goal", "g",
-                       "--completion", f"{PY} -c \"print('ok')\""]) == 0
+                       "--completion", f"{PY_SH} -c \"print('ok')\""]) == 0
     result = run_node(str(repo), "sb1", "agent-1", adapter=FakeAdapter(),
                       heartbeat_interval=0.2, poll_interval=0.05, sandbox=True)
     assert result["outcome"] == "done"
@@ -492,3 +504,46 @@ def test_log_shows_security_events(repo, capsys):
     out = capsys.readouterr().out
     assert "security" in out
     assert "serve_auth_failure" in out
+
+
+# --- CSRF / DNS-rebinding guards on the canvas server ---------------------
+
+
+def _raw(method, url, body=b"{}", headers=None):
+    req = urllib.request.Request(url, data=body, method=method,
+                                 headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def test_cross_site_simple_post_refused(server):
+    # what a malicious web page can send without a CORS preflight; a node's
+    # `completion` lines are executed by `skein run`, so this matters.
+    body = json.dumps({"id": "csrf", "completion": "touch /tmp/pwned"}).encode()
+    assert _raw("POST", server + "/api/nodes", body,
+                {"Content-Type": "text/plain"}) == 415
+    assert _raw("POST", server + "/api/nodes", body,
+                {"Content-Type": "application/json",
+                 "Origin": "http://evil.example"}) == 403
+    assert _raw("POST", server + "/api/nodes", body,
+                {"Content-Type": "application/json", "Origin": "null"}) == 403
+    _, graph = _call("GET", server + "/api/graph")
+    assert "csrf" not in graph["nodes"]
+
+
+def test_same_origin_canvas_post_allowed(server):
+    host = server.split("//", 1)[1]
+    body = json.dumps({"id": "ok1", "title": "t"}).encode()
+    assert _raw("POST", server + "/api/nodes", body,
+                {"Content-Type": "application/json; charset=utf-8",
+                 "Origin": "http://" + host}) == 201
+
+
+def test_rebound_host_header_refused(server):
+    assert _raw("GET", server + "/api/graph", None,
+                {"Host": "attacker.example:80"}) == 403
+    assert _raw("GET", server + "/api/graph", None,
+                {"Host": "localhost"}) == 200

@@ -17,7 +17,7 @@
  */
 import type { ExperimentResult } from "./runner.js";
 import type { EvalSpec } from "./spec.js";
-export declare const GENESIS_VERSION = "0.3.0";
+export declare const GENESIS_VERSION = "0.4.0";
 export declare const BUNDLE_DIGEST_VERSION = 2;
 export interface Manifest {
     readonly genesis_version: string;
