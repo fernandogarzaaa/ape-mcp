@@ -16,7 +16,7 @@
  * choke-point discipline `adam-governance` documents and v1 lacked.
  */
 /**
- * True when the optional better-sqlite3 dependency is installed and its
+ * True when the better-sqlite3 dependency is installed and its
  * native binding loads. Ledger-backed tests and CLI paths use this to
  * degrade gracefully instead of failing at module load.
  */
